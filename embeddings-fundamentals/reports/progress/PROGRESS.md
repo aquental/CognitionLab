@@ -74,3 +74,55 @@ CI evidence: GitHub Actions run 40642440205 on PR #3: all jobs passed, rustc 1.9
 
 ### Blockers
 None for Phase 0.
+
+## Phase 1 — Milestone 1: Text baseline (`@m1`)
+
+**Status:** implemented and validated; reviews pending.
+
+### Decisions and PLAN changes, with justification
+| Change | Justification |
+|---|---|
+| Text model: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` @ `e8f8c211…` for the engine comparison; E5-base remains a model comparison on FastEmbed | EmbedAnything's candle path cannot load XLM-RoBERTa (E5). Its ONNX path pins `ort =2.0.0-rc.10` while FastEmbed pins `=2.0.0-rc.15`, and both link `onnxruntime`, so Cargo cannot build them together (source spike, PLAN §0.1) |
+| Native-text rule switched to alphanumeric **character** share ≥ 50 % | The token-share rule misclassified pipe-separated lab tables (57 % word-like tokens; 74 % alphanumeric chars). A unit test caught it |
+| `Pipeline<T, O, S>` instead of a `Components` bundle | Avoids premature abstraction; only the three replaced components are generic |
+| Run modality: image inputs are `not_applicable` in text runs | Keeps text and image spaces separate. Images are a Milestone 3 run |
+| BDD replays captured tool output (`FixtureExtractor`) | PRD §5.7: deterministic checks are independent of external tools; real tools are covered by integration tests |
+| An existing revision directory is always reused, never replaced | A revision directory only appears through an atomic rename of fsync'd staging, so it is complete. It may be pinned by an older snapshot (source reverted), so replacing it would break provenance |
+
+### Implementation
+- `corpus`: manifest (`deny_unknown_fields`, `remote_allowed` defaults to false), eligibility, anonymization gate, checksum verification.
+- `extraction`: page text/lines/boxes, native-vs-OCR rule, Tesseract TSV parser (word rows only, page confidence = mean `conf ≥ 0`, boxes in PDF points with a top-left origin), poppler/tesseract extractors (`kill_on_drop`, timeouts, `pdfinfo` cross-checked with lopdf), replay extractor; `examples/capture_extraction.rs`.
+- `chunking`: `structure-aware-v1`. Section headings; each table row is one chunk with its section and header. Paragraphs carry their section and are split at line and word boundaries to fit the token budget. A row is truncated (and recorded) only when truncation is enabled; otherwise the source fails at the `chunking` stage.
+- `record`: PRD §8 schema with full vector and provenance.
+- `storage`: staging + fsync, revision rename, pointer rename as the commit point, fault injection at 3 points, retained revisions, create-only experiment snapshots, staging cleanup on open.
+- `pipeline`: validation first (capability, remote permission, experiment id unused). Per source: manifest → extraction (unreadable pages fail the source) → revision (unchanged → skip) → chunking → batched embedding with class-based retries → validation → stage/publish. Run report and exit codes (2 incomplete, 3 validation).
+- `retrieval`: space guard before embedding, exact cosine in f64, `total_cmp` + `record_id` ties, `Active` or `Experiment` scope.
+- `adapters` (single feature-gated factory), `config` (saved experiment TOML), EmbedAnything adapter (pinned revision, HF-cache tokenizer, special tokens reserved, probe-checked dimensions, `spawn_blocking`), `anonymization` (filename patterns, PDF info/XMP keys, EXIF tags), CLI `manifest | anonymization-check | validate | ingest | search | doctor`.
+- BDD: `scripts/sync-features.py` generates `tests/features/{us01,us02,rel01}.feature` verbatim from the PRD for milestone 1. The `LabWorld` gives each scenario its own store, corpus, extractor, adapter, and run history. Steps for 18 scenarios. Frozen ranking `tests/fixtures/rankings/hemoglobina.toml`, derived by hand from keyword axes.
+
+### Acceptance criteria (PLAN Phase 1 exit)
+| Criterion | Evidence |
+|---|---|
+| All `@m1` scenarios pass | `bdd inventory: milestone 1, 18 required, 21 executed` (18 required + 3 harness), 21 scenarios / 133 steps passed |
+| Real run produces `reports/examples/record-001.json` | Produced from a real EmbedAnything run on the **synthetic** corpus (owner corpus not supplied) |
+
+### Validation (local, 2026-10-28)
+- fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
+- `cargo test`: 69 unit, 2 pipeline, 2 fixtures, BDD (21 scenarios), self-test 0 mismatches.
+- `RUN_INTEGRATION=1 cargo test --features engine-embed-anything --test integration -- --include-ignored`: 4 passed (tool probe; real native/OCR selection on the mixed PDF; real OCR keeps the hemoglobin row with a box in points; pinned MiniLM loads, 384-d normalized vectors, ranking sanity, budget 126).
+- CLI end to end with real tools on the synthetic corpus: 10/10/8 text records (matching the hand-derived counts); images `not_applicable`; second run `unchanged` with 0 attempts.
+- BDD mutation checks (each must fail a scenario):
+  - removing the remote check fails 1 scenario;
+  - no retries fails 2;
+  - retrying permanent errors fails 1;
+  - no vector validation fails 3;
+  - ignoring unreadable pages fails 1;
+  - ignoring the pointer fault fails 1.
+
+  The idempotency-skip mutant is equivalent at the PRD-observable level, because the store reuses identical revisions. It is now killed by `tests/pipeline.rs`.
+
+### rust-skills applied
+`async-spawn-blocking` (store I/O, model load, inference), `async-fn-in-trait` with `+ Send` futures (extractors, sleeper), `trait-object-safety` (dyn strategy only), `num-float-compare` (`total_cmp`), `num-cast-try-from`, `serde-deny-unknown-fields`, `type-newtype-ids`, `type-enum-states`, `err-thiserror-lib`/`err-anyhow-app`, `obs-structured-fields` (ids/stages only), `anti-over-abstraction` (Components bundle dropped). Lint suppressions use `#[expect(..., reason)]` for bounded casts only.
+
+### Outstanding (not claimed)
+- Owner corpus, relevance labels, and fidelity sample: not supplied; evidence is synthetic.

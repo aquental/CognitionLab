@@ -30,7 +30,9 @@ use support::runner::{Suite, run_suite, split_args};
 
 /// Path of a file under `tests/fixtures`.
 pub fn fixture(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(rel)
 }
 
 /// Per-scenario state. Cucumber builds a fresh `World` for every scenario, so each one
@@ -95,7 +97,11 @@ impl LabWorld {
 
     /// Copies a fixture from the synthetic corpus and adds it to the manifest, under
     /// `source_id` (defaults to the fixture's own id). Replaces an existing entry.
-    pub fn add_fixture_source(&mut self, fixture_id: &str, source_id: Option<&str>) -> Result<SourceEntry> {
+    pub fn add_fixture_source(
+        &mut self,
+        fixture_id: &str,
+        source_id: Option<&str>,
+    ) -> Result<SourceEntry> {
         let corpus = LoadedManifest::load(&fixture("corpus/manifest.toml"))?;
         let mut entry = corpus
             .manifest
@@ -104,8 +110,11 @@ impl LabWorld {
             .find(|s| s.source_id.as_str() == fixture_id)
             .cloned()
             .with_context(|| format!("no fixture {fixture_id}"))?;
-        std::fs::copy(corpus.path_of(&entry), self.corpus_dir.path().join(&entry.file))
-            .context("copy fixture")?;
+        std::fs::copy(
+            corpus.path_of(&entry),
+            self.corpus_dir.path().join(&entry.file),
+        )
+        .context("copy fixture")?;
         if let Some(id) = source_id {
             entry.source_id = id.parse()?;
         }
@@ -158,7 +167,9 @@ impl LabWorld {
 
     /// Active records in the adapter's embedding space.
     pub fn active_records(&self) -> Result<Vec<Record>> {
-        Ok(self.store.active_records(&self.embedder.model_info_space())?)
+        Ok(self
+            .store
+            .active_records(&self.embedder.model_info_space())?)
     }
 }
 
@@ -192,7 +203,10 @@ async fn main() -> Result<ExitCode> {
         cucumber_args,
         fingerprinted: vec![
             ("acceptance", root.join("config/acceptance.toml")),
-            ("corpus_manifest", root.join("tests/fixtures/corpus/manifest.toml")),
+            (
+                "corpus_manifest",
+                root.join("tests/fixtures/corpus/manifest.toml"),
+            ),
         ],
     })
     .await?;
@@ -203,5 +217,9 @@ async fn main() -> Result<ExitCode> {
     for problem in &report.problems {
         eprintln!("bdd inventory: {problem}");
     }
-    Ok(if report.passed() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(if report.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }

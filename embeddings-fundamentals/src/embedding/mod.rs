@@ -6,6 +6,8 @@
 //! Native `async fn` in traits is not dyn-compatible, so this trait boxes its futures.
 
 pub mod deterministic;
+#[cfg(feature = "engine-embed-anything")]
+pub mod embed_anything;
 
 use std::borrow::Cow;
 use std::fmt;

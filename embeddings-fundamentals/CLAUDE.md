@@ -29,8 +29,17 @@ cargo test --test bdd               # Cucumber acceptance suite (harness = false
 cargo test --test bdd_selftest      # proves the runner fails on undefined/ambiguous/skipped/missing scenarios
 BDD_ARGS='--name "<regex>"' cargo test --test bdd    # filtered run (the inventory check then fails by design)
 RUN_INTEGRATION=1 cargo test --test integration -- --include-ignored    # real tools/engines
-cargo run --example gen_fixtures    # regenerate tests/fixtures/corpus (needs poppler; output is deterministic)
+cargo run --example gen_fixtures    # regenerate tests/fixtures/corpus (deterministic; --rerender needs poppler)
+cargo run --example capture_extraction   # recapture tests/fixtures/extraction from real poppler/tesseract
+python3 scripts/sync-features.py    # regenerate tests/features/*.feature from PRD Gherkin for the acceptance milestone
+cargo run -- manifest --manifest tests/fixtures/corpus/manifest.toml
+cargo run --features engine-embed-anything -- ingest --manifest tests/fixtures/corpus/manifest.toml \
+    --config config/experiments/baseline-text-embed-anything.toml --store store --experiment <id>
+cargo run --features engine-embed-anything -- search --config config/experiments/baseline-text-embed-anything.toml \
+    --store store --query "Onde está o resultado da hemoglobina?" --limit 3
 ```
+
+Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
 
 The harness-less targets (`bdd`, `bdd_selftest`) **never parse argv**, so `cargo test <filter>` cannot break them. Cucumber filters go through `BDD_ARGS`. The required inventory is derived from the Gherkin blocks in `spec/PRD.md`, filtered by the `@mN` tags up to `milestone` in `config/acceptance.toml`. A scenario counts as executed only if a scenario with the same feature name, scenario name and expanded step text ran and all of its steps passed (`tests/support/inventory.rs`).
 
@@ -40,7 +49,7 @@ External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `t
 
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
-## Architecture (planned, see PLAN §1–§4)
+## Architecture (PLAN §1–§4; Phase 1 implemented: corpus, extraction, chunking, store, pipeline, retrieval, CLI)
 
 The pipeline runs Corpus manifest → anonymization/eligibility gate → extraction (native text or OCR, chosen per page) → structure-aware chunking → `EmbeddingStrategy` adapter → vector validation → atomic store → retrieval (text / image / RRF combined) → evaluation report.
 
