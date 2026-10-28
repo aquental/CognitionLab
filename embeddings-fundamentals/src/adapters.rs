@@ -77,6 +77,7 @@ async fn build_embed_anything(
         config.model_revision.as_deref(),
         config.dimensions,
         config.max_input_tokens,
+        config.prefix_policy,
     )
     .await
     .map_err(|e| BuildError::Load {

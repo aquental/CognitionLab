@@ -183,3 +183,37 @@ async fn embed_anything_adapter_loads_the_pinned_model_and_ranks_sensibly() {
     let budget = adapter.input_budget(embeddings_fundamentals::embedding::InputKind::Document);
     assert_eq!(budget, Some(126), "128-token limit minus [CLS] and [SEP]");
 }
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned model"]
+async fn embed_anything_honours_the_configured_prefix_policy() {
+    use embeddings_fundamentals::config::ExperimentConfig;
+    use embeddings_fundamentals::embedding::{InputKind, PrefixPolicy};
+    require_integration();
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config/experiments/baseline-text-embed-anything.toml");
+    let none = ExperimentConfig::load(&config_path).expect("config").engine;
+    let mut e5 = none.clone();
+    e5.prefix_policy = PrefixPolicy::E5;
+    let a = embeddings_fundamentals::adapters::build(&none)
+        .await
+        .expect("none");
+    let b = embeddings_fundamentals::adapters::build(&e5)
+        .await
+        .expect("e5");
+    assert_eq!(b.model_info().prefix_policy, PrefixPolicy::E5);
+    assert_ne!(
+        a.model_info().embedding_space_id,
+        b.model_info().embedding_space_id,
+        "prefix changes the space"
+    );
+    let (budget_a, budget_b) = (
+        a.input_budget(InputKind::Document),
+        b.input_budget(InputKind::Document),
+    );
+    assert!(
+        budget_b < budget_a,
+        "the passage prefix consumes budget: {budget_a:?} vs {budget_b:?}"
+    );
+}

@@ -285,8 +285,14 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
     let report = match pipeline.ingest(&manifest, &settings).await {
         Ok(report) => report,
         Err(e) => {
-            eprintln!("validation failed: {e}");
-            return Ok(ExitCode::from(EXIT_VALIDATION));
+            let code = e.exit_code();
+            let kind = if code == EXIT_VALIDATION {
+                "validation failed"
+            } else {
+                "error"
+            };
+            eprintln!("{kind}: {e}");
+            return Ok(ExitCode::from(code));
         }
     };
     let json = serde_json::to_string_pretty(&report)?;
