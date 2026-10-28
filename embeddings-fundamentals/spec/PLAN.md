@@ -1,7 +1,8 @@
 # PLAN — Medical Document Embedding Lab
 
 **Source:** `spec/PRD.md` (Draft, revised after adversarial review — see §9)  
-**Target:** Rust 2024 edition, single crate (`lib` + `bin`), rustc 1.99  
+**Target:** Rust 2024 edition, single crate (`lib` + `bin`), rustc 1.99 (`rust-version = "1.99"`, pinned by `rust-toolchain.toml`)  
+**Coding guidelines:** the project-local `rust-skills` skill (`/rust-skills`); §2.3 records how its rules apply here  
 **Status:** Ready to implement — §0.1 lists the defaults this plan fixes where the PRD leaves a choice open.
 
 ---
@@ -33,7 +34,7 @@ The PRD specifies scope, architecture, record schema, metric formulas, Gherkin a
 | Ranking ties | Single-modality search sorts by descending cosine score, then ascending `record_id` | Deterministic frozen rankings (PRD §6.6). |
 | Fusion | RRF `k = 60`, `fusion_depth = all`. A combined experiment = `(text_space_id, image_space_id, k, depth)` | PRD §6.6 |
 | Latency | `latency_repeats = 20` after 1 discarded warm-up query; nearest-rank median/p95 | PRD §9.4 |
-| Peak RAM | `libc::getrusage(RUSAGE_SELF).ru_maxrss`, normalized to bytes (macOS reports bytes, Linux reports KiB) | `sysinfo` reports current RSS, not the peak, so it is not used. |
+| Peak RAM | `getrusage(RUSAGE_SELF).ru_maxrss` through the safe `nix::sys::resource::getrusage` wrapper, normalized to bytes (macOS reports bytes, Linux reports KiB) with `u64::try_from` | `sysinfo` reports current RSS, not the peak, so it is not used. Using the wrapper keeps the crate free of `unsafe` (§2.3). |
 | Currency | USD; `estimate_status = "estimated" \| "unavailable"` | |
 
 ### 0.2 Inputs only the owner can provide
@@ -90,19 +91,20 @@ embeddings-fundamentals/
 
 | Crate | Version | Purpose |
 |---|---|---|
+| `tokio` (present) | 1.54, add features `process`, `fs`, `sync`, `time` | runtime, async subprocesses (poppler, tesseract), `spawn_blocking`, `Semaphore`, retry sleeps |
 | `clap` (derive) | 4.6 | CLI |
-| `thiserror` | 2 | errors |
+| `thiserror` | 2 | typed domain errors in the library (`anyhow`, already present, only in `main`/`cli`) |
 | `toml` | 1.1 | config |
 | `sha2`, `hex` | 0.11 / 0.4 | checksums, fingerprints |
 | `lopdf` | 0.46 | PDF page count, info dictionary / XMP for anonymization check |
 | `image` | 0.25 | decode PNG/JPEG; re-encode without metadata |
 | `kamadak-exif` | 0.6 | detect EXIF before stripping |
-| `tokenizers` | 0.22 | token counting for HF models |
-| `tiktoken-rs` | 0.7 | token counting for OpenAI |
-| `libc` | 0.2 | `getrusage` |
-| `async-trait` | 0.1 | dyn-compatible async strategy trait |
+| `tokenizers` | latest stable 0.x (1.0 is still a release candidate), the same major version that `embed_anything`/`fastembed` resolve to, so the crate is not built twice | token counting for HF models |
+| `tiktoken-rs` | 0.12 | token counting for OpenAI |
+| `nix` | 0.31, feature `resource` | safe `getrusage` wrapper (no `unsafe` in the crate) |
+| `async-trait` | 0.1 | **only** for the `dyn EmbeddingStrategy` trait (§2.2) |
 | `unicode-normalization` | 0.1 | NFC for canonical hashing |
-| `tracing`, `tracing-subscriber` | 0.1 / 0.3 | ID-only logs |
+| `tracing`, `tracing-subscriber` (`env-filter`) | 0.1 / 0.3 | ID-only logs; library code emits through `tracing`, and only `main` installs the subscriber |
 | `embed_anything` | 0.7 (optional) | engine 1 |
 | `fastembed` | 7.5 (optional) | engine 2 |
 | `reqwest` (present) | 0.13 | OpenAI (feature `engine-openai`) |
@@ -110,7 +112,7 @@ embeddings-fundamentals/
 | dev: `tempfile`, `approx`, `proptest` | 3 / 0.5 / 1 | isolation, tolerance, RRF properties |
 | dev: `gherkin` | (version re-exported by cucumber) | parse PRD Gherkin to build inventory |
 
-Exact versions of `kamadak-exif`, `tokenizers`, `tiktoken-rs` are checked with `cargo search` in Phase 0 before pinning.
+Exact versions of `kamadak-exif`, `tokenizers`, `tiktoken-rs`, `nix` are checked with `cargo search` in Phase 0 before pinning. `mockall` and `insta` are deliberately **not** added: the hand-written deterministic adapter and fault-injecting wrappers cover mocking, and golden files under `tests/fixtures/` cover snapshots.
 
 ---
 
@@ -130,40 +132,93 @@ Exact versions of `kamadak-exif`, `tokenizers`, `tiktoken-rs` are checked with `
 
 Equal dimensions never imply equal spaces (US-04).
 
-### 2.2 Traits
+Each ID is a newtype (`SourceId`, `ChunkId`, `RevisionId`, `RecordId`, `EmbeddingSpaceId`, `ExperimentId`, `Checksum`) with a private field. IDs are created only by the hashing constructors or by `FromStr`/`TryFrom<String>` parsing that validates the format, and serde goes through `#[serde(try_from = "String", into = "String")]`. They derive `Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord`, and `Ord` is the ascending tie-break used by ranking and fusion.
+
+### 2.2 Traits and dispatch
+
+**Dispatch rule.** `#[async_trait]` is used on exactly **one** trait: `EmbeddingStrategy`. It needs `dyn` because the adapter is chosen from configuration at runtime, and combined mode holds two different adapters side by side. Every other async trait uses **native `async fn` in traits** with static dispatch (generics). Where the future crosses `tokio::spawn` or `spawn_blocking` boundaries, the trait declares `fn op(&self, ..) -> impl Future<Output = ..> + Send`, and implementations may still write `async fn`. Synchronous work stays in synchronous traits.
+
+| Trait | Kind | Dispatch | Why |
+|---|---|---|---|
+| `EmbeddingStrategy` | async | `Arc<dyn …>` via `#[async_trait]` | runtime selection by config; heterogeneous adapters in one run |
+| `TextExtractor`, `OcrEngine`, `ImageExtractor` | async (`tokio::process`) | generic, `+ Send` futures | one concrete type per binary (real tools in the CLI, fixture-backed in BDD) |
+| `Sleeper` | async | generic | `TokioSleeper` in the CLI, `NoopSleeper` in tests |
+| `RecordStore` | **sync** (`std::fs` + `File::sync_all` on files and directories) | generic; the pipeline calls it inside `spawn_blocking` | directory `fsync` and `rename` are blocking syscalls; `tokio::fs` exposes no directory fsync |
+| `ChunkingStrategy`, `TokenCounter`, `MetadataScrubber` | sync, CPU-bound | generic; large batches run in `spawn_blocking` | pure computation |
+| `Clock`, `MemoryProbe`, `GpuProbe`, `UsageSource` | sync | generic | cheap reads, replaced by fixtures in US-05 |
+
+The pipeline is generic over one `Components` bundle (`Pipeline<C: Components>`, where `Components` has associated types `Text`, `Ocr`, `Images`, `Store`, `Chunker`, `Sleeper`, `Clock`, `Memory`). This avoids an eight-parameter generic list, and the only `dyn` remains the embedding adapter.
 
 ```rust
-pub struct Capabilities { text_documents, text_queries, images, text_to_image_compatible, batch,
-                          max_input_tokens: Option<usize>, max_batch: Option<usize>, execution: Local | Remote }
-pub struct ModelInfo { engine, engine_version, model_id, model_revision: Option<String>, weight_format,
-                       dimensions, normalized, metric, prefix_policy, embedding_space_id }
-
-// `async fn` in traits is not dyn-compatible, so the trait uses `#[async_trait]` (boxed futures).
-// `adapters::build(&EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>>` is the only factory and the
-// only place behind `#[cfg(feature = ...)]`. An engine compiled without its feature returns a capability error.
+// The single dyn-compatible async trait. `async fn` in traits is not dyn-compatible,
+// so this trait (and only this one) uses #[async_trait] (boxed futures).
+// `adapters::build(&EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError>` is the only
+// factory and the only place behind `#[cfg(feature = ...)]`. An engine compiled without its feature
+// returns `BuildError::EngineNotCompiled { engine }` (features stay strictly additive).
 #[async_trait::async_trait]
 pub trait EmbeddingStrategy: Send + Sync {
-    fn capabilities(&self) -> Capabilities;
-    fn model_info(&self) -> ModelInfo;
+    fn capabilities(&self) -> &Capabilities;
+    fn model_info(&self) -> &ModelInfo;
     fn token_counter(&self) -> &dyn TokenCounter;
     fn input_budget(&self, kind: InputKind) -> Option<usize>; // limit minus prefix + special tokens
     async fn embed_documents(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError>; // adapter applies PrefixPolicy
     async fn embed_queries(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError>;
     async fn embed_images(&self, assets: &[AssetRef]) -> Result<EmbeddingBatch, EmbeddingError>;
 }
-pub fn validate_batch(batch, info) -> Result<(), VectorDefect { item_id, kind: WrongDims | NaN | Inf }>;
 
-pub trait TextExtractor; pub trait OcrEngine; pub trait ImageExtractor; pub trait MetadataScrubber;
-pub trait ChunkingStrategy { fn id(&self) -> &str; fn chunk(&self, page, counter, policy) -> Result<Vec<Chunk>, ChunkError>; }
-
-pub trait RecordStore {
-    fn stage(&self, space, source_id, revision_id, records) -> Result<StagedRevision>;
-    fn publish(&self, staged) -> Result<()>;                         // §4.1
-    fn active(&self, space) -> Vec<RevisionRef>;
-    fn records(&self, space, revisions: &[RevisionRef]) -> Vec<Record>; // revision-pinned reads
+// Native async fn in traits, static dispatch, explicit Send futures.
+pub trait OcrEngine: Send + Sync {
+    fn ocr_page(&self, page_png: &Path) -> impl Future<Output = Result<PageText, ExtractionError>> + Send;
 }
-pub trait Clock; pub trait MemoryProbe; pub trait GpuProbe; pub trait UsageSource; pub trait Sleeper;
+pub trait TextExtractor: Send + Sync {
+    fn page_count(&self, pdf: &Path) -> impl Future<Output = Result<NonZeroU32, ExtractionError>> + Send;
+    fn extract_page(&self, pdf: &Path, page: NonZeroU32) -> impl Future<Output = Result<PageText, ExtractionError>> + Send;
+}
+pub trait ImageExtractor: Send + Sync {
+    fn extract_images(&self, pdf: &Path, page: NonZeroU32) -> impl Future<Output = Result<Vec<AssetRef>, ExtractionError>> + Send;
+}
+pub trait Sleeper: Send + Sync {
+    fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;
+}
+
+// Synchronous traits.
+pub trait RecordStore: Send + Sync + 'static {
+    fn stage(&self, space: &EmbeddingSpaceId, source: &SourceId, rev: &RevisionId, records: &[Record]) -> Result<StagedRevision, StoreError>;
+    fn publish(&self, staged: StagedRevision) -> Result<(), StoreError>;   // §4.1; consumes the staged handle
+    fn active(&self, space: &EmbeddingSpaceId) -> Result<Vec<RevisionRef>, StoreError>;
+    fn records(&self, space: &EmbeddingSpaceId, revs: &[RevisionRef]) -> Result<Vec<Record>, StoreError>; // revision-pinned reads
+}
+pub trait ChunkingStrategy: Send + Sync {
+    fn id(&self) -> &str;
+    fn chunk(&self, page: &PageText, counter: &dyn TokenCounter, policy: &TruncationPolicy) -> Result<Vec<Chunk>, ChunkError>;
+}
+pub trait TokenCounter: Send + Sync { fn count(&self, text: &str) -> usize; }
+pub trait Clock: Send + Sync { fn now(&self) -> Instant; }
+pub trait MemoryProbe: Send + Sync { fn peak_rss_bytes(&self) -> Option<u64>; }
+
+pub fn validate_batch(batch: &EmbeddingBatch, info: &ModelInfo) -> Result<(), VectorDefect>; // WrongDims | NaN | Inf, with item id
 ```
+
+`Capabilities` and `ModelInfo` are returned by reference: they are computed once when the adapter is built and never change. `StagedRevision` is consumed by `publish`, so the type system prevents publishing the same staged revision twice.
+
+### 2.3 Rust engineering conventions (from `rust-skills`)
+
+These rules apply to every phase. Reviews (execute prompt §7) check them.
+
+| Area | Convention | Rules |
+|---|---|---|
+| Errors | One `thiserror` enum per module boundary (`ExtractionError`, `ChunkError`, `EmbeddingError`, `StoreError`, `ValidationError`, `EvalError`), each with `#[source]` chains and lowercase messages without trailing punctuation. `EmbeddingError::class() -> ErrorClass`. `anyhow` only in `main`/`cli`, with `.context(..)`. Messages carry IDs and stages, **never** chunk text or credentials. Fallible public fns document `# Errors`. | `err-thiserror-lib`, `err-anyhow-app`, `err-source-chain`, `err-lowercase-msg`, `err-doc-errors`, `obs-no-sensitive-data` |
+| No panics in production | `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!` are denied in non-test code by lints (§5.4). `#[test]` functions and `#[cfg(test)]` modules may use `expect("<what failed>")` with a useful message (`clippy.toml`). Harness-less targets (`bdd`, `bdd_selftest`) and step modules are **not** treated as test code by clippy, so they use `?` with `anyhow` context, `Result`-returning steps, and `assert!` with messages. | `err-no-unwrap-prod`, `anti-unwrap-abuse`, `anti-panic-expected` |
+| Unsafe | `unsafe_code = "deny"` crate-wide. `getrusage` goes through `nix`. If a future need is unavoidable, it goes in one module with `#[expect(unsafe_code, reason = "...")]` and `// SAFETY:` comments. | `unsafe-safety-comment`, `unsafe-minimize-scope` |
+| Types | ID newtypes (§2.1). Enums instead of strings for `Modality`, `ExtractionMethod`, `EngineId`, `ErrorClass`, `SourceStatus`, `RunStatus`, `FailureStage`, `EstimateStatus`, `PrefixPolicy`. Page numbers are `NonZeroU32`. Config and manifest structs use `#[serde(deny_unknown_fields)]` and `rename_all = "snake_case"`, so a typo in a TOML key is an error, not a silent default. | `type-newtype-ids`, `type-no-stringly`, `type-enum-states`, `num-nonzero`, `serde-deny-unknown-fields`, `api-parse-dont-validate` |
+| Floats & numbers | Vectors are `Vec<f32>`, validated finite before storage. Ranking sorts with `f32::total_cmp` (descending) then `RecordId` (ascending), never `partial_cmp().unwrap()`. Metric tests compare with `approx` (1e-6). Narrowing casts use `TryFrom`; `as` is allowed only after an explicit range check, with a comment. | `num-float-compare`, `num-cast-try-from` |
+| Async | Tokio multi-thread runtime in `main`. Subprocesses via `tokio::process::Command` with `kill_on_drop(true)` and a timeout. CPU-bound inference (candle, ONNX), image re-encoding, and store I/O run in `spawn_blocking`. FastEmbed's `&mut self` model sits behind a `std::sync::Mutex` that is locked **only inside** the blocking closure, never across `.await`. Source concurrency is bounded by a `Semaphore` (`--jobs`, default 1 so timing measurements stay reproducible). | `async-spawn-blocking`, `async-no-lock-await`, `async-fn-in-trait`, `trait-object-safety` |
+| Ownership | Adapters borrow inputs (`&[TextInput]`). Records move into `stage`. `Arc` is used only for the shared adapter and store handles. Prefer `&str`/`&[T]`/`&Path` parameters, and accept the occasional `clone` of small IDs instead of introducing lifetimes. | `own-borrow-over-clone`, `own-slice-over-vec`, `own-arc-shared`, `anti-clone-excessive` |
+| Observability | The library emits `tracing` events with structured fields (`source_id`, `stage`, `attempt`, `tokens`). `#[instrument(skip_all, fields(..))]` is used so arguments holding text are never recorded. Only `main` installs `tracing_subscriber` with `EnvFilter`. | `obs-library-facade`, `obs-structured-fields`, `obs-instrument-spans` |
+| Features | Engine features only **add** adapters and their dependencies (`dep:` syntax). There are no mutually exclusive features. `unexpected_cfgs` stays on. | `proj-feature-additive`, `lint-cfg-check` |
+| Structure | `main.rs` only parses arguments, installs tracing, and maps `Result` to `ExitCode`. Logic lives in `lib.rs` modules, organized by feature (§1). Internal items are `pub(crate)`. `#[non_exhaustive]` is **not** used, because the crate is not published and exhaustive matches catch new variants. | `proj-lib-main-split`, `proj-mod-by-feature`, `proj-pub-crate-internal`, `pat-exhaustive-enum` |
+| Tests | Unit tests in `#[cfg(test)] mod tests` beside the code, with descriptive names in arrange/act/assert shape. `#[tokio::test]` for async. `proptest` for RRF, metrics, ID stability, and truncation budgets. | `test-cfg-test-module`, `test-descriptive-names`, `test-proptest-properties`, `test-tokio-async` |
+| Suppressions | No `#[allow]` to silence a finding. Where a lint is genuinely wrong for one item, use `#[expect(lint, reason = "...")]` so the suppression fails once it becomes stale. | `lint-*` |
 
 The pipeline depends only on these traits. Adapters never see chunking, extraction, or evaluation configuration.
 
@@ -175,7 +230,7 @@ The pipeline depends only on these traits. Adapters never see chunking, extracti
 
 ### Phase 0 — Scaffolding & BDD harness
 
-1. Convert to `lib` + `bin`. Add dependencies, Cargo features `engine-embed-anything`, `engine-fastembed`, `engine-openai` (default: none), and the `.gitignore` from §1.
+1. Convert to `lib` + `bin` (`main.rs` stays thin, §2.3). Add dependencies, additive Cargo features `engine-embed-anything`, `engine-fastembed`, `engine-openai` (default: none), `rust-version`, `rust-toolchain.toml`, the `[lints]` tables and `clippy.toml` from §5.4, and the `.gitignore` from §1.
 2. `tests/bdd.rs` (§5.2): `World` with `TempDir` store, call logs, fault flags; tee console + JSON writer; `.run(...).await`; inventory check; explicit exit.
 3. **Runner self-test** `tests/bdd_selftest.rs` (separate `[[test]]`): runs the same runner builder against `tests/fixtures/selftest/` features (one with an undefined step, one empty dir, one ambiguous step). It asserts each case yields a failure. This proves `fail_on_skipped` and empty-suite detection without making the real suite red.
 4. `DeterministicEmbedder`: SHA-256-seeded normalized vectors. Configurable dims, `embedding_space_id`, capabilities, prefix policy, and execution (Local/Remote). Fault injection: `fail_n_times(class)`, `defect(kind, item)`. Records every raw input and which method was called.
@@ -299,22 +354,33 @@ path = "tests/integration.rs"      # mod-includes tests/integration/*.rs; each t
 ### 5.2 BDD runner (`tests/bdd.rs`)
 
 ```rust
+// harness = false: this is a plain `main`, which clippy does not treat as test code, so it uses
+// `?` + anyhow context instead of `expect`. Step functions return `Result<(), StepError>` or use
+// `assert!`/`assert_eq!` with explicit messages.
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
-    let json = std::fs::File::create("reports/bdd/cucumber.json").unwrap();
+async fn main() -> anyhow::Result<ExitCode> {
+    std::fs::create_dir_all("reports/bdd").context("create reports/bdd")?;
+    let json = std::fs::File::create("reports/bdd/cucumber.json").context("create cucumber.json")?;
     let writer = LabWorld::cucumber()
         .fail_on_skipped()
         .with_writer(writer::Basic::stdout().summarized().tee(writer::Json::new(json)).normalized())
         .run("tests/features")
         .await;                                   // never drop the future
-    let executed = collect_executed_scenarios("reports/bdd/cucumber.json");
-    let required = inventory::from_prd("spec/PRD.md", acceptance_milestone()); // parses PRD Gherkin + @mN tags
-    let missing = required.difference(&executed);
-    if writer.execution_has_failed() || !missing.is_empty() || executed.is_empty() { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    let failed = writer.execution_has_failed();
+    drop(writer);                                 // flush the JSON file before reading it back
+    let executed = inventory::executed("reports/bdd/cucumber.json")?;
+    let milestone = inventory::acceptance_milestone("config/acceptance.toml")?;
+    let required = inventory::from_prd("spec/PRD.md", milestone)?; // PRD Gherkin + @mN tags
+    let missing: Vec<_> = required.difference(&executed).collect();
+    if failed || !missing.is_empty() || (!required.is_empty() && executed.is_empty()) {
+        eprintln!("bdd: failed={failed} missing={missing:?}");
+        return Ok(ExitCode::FAILURE);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 ```
 
-The JSON file is dropped (and flushed) before `main` returns. The inventory comes from the PRD and cannot be shrunk by editing a test file. Exact writer combinator names are confirmed against cucumber 0.23 docs in Phase 0.
+The writer, and with it the JSON file, is dropped and flushed explicitly before the inventory reads the report back. The inventory comes from the PRD and cannot be shrunk by editing a test file. Exact writer combinator names are confirmed against cucumber 0.23 docs in Phase 0.
 
 ### 5.3 Layers
 
@@ -324,13 +390,45 @@ The JSON file is dropped (and flushed) before `main` returns. The inventory come
 | BDD (`bdd`) + runner self-test (`bdd_selftest`) — fixtures only, no network, no model download | always, gating |
 | Integration (`integration`) — real adapters, poppler, tesseract; results to `reports/integration/`, never merged into BDD evidence; unexecuted tests are reported as **outstanding**, not as passed | `RUN_INTEGRATION=1` + features + credentials |
 
+### 5.4 Lint configuration (Phase 0)
+
+```toml
+# Cargo.toml
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+float_cmp = "deny"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+```
+
+```toml
+# clippy.toml
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+```
+
+CI runs clippy with `-D warnings`, so every `warn` above blocks a merge.
+
 ---
 
 ## 6. CI (`.github/workflows/ci.yml`)
 
 1. `cargo fmt --check`
-2. `cargo clippy --all-targets -D warnings` **for each feature set**: none, each engine alone, `--all-features`. This compiles every `#[cfg]` adapter.
-3. `cargo test` (unit + `bdd` + `bdd_selftest`) with no engine features. This step gates the merge.
+2. `cargo clippy --all-targets -- -D warnings` (lints from §5.4) **for each feature set**: none, each engine alone, `--all-features`. This compiles every `#[cfg]` adapter.
+3. `cargo test` (unit + doc + `bdd` + `bdd_selftest`) with no engine features. This step gates the merge.
+   - Measurements reported as evidence are produced with `--release`, and the report records the build profile.
 4. Upload `reports/bdd/cucumber.json` + corpus/config fingerprints.
 5. **Required job (local engines, no secrets):** cache the HF models pinned in `config/experiments/*.toml`, then run `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`. Phase 2 cannot exit on the deterministic adapter alone.
 6. Optional job (OpenAI secret): `RUN_INTEGRATION=1 cargo test --features engine-openai --test integration -- --include-ignored`, then upload `reports/integration/`. If it is not run, OpenAI stays an **outstanding** acceptance item.

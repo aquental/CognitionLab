@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Required Rust skill
+
+Invoke `/rust-skills` before implementing, modifying, reviewing, debugging, or testing Rust code in this project. Apply its relevant guidance throughout the task, including every implementation phase and adversarial review. The skill complements the requirements and acceptance criteria in `spec/PRD.md` and `spec/PLAN.md`; it does not replace or weaken them. If the skill is unavailable, report that explicitly rather than claiming it was used.
+
 ## Current state
 
 The specification is complete, but the code is not written yet. `src/main.rs` is a starter binary. Everything in the architecture section below is the **planned** design from `spec/PLAN.md`. Check what actually exists before assuming a module, test target, or command is there.
