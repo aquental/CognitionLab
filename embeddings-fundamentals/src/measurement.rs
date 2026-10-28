@@ -576,13 +576,18 @@ mod tests {
             "detection must stop at its timeout, took {:?}",
             started.elapsed()
         );
+        // Answering probes get the production limit, so a loaded test machine cannot
+        // turn a slow process start into a false timeout.
         assert_eq!(
-            probe_output("sh", &["-c", "echo ' x '"], limit)
+            probe_output("sh", &["-c", "echo ' x '"], PROBE_TIMEOUT)
                 .await
                 .as_deref(),
             Some("x")
         );
-        assert_eq!(probe_output("sh", &["-c", "exit 1"], limit).await, None);
+        assert_eq!(
+            probe_output("sh", &["-c", "exit 1"], PROBE_TIMEOUT).await,
+            None
+        );
     }
     use approx::assert_abs_diff_eq;
 

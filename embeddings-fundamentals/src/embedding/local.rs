@@ -4,8 +4,11 @@
 //! [`LocalTextAdapter`] does everything else the [`EmbeddingStrategy`] contract
 //! requires: it checks capabilities and the batch limit, rejects inputs above the token
 //! budget before the backend sees them (so the engine's own silent truncation never
-//! applies), applies the prefix policy exactly once, runs inference on the blocking
-//! pool, L2-normalizes, and pairs each vector with its item id. Keeping this
+//! applies), applies the prefix policy exactly once, L2-normalizes, and pairs each
+//! vector with its item id. Tokenization, prefixing, inference, and normalization all
+//! run on the blocking pool (PLAN §2.3). The tokenizer is a type parameter (static
+//! dispatch, PLAN §2.2); it is seen as `&dyn TokenCounter` only through the
+//! `EmbeddingStrategy` interface. Keeping this
 //! engine-independent lets it be unit-tested without compiling an engine.
 
 use std::sync::Arc;
@@ -32,15 +35,16 @@ pub trait ModelTokenizer: TokenCounter {
     fn special_tokens(&self) -> usize;
 }
 
-/// A local text adapter: one [`TextBackend`] plus the shared contract logic.
-pub struct LocalTextAdapter<B> {
+/// A local text adapter: one [`TextBackend`] and its tokenizer plus the shared
+/// contract logic.
+pub struct LocalTextAdapter<B, T> {
     backend: Arc<B>,
-    tokens: Box<dyn ModelTokenizer>,
+    tokens: Arc<T>,
     info: ModelInfo,
     capabilities: Capabilities,
 }
 
-impl<B> std::fmt::Debug for LocalTextAdapter<B> {
+impl<B, T> std::fmt::Debug for LocalTextAdapter<B, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalTextAdapter")
             .field("info", &self.info)
@@ -48,19 +52,82 @@ impl<B> std::fmt::Debug for LocalTextAdapter<B> {
     }
 }
 
-impl<B: TextBackend> LocalTextAdapter<B> {
+/// Input budget in model tokens: the model limit minus special and prefix tokens.
+fn budget<T: ModelTokenizer>(
+    tokens: &T,
+    limit: Option<std::num::NonZeroUsize>,
+    policy: super::PrefixPolicy,
+    kind: InputKind,
+) -> Option<usize> {
+    let prefix = tokens.count(policy.prefix(kind));
+    Some(
+        limit?
+            .get()
+            .saturating_sub(tokens.special_tokens() + prefix),
+    )
+}
+
+/// Checks every input against `budget` (model tokens) and applies the prefix policy.
+fn prepare<T: ModelTokenizer>(
+    tokens: &T,
+    budget: Option<usize>,
+    policy: super::PrefixPolicy,
+    kind: InputKind,
+    raw: &[TextInput],
+) -> Result<Vec<String>, EmbeddingError> {
+    if let Some(budget) = budget {
+        for input in raw {
+            let count = tokens.count(&input.text);
+            if count > budget {
+                return Err(EmbeddingError::InputTooLong {
+                    item: input.id.clone(),
+                    tokens: count,
+                    limit: budget,
+                });
+            }
+        }
+    }
+    Ok(raw
+        .iter()
+        .map(|i| policy.apply(kind, &i.text).into_owned())
+        .collect())
+}
+
+/// Embeds `texts` with `backend`, checks the vector count, and L2-normalizes.
+fn infer<B: TextBackend>(backend: &B, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    let vectors = backend.embed_blocking(texts)?;
+    if vectors.len() != texts.len() {
+        return Err(EmbeddingError::Permanent {
+            reason: format!(
+                "engine returned {} vectors for {} inputs",
+                vectors.len(),
+                texts.len()
+            ),
+        });
+    }
+    Ok(vectors
+        .into_iter()
+        .map(|mut v| {
+            l2_normalize(&mut v);
+            v
+        })
+        .collect())
+}
+
+fn join_error(e: tokio::task::JoinError) -> EmbeddingError {
+    EmbeddingError::Permanent {
+        reason: format!("inference task failed: {e}"),
+    }
+}
+
+impl<B: TextBackend, T: ModelTokenizer + 'static> LocalTextAdapter<B, T> {
     /// Assembles an adapter. `info` must describe the backend's model and the prefix
     /// policy this adapter applies.
     #[must_use]
-    pub fn new(
-        backend: B,
-        tokens: Box<dyn ModelTokenizer>,
-        info: ModelInfo,
-        capabilities: Capabilities,
-    ) -> Self {
+    pub fn new(backend: B, tokens: T, info: ModelInfo, capabilities: Capabilities) -> Self {
         Self {
             backend: Arc::new(backend),
-            tokens,
+            tokens: Arc::new(tokens),
             info,
             capabilities,
         }
@@ -74,27 +141,9 @@ impl<B: TextBackend> LocalTextAdapter<B> {
     /// number of vectors than texts.
     pub async fn run(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let backend = Arc::clone(&self.backend);
-        let expected = texts.len();
-        let vectors = tokio::task::spawn_blocking(move || backend.embed_blocking(&texts))
+        tokio::task::spawn_blocking(move || infer(backend.as_ref(), &texts))
             .await
-            .map_err(|e| EmbeddingError::Permanent {
-                reason: format!("inference task failed: {e}"),
-            })??;
-        if vectors.len() != expected {
-            return Err(EmbeddingError::Permanent {
-                reason: format!(
-                    "engine returned {} vectors for {expected} inputs",
-                    vectors.len()
-                ),
-            });
-        }
-        Ok(vectors
-            .into_iter()
-            .map(|mut v| {
-                l2_normalize(&mut v);
-                v
-            })
-            .collect())
+            .map_err(join_error)?
     }
 
     async fn embed_text(
@@ -109,23 +158,21 @@ impl<B: TextBackend> LocalTextAdapter<B> {
         self.capabilities.require(capability, &self.info)?;
         self.capabilities.check_batch(raw.len())?;
         // Same budget the pipeline chunks against: limit minus special and prefix tokens.
-        if let Some(budget) = self.input_budget(kind) {
-            for input in raw {
-                let tokens = self.tokens.count(&input.text);
-                if tokens > budget {
-                    return Err(EmbeddingError::InputTooLong {
-                        item: input.id.clone(),
-                        tokens,
-                        limit: budget,
-                    });
-                }
-            }
-        }
-        let texts = raw
-            .iter()
-            .map(|i| self.info.prefix_policy.apply(kind, &i.text).into_owned())
-            .collect();
-        let vectors = self.run(texts).await?;
+        // Tokenizing the batch is CPU work, so it runs on the blocking pool together with
+        // inference; the backend never sees an input above the budget.
+        let (limit, policy) = (self.capabilities.max_input_tokens, self.info.prefix_policy);
+        let (backend, tokens, inputs) = (
+            Arc::clone(&self.backend),
+            Arc::clone(&self.tokens),
+            raw.to_vec(),
+        );
+        let vectors = tokio::task::spawn_blocking(move || {
+            let budget = budget(tokens.as_ref(), limit, policy, kind);
+            let texts = prepare(tokens.as_ref(), budget, policy, kind, &inputs)?;
+            infer(backend.as_ref(), &texts)
+        })
+        .await
+        .map_err(join_error)??;
         let embeddings = raw
             .iter()
             .zip(vectors)
@@ -142,7 +189,7 @@ impl<B: TextBackend> LocalTextAdapter<B> {
 }
 
 #[async_trait::async_trait]
-impl<B: TextBackend> EmbeddingStrategy for LocalTextAdapter<B> {
+impl<B: TextBackend, T: ModelTokenizer + 'static> EmbeddingStrategy for LocalTextAdapter<B, T> {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }
@@ -152,13 +199,16 @@ impl<B: TextBackend> EmbeddingStrategy for LocalTextAdapter<B> {
     }
 
     fn token_counter(&self) -> &dyn TokenCounter {
-        self.tokens.as_ref()
+        &*self.tokens
     }
 
     fn input_budget(&self, kind: InputKind) -> Option<usize> {
-        let limit = self.capabilities.max_input_tokens?.get();
-        let prefix = self.tokens.count(self.info.prefix_policy.prefix(kind));
-        Some(limit.saturating_sub(self.tokens.special_tokens() + prefix))
+        budget(
+            self.tokens.as_ref(),
+            self.capabilities.max_input_tokens,
+            self.info.prefix_policy,
+            kind,
+        )
     }
 
     async fn embed_documents(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError> {
@@ -226,7 +276,61 @@ mod tests {
         }
     }
 
-    fn adapter(policy: PrefixPolicy, backend: Arc<Recording>) -> LocalTextAdapter<Arc<Recording>> {
+    /// A tokenizer that takes 300 ms per input (stands in for a large tokenizer).
+    struct SlowWords;
+
+    impl TokenCounter for SlowWords {
+        fn count(&self, text: &str) -> usize {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            Words.count(text)
+        }
+        fn id(&self) -> &str {
+            "slow-words"
+        }
+    }
+
+    impl ModelTokenizer for SlowWords {
+        fn special_tokens(&self) -> usize {
+            2
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tokenization_runs_on_the_blocking_pool() {
+        // Regression (C2-20): budget checks tokenize every input; a slow tokenizer must
+        // not stall the single runtime worker.
+        // Two inputs: the prefix count and both inputs take 900 ms of tokenizer time.
+        let slow = adapter_with(PrefixPolicy::E5, Arc::new(Recording::default()), SlowWords);
+        let started = std::time::Instant::now();
+        let ticks = async {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+            for _ in 0..5 {
+                interval.tick().await;
+            }
+            started.elapsed()
+        };
+        let inputs = [input("a", "um"), input("b", "dois")];
+        let embed = slow.embed_documents(&inputs);
+        let (ticked, out) = tokio::join!(ticks, embed);
+        out.expect("embedded");
+        assert!(
+            ticked < std::time::Duration::from_millis(250),
+            "the timer must keep ticking while the tokenizer runs, took {ticked:?}"
+        );
+    }
+
+    fn adapter(
+        policy: PrefixPolicy,
+        backend: Arc<Recording>,
+    ) -> LocalTextAdapter<Arc<Recording>, Words> {
+        adapter_with(policy, backend, Words)
+    }
+
+    fn adapter_with<T: ModelTokenizer + 'static>(
+        policy: PrefixPolicy,
+        backend: Arc<Recording>,
+        tokens: T,
+    ) -> LocalTextAdapter<Arc<Recording>, T> {
         let info = ModelInfo::from_descriptor(SpaceDescriptor {
             engine: EngineId::FastEmbed,
             engine_version: "test".into(),
@@ -242,7 +346,7 @@ mod tests {
         .expect("info");
         LocalTextAdapter::new(
             backend,
-            Box::new(Words),
+            tokens,
             info,
             Capabilities {
                 text_documents: true,

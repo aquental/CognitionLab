@@ -173,6 +173,15 @@ pub enum EvalError {
         /// Why.
         reason: String,
     },
+    /// A ranking returned the same item more than once, which would count one
+    /// judgment several times (precision above its true value, nDCG above 1).
+    #[error("ranking for {query} returns {item} more than once")]
+    DuplicateHit {
+        /// Query.
+        query: QueryId,
+        /// Repeated item.
+        item: ChunkId,
+    },
     /// A query could not be run.
     #[error(transparent)]
     Search(#[from] SearchError),
@@ -461,7 +470,8 @@ pub struct EvaluationReport {
 /// # Errors
 ///
 /// Returns [`EvalError::RankingMismatch`] unless there is exactly one ranking per
-/// frozen query, [`EvalError::LabelNotApplicable`] when a judged text hit does not
+/// frozen query, [`EvalError::DuplicateHit`] when a ranking repeats an item in its top
+/// `k`, [`EvalError::LabelNotApplicable`] when a judged text hit does not
 /// contain its label's anchor (the label belongs to other text), and
 /// [`EvalError::Fingerprint`] if the fingerprint fails.
 pub fn evaluate(
@@ -486,6 +496,13 @@ pub fn evaluate(
     let mut entries = Vec::with_capacity(expected.len());
     for query in &dataset.queries.value.queries {
         let hits = rankings.get(&query.id).map_or(&[][..], Vec::as_slice);
+        let mut seen = BTreeSet::new();
+        if let Some(hit) = hits.iter().take(K).find(|h| !seen.insert(&h.chunk_id)) {
+            return Err(EvalError::DuplicateHit {
+                query: query.id.clone(),
+                item: hit.chunk_id.clone(),
+            });
+        }
         let results: Vec<ResultEntry> = hits
             .iter()
             .take(K)
@@ -816,6 +833,79 @@ mod tests {
         let report = evaluate(EvaluationMode::TextOnly, &dataset, vec![space], &intact)
             .expect("the anchor matches");
         assert_eq!(report.queries[0].results[0].label, 2);
+    }
+
+    #[test]
+    fn a_ranking_that_repeats_a_chunk_is_refused() {
+        // Regression (C2-19): three copies of one relevant hit scored P@3 = 1 and
+        // nDCG@3 > 2.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let copy = hit("s-p1-text-0", "Hemoglobina | 13,5");
+        let rankings = BTreeMap::from([(
+            "q1".parse().expect("id"),
+            vec![copy.clone(), copy.clone(), copy],
+        )]);
+        assert!(matches!(
+            evaluate(EvaluationMode::TextOnly, &dataset, vec![space], &rankings),
+            Err(EvalError::DuplicateHit { .. })
+        ));
+    }
+
+    #[test]
+    fn every_accepted_ranking_keeps_its_metrics_within_zero_and_one() {
+        // Exhaustive over every ordered ranking of up to 3 distinct hits drawn from four
+        // labeled chunks (labels 2, 2, 1, 0) and one unlabeled chunk.
+        let labeled = [
+            ("s-p1-text-0", 2),
+            ("s-p1-text-1", 2),
+            ("s-p1-text-2", 1),
+            ("s-p1-text-3", 0),
+        ];
+        let dataset = dataset_with(
+            labeled
+                .iter()
+                .map(|(item, value)| label("q1", item, *value))
+                .collect(),
+        );
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let pool: Vec<&str> = labeled
+            .iter()
+            .map(|(item, _)| *item)
+            .chain(["s-p1-text-4"])
+            .collect();
+        let mut rankings_checked = 0;
+        let mut stack: Vec<Vec<usize>> = vec![Vec::new()];
+        while let Some(order) = stack.pop() {
+            let hits: Vec<SearchHit> = order
+                .iter()
+                .map(|&i| hit(pool[i], "Hemoglobina | 13,5"))
+                .collect();
+            let rankings = BTreeMap::from([("q1".parse().expect("id"), hits)]);
+            let report = evaluate(
+                EvaluationMode::TextOnly,
+                &dataset,
+                vec![space.clone()],
+                &rankings,
+            )
+            .expect("distinct hits evaluate");
+            let m = &report.metrics;
+            for value in [m.precision_at_3, m.hit_at_3, m.ndcg_at_3] {
+                assert!((0.0..=1.0).contains(&value), "{order:?}: {m:?}");
+            }
+            rankings_checked += 1;
+            if order.len() < K {
+                for next in 0..pool.len() {
+                    if !order.contains(&next) {
+                        let mut longer = order.clone();
+                        longer.push(next);
+                        stack.push(longer);
+                    }
+                }
+            }
+        }
+        // 1 empty + 5 + 5*4 + 5*4*3 orderings.
+        assert_eq!(rankings_checked, 86);
     }
 
     #[test]
