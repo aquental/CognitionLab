@@ -21,19 +21,22 @@ use std::sync::Arc;
 
 use crate::adapters::BuildError;
 use crate::corpus::LoadedManifest;
-use crate::cost::{PriceTable, estimate};
+use crate::cost::{Billed, PriceTable, estimate};
 use crate::domain::{Execution, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
 use crate::evaluation::{Dataset, EvalError, evaluate_text};
 use crate::extraction::{OcrEngine, TextExtractor};
 use crate::fidelity::{self, LoadedSample};
-use crate::measurement::{Clock, LatencyStats, MeasuredEmbedder, MemoryProbe, Observation, millis};
+use crate::measurement::{
+    Clock, Hardware, LatencyStats, MeasuredEmbedder, MemoryProbe, Observation, millis,
+};
 use crate::pipeline::{IngestSettings, Pipeline, Sleeper, ValidationError};
 use crate::report::{
     ColdStart, ConfigurationResult, Costs, Fingerprints, IngestionMeasurement, Measurements,
     QuerySideStart, Reliability,
 };
 use crate::retrieval::{Scope, SearchError, search_text};
+use crate::storage::EvaluationProvenance;
 use crate::storage::{FsRecordStore, StoreError};
 
 /// Inputs of one measured experiment.
@@ -53,13 +56,17 @@ pub struct ExperimentInputs<'a> {
     pub fidelity: Option<&'a LoadedSample>,
 }
 
-/// Clock and memory probe used for every measurement.
-#[derive(Clone)]
-pub struct Instruments {
-    /// Monotonic clock.
-    pub clock: Arc<dyn Clock>,
+/// Clock, memory probe, and hardware description used for every measurement. Generic
+/// over the clock and probe (static dispatch, PLAN §2.2): the CLI uses the system clock
+/// and `getrusage`, BDD a manual clock and a fixed probe.
+#[derive(Debug, Clone)]
+pub struct Instruments<C, M> {
+    /// Monotonic clock, shared with the measuring decorators.
+    pub clock: Arc<C>,
     /// Peak-memory probe.
-    pub memory: Arc<dyn MemoryProbe>,
+    pub memory: M,
+    /// The machine the measurements are taken on; recorded in every result.
+    pub hardware: Hardware,
 }
 
 /// Extraction tools and retry sleeper of the run.
@@ -107,17 +114,19 @@ pub enum ExperimentError {
 /// Returns [`ExperimentError`] when the adapter cannot be built, ingestion is refused,
 /// or evaluation fails. An incomplete ingestion still yields a result whose
 /// `run_status` says so.
-pub async fn run<T, O, S>(
+pub async fn run<T, O, S, C, M>(
     tools: Tools<'_, T, O, S>,
     store: &Arc<FsRecordStore>,
     build: impl AsyncFn() -> Result<Arc<dyn EmbeddingStrategy>, BuildError>,
-    instruments: &Instruments,
+    instruments: &Instruments<C, M>,
     inputs: ExperimentInputs<'_>,
 ) -> Result<ConfigurationResult, ExperimentError>
 where
     T: TextExtractor,
     O: OcrEngine,
     S: Sleeper,
+    C: Clock + 'static,
+    M: MemoryProbe,
 {
     let clock = &instruments.clock;
     let first_query = inputs
@@ -142,9 +151,50 @@ where
         embedder: Arc::clone(&measured) as Arc<dyn EmbeddingStrategy>,
     };
     let started = clock.now();
-    let report = pipeline.ingest(inputs.manifest, inputs.settings).await?;
+    let dataset = inputs.dataset;
+    let evaluation = EvaluationProvenance {
+        query_set_version: dataset.queries.value.version.clone(),
+        query_set_checksum: dataset.queries.checksum.clone(),
+        labels_version: dataset.labels.value.version.clone(),
+        labels_checksum: dataset.labels.checksum.clone(),
+    };
+    let report = pipeline
+        .ingest_for_evaluation(inputs.manifest, inputs.settings, Some(evaluation))
+        .await?;
     let ingestion = clock.now().saturating_sub(started);
     let embedding = calls.summary(InputKind::Document);
+    // Extraction fidelity reads the extraction output of the sampled sources, never the
+    // (possibly truncated) chunks; it runs after the ingestion interval is measured.
+    let fidelity = match inputs.fidelity {
+        None => None,
+        Some(sample) => {
+            let sources: std::collections::BTreeSet<_> = sample
+                .sample
+                .rows
+                .iter()
+                .map(|r| r.source_id.clone())
+                .collect();
+            let mut pages = Vec::new();
+            for source in sources {
+                match pipeline
+                    .extract_source(inputs.manifest, &source, &inputs.settings.extraction)
+                    .await
+                {
+                    Ok(extracted) => {
+                        pages.extend(extracted.into_iter().map(|page| fidelity::ExtractedPage {
+                            source_id: source.clone(),
+                            page,
+                        }))
+                    }
+                    // Its rows count as not found with method "missing".
+                    Err(reason) => {
+                        tracing::warn!(source_id = %source, %reason, "fidelity extraction failed")
+                    }
+                }
+            }
+            Some(fidelity::evaluate(sample, &pages))
+        }
+    };
     let first_call = calls.records().into_iter().next();
     let info = measured.model_info().clone();
     let execution = measured.capabilities().execution;
@@ -204,18 +254,12 @@ where
         || Observation::unavailable("getrusage is not available on this platform"),
         |b| Observation::bytes(b, "local process memory (ru_maxrss high-water mark)"),
     );
-    let (index_bytes, records) = {
-        let (store, space, revisions) =
-            (Arc::clone(store), space.clone(), snapshot.revisions.clone());
-        tokio::task::spawn_blocking(move || {
-            Ok::<_, StoreError>((store.index_size_bytes(&space)?, store.records(&revisions)?))
-        })
-        .await
-        .map_err(|e| ExperimentError::Task(e.to_string()))??
+    let index_bytes = {
+        let (store, space) = (Arc::clone(store), space.clone());
+        tokio::task::spawn_blocking(move || store.index_size_bytes(&space))
+            .await
+            .map_err(|e| ExperimentError::Task(e.to_string()))??
     };
-    let fidelity = inputs
-        .fidelity
-        .map(|sample| fidelity::evaluate(sample, &records));
     let provider_inference_memory = (execution == Execution::Remote)
         .then(|| Observation::unavailable("remote provider: inference memory is not observable"));
     let measurements = Measurements {
@@ -246,7 +290,12 @@ where
         provider_inference_memory,
         index_size: Observation::bytes(index_bytes, "active revisions on disk"),
     };
+    let billed = Billed {
+        engine: info.engine,
+        model_id: &info.model_id,
+    };
     Ok(ConfigurationResult {
+        hardware: instruments.hardware.clone(),
         experiment_id,
         run_status: report.run_status,
         engine: info.engine,
@@ -266,8 +315,8 @@ where
             evaluation: evaluation.evaluation_fingerprint.clone(),
         },
         cost: Costs {
-            ingestion: estimate(execution, embedding.usage_tokens, inputs.price),
-            query_set: estimate(execution, query_usage, inputs.price),
+            ingestion: estimate(execution, billed, embedding.usage_tokens, inputs.price),
+            query_set: estimate(execution, billed, query_usage, inputs.price),
         },
         reliability: Reliability {
             failed_sources: report

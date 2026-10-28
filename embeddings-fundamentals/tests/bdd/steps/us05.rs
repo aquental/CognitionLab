@@ -21,7 +21,7 @@ use serde_json::Value;
 use super::eval_fixture::{self, repo};
 use crate::{LabWorld, fixture};
 
-const LABELS: &str = "config/evaluation/labels-synthetic-v1.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v2.toml";
 const PRICE: &str = "prices/test-price-v1.toml";
 
 fn number(value: &Value, path: &str) -> Result<f64> {
@@ -277,8 +277,31 @@ fn cold_and_warm(world: &mut LabWorld) -> Result<()> {
     "the report records hardware, corpus checksum, batch size, engine, model, and configuration fingerprints"
 )]
 fn provenance(world: &mut LabWorld) -> Result<()> {
-    let report = world.comparison.as_ref().context("no report")?;
     let hardware = eval_fixture::controlled()?.hardware;
+    let report = world.comparison.as_ref().context("no report")?;
+    // Hardware is captured by each measured run, not detected when reporting.
+    for c in &report.configurations {
+        ensure!(
+            c.hardware == hardware,
+            "{} hardware {:?}",
+            c.experiment_id,
+            c.hardware
+        );
+        // The create-only snapshot pins the exact evaluated query set and labels.
+        let snapshot = world.store.load_experiment(&c.experiment_id)?;
+        let pinned = snapshot
+            .evaluation
+            .as_ref()
+            .context("experiment snapshot has no evaluation provenance")?;
+        ensure!(
+            pinned.query_set_checksum == c.evaluation.query_set.checksum
+                && pinned.labels_checksum == c.evaluation.labels.checksum
+                && pinned.query_set_version == c.evaluation.query_set.version
+                && pinned.labels_version == c.evaluation.labels.version,
+            "{}: snapshot {pinned:?} differs from the evaluated inputs",
+            c.experiment_id
+        );
+    }
     ensure!(
         report.hardware == hardware,
         "hardware {:?}",
@@ -478,7 +501,6 @@ async fn missing_data(world: &mut LabWorld) -> Result<()> {
 fn cost_report(world: &mut LabWorld) -> Result<()> {
     // The same report the `report` command writes (JSON and Markdown).
     let report = ComparisonReport::new(
-        eval_fixture::controlled()?.hardware,
         world.configs.clone(),
         vec!["synthetic fixture corpus".to_owned()],
     )?;

@@ -8,6 +8,10 @@
 //! expected text after Unicode NFC normalization, whitespace collapsing, and
 //! case-folding of the test name only. Accuracy is reported per field, overall, and per
 //! extraction method (native text vs OCR).
+//!
+//! The input is the **extraction output** of the sampled pages (native text or OCR, as
+//! the pipeline selects per page), never the stored chunks: chunking budgets and
+//! truncation must not change an extraction-fidelity figure.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,9 +19,18 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::domain::{ExtractionMethod, Modality};
+use crate::domain::ExtractionMethod;
+use crate::extraction::PageText;
 use crate::ids::{Checksum, SourceId};
-use crate::record::Record;
+
+/// One extracted page of a sampled source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedPage {
+    /// Source the page belongs to.
+    pub source_id: SourceId,
+    /// Extraction output of the page.
+    pub page: PageText,
+}
 
 /// One expected laboratory row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,9 +219,9 @@ fn cells(line: &str) -> Vec<String> {
     line.split('|').map(norm).collect()
 }
 
-/// Evaluates `sample` against the text `records` of one extraction configuration.
+/// Evaluates `sample` against the extracted `pages` of one extraction configuration.
 #[must_use]
-pub fn evaluate(sample: &LoadedSample, records: &[Record]) -> FidelityReport {
+pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityReport {
     let mut by_field: BTreeMap<Field, Accuracy> = BTreeMap::new();
     let mut by_method: BTreeMap<String, Accuracy> = BTreeMap::new();
     let mut overall = Accuracy::default();
@@ -218,25 +231,21 @@ pub fn evaluate(sample: &LoadedSample, records: &[Record]) -> FidelityReport {
     let mut used: std::collections::BTreeMap<_, std::collections::BTreeSet<usize>> =
         std::collections::BTreeMap::new();
     for row in &sample.sample.rows {
-        let page_records: Vec<&Record> = records
+        let page = pages
             .iter()
-            .filter(|r| {
-                r.modality == Modality::Text
-                    && r.source_id == row.source_id
-                    && r.metadata.page_number == row.page
-            })
-            .collect();
-        let method = page_records
-            .first()
-            .map_or("missing", |r| match r.metadata.extraction_method {
+            .find(|p| p.source_id == row.source_id && p.page.page.get() == row.page)
+            .map(|p| &p.page);
+        let method = page
+            .map_or("missing", |p| match p.method {
                 ExtractionMethod::Native => "native",
                 ExtractionMethod::Ocr => "ocr",
             })
             .to_owned();
-        let lines: Vec<Vec<String>> = page_records
+        let lines: Vec<Vec<String>> = page
+            .map(|p| p.lines.as_slice())
+            .unwrap_or_default()
             .iter()
-            .filter_map(|r| r.chunk_text.as_deref())
-            .flat_map(str::lines)
+            .map(|l| l.text.as_str())
             .filter(|l| l.contains('|'))
             .map(cells)
             .collect();
@@ -324,12 +333,23 @@ mod tests {
         assert_eq!(norm("Hemato\u{301}crito"), norm("Hematócrito"));
     }
 
-    fn page_record(text: &str) -> Record {
-        let mut record: Record =
-            serde_json::from_str(include_str!("../reports/examples/record-001.json"))
-                .expect("example record");
-        record.chunk_text = Some(text.to_owned());
-        record
+    fn page(text: &str) -> ExtractedPage {
+        ExtractedPage {
+            source_id: "lab-searchable-001".parse().expect("source"),
+            page: PageText {
+                page: std::num::NonZeroU32::MIN,
+                method: ExtractionMethod::Native,
+                engine: "test".into(),
+                lines: text
+                    .lines()
+                    .map(|l| crate::extraction::TextLine {
+                        text: l.to_owned(),
+                        bounding_box: None,
+                    })
+                    .collect(),
+                confidence: None,
+            },
+        }
     }
 
     fn sample(rows: &[(&str, &str, &str, &str)]) -> LoadedSample {
@@ -349,9 +369,7 @@ mod tests {
     fn one_extracted_line_is_never_scored_for_two_rows_with_the_same_value() {
         // Regression (G2-5): both rows' names are unreadable in the extraction and both
         // values are 92, so the value fallback is ambiguous and neither row binds.
-        let records = [page_record(
-            "Xxx | 92 | mg/dL | 70–99\nYyy | 92 | g/dL | 1–2",
-        )];
+        let records = [page("Xxx | 92 | mg/dL | 70–99\nYyy | 92 | g/dL | 1–2")];
         let report = evaluate(
             &sample(&[
                 ("Glicemia", "92", "mg/dL", "70–99"),
@@ -365,7 +383,7 @@ mod tests {
 
     #[test]
     fn a_unique_value_still_binds_and_a_claimed_line_is_not_reused() {
-        let records = [page_record(
+        let records = [page(
             "Xxx | 92 | mg/dL | 70–99\nCreatinina | 0,9 | mg/dL | 0,6–1,2",
         )];
         // Row 1 binds by its unique value; row 2 by name; row 3 names row 2's line again.

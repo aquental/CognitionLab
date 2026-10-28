@@ -65,7 +65,7 @@ pub struct ExperimentArgs {
     #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
     pub queries: PathBuf,
     /// Frozen relevance labels.
-    #[arg(long, default_value = "config/evaluation/labels-synthetic-v1.toml")]
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v2.toml")]
     pub labels: PathBuf,
     /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
     #[arg(long, default_value_t = 20)]
@@ -465,7 +465,8 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let settings = config.ingest_settings(args.ingest.experiment.clone());
     let instruments = Instruments {
         clock: Arc::new(crate::measurement::SystemClock::new()),
-        memory: Arc::new(crate::measurement::RusageProbe),
+        memory: crate::measurement::RusageProbe,
+        hardware: crate::measurement::Hardware::detect(),
     };
     let outcome = crate::experiment::run(
         Tools {
@@ -534,11 +535,7 @@ fn report(args: &ReportArgs) -> Result<ExitCode> {
             serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
         );
     }
-    let report = match crate::report::ComparisonReport::new(
-        crate::measurement::Hardware::detect(),
-        results,
-        args.notes.clone(),
-    ) {
+    let report = match crate::report::ComparisonReport::new(results, args.notes.clone()) {
         Ok(report) => report,
         Err(e) => {
             eprintln!("validation failed: {e}");

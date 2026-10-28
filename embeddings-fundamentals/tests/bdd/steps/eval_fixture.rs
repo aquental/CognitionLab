@@ -113,7 +113,8 @@ pub async fn measured_run(
     };
     let instruments = Instruments {
         clock: Arc::new(ManualClock::new(Duration::from_millis(controlled.tick_ms))),
-        memory: Arc::new(FixedMemory(Some(controlled.peak_rss_bytes))),
+        memory: FixedMemory(Some(controlled.peak_rss_bytes)),
+        hardware: controlled.hardware.clone(),
     };
     let build = async || -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
         let adapter = builder.clone().build().map_err(|e| BuildError::Load {

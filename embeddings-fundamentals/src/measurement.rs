@@ -318,16 +318,19 @@ impl EmbeddingCalls {
 
 /// Decorator that times every adapter call. It reports the wrapped adapter's model
 /// information unchanged, so records and spaces are identical with or without it.
-pub struct MeasuredEmbedder {
+///
+/// Generic over the clock (static dispatch, PLAN §2.2); it is itself an
+/// [`EmbeddingStrategy`] so it can stand in for the selected `dyn` adapter.
+pub struct MeasuredEmbedder<C> {
     inner: Arc<dyn EmbeddingStrategy>,
-    clock: Arc<dyn Clock>,
+    clock: Arc<C>,
     calls: EmbeddingCalls,
 }
 
-impl MeasuredEmbedder {
+impl<C: Clock> MeasuredEmbedder<C> {
     /// Wraps `inner`, reading `clock` around each call.
     #[must_use]
-    pub fn new(inner: Arc<dyn EmbeddingStrategy>, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(inner: Arc<dyn EmbeddingStrategy>, clock: Arc<C>) -> Self {
         Self {
             inner,
             clock,
@@ -363,7 +366,7 @@ impl MeasuredEmbedder {
     }
 }
 
-impl std::fmt::Debug for MeasuredEmbedder {
+impl<C> std::fmt::Debug for MeasuredEmbedder<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MeasuredEmbedder")
             .field("model", self.inner.model_info())
@@ -372,7 +375,7 @@ impl std::fmt::Debug for MeasuredEmbedder {
 }
 
 #[async_trait::async_trait]
-impl EmbeddingStrategy for MeasuredEmbedder {
+impl<C: Clock + 'static> EmbeddingStrategy for MeasuredEmbedder<C> {
     fn capabilities(&self) -> &Capabilities {
         self.inner.capabilities()
     }

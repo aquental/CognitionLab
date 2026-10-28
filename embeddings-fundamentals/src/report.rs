@@ -129,6 +129,8 @@ pub struct Reliability {
 /// Everything reported for one configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigurationResult {
+    /// Machine the measurements were taken on (captured by the experiment run).
+    pub hardware: Hardware,
     /// Experiment id of the ingestion run.
     pub experiment_id: ExperimentId,
     /// Ingestion status.
@@ -213,7 +215,6 @@ impl ComparisonReport {
     ///
     /// Returns [`ReportError`] for an empty or non-comparable set.
     pub fn new(
-        hardware: Hardware,
         configurations: Vec<ConfigurationResult>,
         notes: Vec<String>,
     ) -> Result<Self, ReportError> {
@@ -238,10 +239,14 @@ impl ComparisonReport {
             if c.fingerprints.evaluation != first.fingerprints.evaluation {
                 return Err(differs("evaluation fingerprint"));
             }
+            // Timings and memory from different machines are not comparable.
+            if c.hardware != first.hardware {
+                return Err(differs("measurement hardware"));
+            }
         }
         Ok(Self {
             comparison_kind: COMPARISON_KIND.to_owned(),
-            hardware,
+            hardware: first.hardware.clone(),
             corpus_checksum: first.corpus_checksum.clone(),
             query_set: first.evaluation.query_set.clone(),
             labels: first.evaluation.labels.clone(),
@@ -313,14 +318,26 @@ impl ComparisonReport {
         }
 
         let _ = writeln!(md, "\n## Retrieval quality (k = 3, macro averages)\n");
-        let _ = writeln!(md, "| Experiment | Status | Precision@3 | Hit@3 | nDCG@3 |");
-        let _ = writeln!(md, "|---|---|---:|---:|---:|");
+        let _ = writeln!(
+            md,
+            "| Experiment | Ingestion run | Failed sources | Evaluation | Precision@3 | Hit@3 | nDCG@3 |"
+        );
+        let _ = writeln!(md, "|---|---|---:|---|---:|---:|---:|");
         for c in &self.configurations {
             let m = &c.evaluation.metrics;
             let _ = writeln!(
                 md,
-                "| {} | {:?} | {:.4} | {:.4} | {:.4} |",
-                c.experiment_id, c.evaluation.status, m.precision_at_3, m.hit_at_3, m.ndcg_at_3
+                "| {} | {} | {} | {:?} | {:.4} | {:.4} | {:.4} |",
+                c.experiment_id,
+                match c.run_status {
+                    RunStatus::Succeeded => "succeeded",
+                    RunStatus::Incomplete => "**INCOMPLETE**",
+                },
+                c.reliability.failed_sources,
+                c.evaluation.status,
+                m.precision_at_3,
+                m.hit_at_3,
+                m.ndcg_at_3
             );
         }
 

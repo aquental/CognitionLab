@@ -383,6 +383,15 @@ impl ChunkId {
     ) -> Result<Self, IdError> {
         Self::try_from(format!("{source}-p{page}-{}-{index}", modality.as_str()))
     }
+
+    /// The modality segment of the id. Validation guarantees it is `text` or `image`.
+    #[must_use]
+    pub fn modality(&self) -> Modality {
+        match self.0.rsplit('-').nth(1) {
+            Some("image") => Modality::Image,
+            _ => Modality::Text,
+        }
+    }
 }
 
 impl From<&ChunkId> for ItemId {
@@ -569,6 +578,9 @@ mod tests {
     fn record_id_is_frozen_for_known_inputs() {
         let revision: RevisionId = "rev-0123456789abcdef".parse().expect("rev");
         let chunk: ChunkId = "src-001-p2-text-3".parse().expect("chunk");
+        assert_eq!(chunk.modality(), Modality::Text);
+        let image: ChunkId = "chest-001-p1-image-0".parse().expect("chunk");
+        assert_eq!(image.modality(), Modality::Image);
         let space: EmbeddingSpaceId = "space-35007f7bfcdac3ce4c66ebe17fa1793b"
             .parse()
             .expect("space");

@@ -7,31 +7,31 @@ Configurations differ in engine, weight format, or model, so differences are not
 - Hardware: macos aarch64 · CPU Apple M3 · 8 logical CPUs · 17179869184 bytes memory · accelerator cpu
 - Corpus checksum: `sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6`
 - Query set: queries-v1 (`sha256:0ca4735dc8b960715916fc29ac76d8de577465e6ef232e69116d6053638ebbed`)
-- Labels: labels-synthetic-v1 (`sha256:c2f637cbaf5fbb1814f15c37c3251e543609b4e93da7639d388345c80c3f4b6a`)
+- Labels: labels-synthetic-v2 (`sha256:e77ca08cc9672fbc4c2925ac7e714782a90413cc86900cc55ba6914662f4ea3b`)
 
 ## Configurations
 
 | Experiment | Engine | Model | Revision | Weights | Dims | Prefix | Batch | Space | Extraction fp | Chunking fp | Evaluation fp |
 |---|---|---|---|---|---:|---|---:|---|---|---|---|
-| p2-embed-anything-minilm | embed_anything 0.7.1 | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 | e8f8c211226b894fcb81acc59f3b34ba3efd5f42 | safetensors | 384 | None | 32 | `space-04233b7a97515dc7c052bb12db39a743` | `c82ad2eb3a9b` | `96ccec200c13` | `40b5de69a70f` |
-| p2-fastembed-minilm | fastembed 7.5.0 | Xenova/paraphrase-multilingual-MiniLM-L12-v2 | 2c4055b12046f11709e9df2c122e59ffbdc2f900 | onnx | 384 | None | 32 | `space-25b9aeac30261d1226218758e6756264` | `c82ad2eb3a9b` | `bb24c712b900` | `40b5de69a70f` |
-| p2-fastembed-e5-base | fastembed 7.5.0 | intfloat/multilingual-e5-base | d128750597153bb5987e10b1c3493a34e5a4502a | onnx | 768 | E5 | 32 | `space-20e1f35a45635362d2a1a1be05b34b34` | `c82ad2eb3a9b` | `27662ad95771` | `40b5de69a70f` |
+| p2-embed-anything-minilm | embed_anything 0.7.1 | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 | e8f8c211226b894fcb81acc59f3b34ba3efd5f42 | safetensors | 384 | None | 32 | `space-04233b7a97515dc7c052bb12db39a743` | `c82ad2eb3a9b` | `96ccec200c13` | `7fafa53198f8` |
+| p2-fastembed-minilm | fastembed 7.5.0 | Xenova/paraphrase-multilingual-MiniLM-L12-v2 | 2c4055b12046f11709e9df2c122e59ffbdc2f900 | onnx | 384 | None | 32 | `space-25b9aeac30261d1226218758e6756264` | `c82ad2eb3a9b` | `bb24c712b900` | `7fafa53198f8` |
+| p2-fastembed-e5-base | fastembed 7.5.0 | intfloat/multilingual-e5-base | d128750597153bb5987e10b1c3493a34e5a4502a | onnx | 768 | E5 | 32 | `space-20e1f35a45635362d2a1a1be05b34b34` | `c82ad2eb3a9b` | `27662ad95771` | `7fafa53198f8` |
 
 ## Retrieval quality (k = 3, macro averages)
 
-| Experiment | Status | Precision@3 | Hit@3 | nDCG@3 |
-|---|---|---:|---:|---:|
-| p2-embed-anything-minilm | Completed | 0.3333 | 0.5000 | 0.4093 |
-| p2-fastembed-minilm | Completed | 0.3333 | 0.5000 | 0.4093 |
-| p2-fastembed-e5-base | Completed | 0.4333 | 0.7000 | 0.5399 |
+| Experiment | Ingestion run | Failed sources | Evaluation | Precision@3 | Hit@3 | nDCG@3 |
+|---|---|---:|---|---:|---:|---:|
+| p2-embed-anything-minilm | succeeded | 0 | Completed | 0.3333 | 0.5000 | 0.4093 |
+| p2-fastembed-minilm | succeeded | 0 | Completed | 0.3333 | 0.5000 | 0.4093 |
+| p2-fastembed-e5-base | succeeded | 0 | Completed | 0.4333 | 0.7000 | 0.5399 |
 
 ## Efficiency
 
 | Experiment | Ingestion ms | ms/page | chunks/s | Batch latency ms | Embeds/s | Model load ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
-| p2-embed-anything-minilm | 2833.1 | 472.2 | 9.9 | 130.56 | 71.5 | 12380.6 | 12531.0 | 15.69 | 17.27 | 1643429888 bytes | 165702 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p2-fastembed-minilm | 2915.4 | 485.9 | 9.6 | 122.61 | 76.1 | 26589.1 | 26731.7 | 30.75 | 34.51 | 3571269632 bytes | 164840 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p2-fastembed-e5-base | 3750.0 | 625.0 | 7.5 | 304.31 | 30.7 | 55756.2 | 56108.5 | 58.83 | 66.66 | 5448417280 bytes | 298563 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p2-embed-anything-minilm | 2830.2 | 471.7 | 9.9 | 134.57 | 69.4 | 1477.0 | 1602.5 | 12.47 | 18.27 | 1538736128 bytes | 165702 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p2-fastembed-minilm | 2781.5 | 463.6 | 10.1 | 122.08 | 76.5 | 4801.9 | 4945.2 | 30.44 | 34.85 | 3755163648 bytes | 164840 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p2-fastembed-e5-base | 3507.1 | 584.5 | 8.0 | 340.83 | 27.4 | 10140.6 | 10477.8 | 58.24 | 64.92 | 5865521152 bytes | 298563 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
 
 ## Cost and reliability
 
