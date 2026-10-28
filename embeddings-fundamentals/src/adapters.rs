@@ -31,6 +31,14 @@ pub enum BuildError {
         /// Model identifier.
         model: String,
     },
+    /// The engine's credential is not configured.
+    #[error("engine {engine} needs the {variable} environment variable (see .env.example)")]
+    MissingCredential {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Environment variable holding the credential.
+        variable: &'static str,
+    },
     /// The model could not be loaded.
     #[error("cannot load {engine} adapter: {reason}")]
     Load {
@@ -49,7 +57,8 @@ impl BuildError {
         match self {
             Self::EngineNotCompiled { .. }
             | Self::NotImplemented(_)
-            | Self::MissingRevision { .. } => crate::pipeline::EXIT_VALIDATION,
+            | Self::MissingRevision { .. }
+            | Self::MissingCredential { .. } => crate::pipeline::EXIT_VALIDATION,
             Self::Load { .. } => 1,
         }
     }
@@ -85,24 +94,56 @@ pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, 
             })?;
             Ok(Arc::new(adapter))
         }
-        EngineId::EmbedAnything => {
-            if config.model_revision.is_none() {
-                return Err(BuildError::MissingRevision {
-                    engine: config.engine,
-                    model: config.model_id.clone(),
-                });
-            }
-            build_embed_anything(config).await
+        EngineId::EmbedAnything | EngineId::FastEmbed | EngineId::OpenAi
+            if config.model_revision.is_none() =>
+        {
+            Err(BuildError::MissingRevision {
+                engine: config.engine,
+                model: config.model_id.clone(),
+            })
         }
-        EngineId::FastEmbed | EngineId::OpenAi => Err(BuildError::NotImplemented(config.engine)),
+        EngineId::EmbedAnything => build_embed_anything(config).await,
+        EngineId::FastEmbed => build_fastembed(config).await,
+        EngineId::OpenAi => build_openai(config),
     }
+}
+
+/// A contract-test stand-in for `config.engine` (PRD §5.4): the deterministic adapter
+/// reporting the configured engine, model, prefix policy, input limit, and execution
+/// location, so the real orchestration runs under that engine's identity without
+/// loading a model or calling a provider. It never establishes model quality or live
+/// provider integration.
+///
+/// # Errors
+///
+/// Returns [`BuildError::Load`] if the space identity cannot be derived.
+pub fn build_contract_test(config: &EngineConfig) -> Result<DeterministicEmbedder, BuildError> {
+    let load = |e: crate::ids::IdError| BuildError::Load {
+        engine: config.engine,
+        reason: e.to_string(),
+    };
+    let mut caps = DeterministicEmbedder::builder()
+        .build()
+        .map_err(load)?
+        .capabilities()
+        .clone();
+    caps.max_input_tokens = config.max_input_tokens;
+    caps.execution = config.engine.execution();
+    DeterministicEmbedder::builder()
+        .engine_label(config.engine)
+        .model_id(config.model_id.clone())
+        .dimensions(config.dimensions)
+        .prefix_policy(config.prefix_policy)
+        .capabilities(caps)
+        .build()
+        .map_err(load)
 }
 
 #[cfg(feature = "engine-embed-anything")]
 async fn build_embed_anything(
     config: &EngineConfig,
 ) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
-    let adapter = crate::embedding::embed_anything::EmbedAnythingAdapter::load(
+    let adapter = crate::embedding::embed_anything::load(
         &config.model_id,
         config.model_revision.as_deref(),
         config.dimensions,
@@ -127,6 +168,73 @@ async fn build_embed_anything(
     })
 }
 
+#[cfg(feature = "engine-fastembed")]
+async fn build_fastembed(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    let adapter = crate::embedding::fastembed::load(
+        &config.model_id,
+        config.model_revision.as_deref(),
+        config.weights.as_deref(),
+        config.dimensions,
+        config.max_input_tokens,
+        config.prefix_policy,
+    )
+    .await
+    .map_err(|e| BuildError::Load {
+        engine: EngineId::FastEmbed,
+        reason: e.to_string(),
+    })?;
+    Ok(Arc::new(adapter))
+}
+
+#[cfg(not(feature = "engine-fastembed"))]
+async fn build_fastembed(_config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    Err(BuildError::EngineNotCompiled {
+        engine: EngineId::FastEmbed,
+        feature: "engine-fastembed",
+    })
+}
+
+#[cfg(feature = "engine-openai")]
+fn build_openai(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    use crate::embedding::openai::{LoadError, OpenAiAdapter};
+    if config.prefix_policy != crate::embedding::PrefixPolicy::None {
+        return Err(BuildError::Load {
+            engine: EngineId::OpenAi,
+            reason: "OpenAI models take no prefix; set prefix_policy = \"none\"".to_owned(),
+        });
+    }
+    let adapter = OpenAiAdapter::load(
+        &config.model_id,
+        config.model_revision.as_deref(),
+        config.dimensions,
+        config.max_input_tokens,
+        config.api_base.as_deref(),
+    )
+    .map_err(|e| match e {
+        LoadError::MissingRevision { .. } => BuildError::MissingRevision {
+            engine: EngineId::OpenAi,
+            model: config.model_id.clone(),
+        },
+        LoadError::MissingKey => BuildError::MissingCredential {
+            engine: EngineId::OpenAi,
+            variable: crate::embedding::openai::API_KEY_ENV,
+        },
+        other => BuildError::Load {
+            engine: EngineId::OpenAi,
+            reason: other.to_string(),
+        },
+    })?;
+    Ok(Arc::new(adapter))
+}
+
+#[cfg(not(feature = "engine-openai"))]
+fn build_openai(_config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    Err(BuildError::EngineNotCompiled {
+        engine: EngineId::OpenAi,
+        feature: "engine-openai",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +248,8 @@ mod tests {
             dimensions: NonZeroUsize::new(8).expect("dims"),
             max_input_tokens: NonZeroUsize::new(64),
             prefix_policy: crate::embedding::PrefixPolicy::None,
+            weights: None,
+            api_base: None,
         }
     }
 

@@ -1,0 +1,791 @@
+{
+  "experiment_id": "p2-fastembed-minilm",
+  "run_status": "succeeded",
+  "engine": "fastembed",
+  "engine_version": "7.5.0",
+  "model_id": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "model_revision": "2c4055b12046f11709e9df2c122e59ffbdc2f900",
+  "weight_format": "onnx",
+  "dimensions": 384,
+  "prefix_policy": "none",
+  "execution": "local",
+  "embedding_space_id": "space-25b9aeac30261d1226218758e6756264",
+  "batch_size": 32,
+  "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+  "fingerprints": {
+    "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
+    "chunking": "bb24c712b900581719b4736a41fb41184d4441a15d5b5e5ea1f1385f054c3bfc",
+    "evaluation": "40b5de69a70f8eea2831b7cea33926888f47d89f79ec6fb5927a57dd28c2b7ca"
+  },
+  "evaluation": {
+    "mode": "text-only",
+    "status": "completed",
+    "query_set": {
+      "version": "queries-v1",
+      "checksum": "sha256:0ca4735dc8b960715916fc29ac76d8de577465e6ef232e69116d6053638ebbed"
+    },
+    "labels": {
+      "version": "labels-synthetic-v1",
+      "checksum": "sha256:c2f637cbaf5fbb1814f15c37c3251e543609b4e93da7639d388345c80c3f4b6a"
+    },
+    "labels_corpus": "synthetic",
+    "evaluation_fingerprint": "40b5de69a70f8eea2831b7cea33926888f47d89f79ec6fb5927a57dd28c2b7ca",
+    "spaces": [
+      "space-25b9aeac30261d1226218758e6756264"
+    ],
+    "k": 3,
+    "queries": [
+      {
+        "query_id": "q01",
+        "text": "Onde está o resultado da hemoglobina?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "ca79d951d5075311",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-1",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHemoglobina | 13,5 | g/dL | 12,0-16,0",
+            "score": 0.7308935,
+            "label": 2,
+            "labeled": true,
+            "note": "Hemoglobin row recovered by OCR"
+          },
+          {
+            "rank": 2,
+            "record_id": "c9e87dee1c279062",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-1",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHemoglobina | 13,5 | g/dL | 12,0–16,0",
+            "score": 0.72553885,
+            "label": 2,
+            "labeled": true,
+            "note": "Hemoglobin row with value, unit, and reference range (native text)"
+          },
+          {
+            "rank": 3,
+            "record_id": "80ea1c819c2945e3",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-2",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematocrito | 40,1 | % | 36,0-46,0",
+            "score": 0.5885549,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.6666666666666666,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 1.0
+        }
+      },
+      {
+        "query_id": "q02",
+        "text": "Qual é o valor da glicemia e sua unidade?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "89372ade991e0f2a",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-0",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nGlicemia de jejum | 92 | mg/dL | 70–99",
+            "score": 0.64981055,
+            "label": 2,
+            "labeled": true,
+            "note": "Fasting glucose row with value 92 mg/dL"
+          },
+          {
+            "rank": 2,
+            "record_id": "6c17597ed7c2ef36",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-0",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nGlicemia de jejum | 92 | mg/dL | 70-99",
+            "score": 0.649536,
+            "label": 2,
+            "labeled": true,
+            "note": "Fasting glucose row recovered by OCR"
+          },
+          {
+            "rank": 3,
+            "record_id": "0a57212f6ff827f0",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-2",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nColesterol total | 182 | mg/dL | < 190",
+            "score": 0.5508684,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.6666666666666666,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 1.0
+        }
+      },
+      {
+        "query_id": "q03",
+        "text": "Qual intervalo de referência aparece para a creatinina?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "6387d3876051bce6",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-1",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nCreatinina | 0,9 | mg/dL | 0,6-1,1",
+            "score": 0.76401657,
+            "label": 2,
+            "labeled": true,
+            "note": "Creatinine row recovered by OCR"
+          },
+          {
+            "rank": 2,
+            "record_id": "7209b07a5c7aa78f",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-1",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nCreatinina | 0,9 | mg/dL | 0,6–1,1",
+            "score": 0.7630055,
+            "label": 2,
+            "labeled": true,
+            "note": "Creatinine row with reference range 0,6–1,1"
+          },
+          {
+            "rank": 3,
+            "record_id": "19e7923900bdafa5",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-4",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nConclusão: valores dentro dos intervalos de referência.",
+            "score": 0.52524155,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.6666666666666666,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 1.0
+        }
+      },
+      {
+        "query_id": "q04",
+        "text": "Onde estão os resultados de colesterol e triglicerídeos?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "0a57212f6ff827f0",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-2",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nColesterol total | 182 | mg/dL | < 190",
+            "score": 0.67042685,
+            "label": 2,
+            "labeled": true,
+            "note": "Total cholesterol row recovered by OCR"
+          },
+          {
+            "rank": 2,
+            "record_id": "bf4e1c278cd6083d",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-2",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nColesterol total | 182 | mg/dL | < 190",
+            "score": 0.67042685,
+            "label": 2,
+            "labeled": true,
+            "note": "Total cholesterol row"
+          },
+          {
+            "rank": 3,
+            "record_id": "97ec727a49146b98",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-3",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nTriglicerideos | 120 | mg/dL | < 150",
+            "score": 0.5725384,
+            "label": 2,
+            "labeled": true,
+            "note": "Triglycerides row recovered by OCR"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 1.0,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 1.0
+        }
+      },
+      {
+        "query_id": "q05",
+        "text": "Qual página contém a conclusão do laudo?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "fc7dbac45aa69b21",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.35038438,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "c496e2cdac734493",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm? | 150.000-450.000",
+            "score": 0.34417072,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "ceedd00ae5a7a290",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-2",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematócrito | 40,1 | % | 36,0–46,0",
+            "score": 0.34232184,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q06",
+        "text": "Onde o laudo descreve os achados do exame?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "ceedd00ae5a7a290",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-2",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematócrito | 40,1 | % | 36,0–46,0",
+            "score": 0.5559093,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "fc7dbac45aa69b21",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.5379511,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "c496e2cdac734493",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm? | 150.000-450.000",
+            "score": 0.53371257,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q07",
+        "text": "Mostre a radiografia de tórax presente no conjunto de exames.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "fc7dbac45aa69b21",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.54240894,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "c496e2cdac734493",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm? | 150.000-450.000",
+            "score": 0.52042574,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "224bfbb3ce2ea72e",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nLeucócitos | 6.800 | /mms | 4.000-10.000",
+            "score": 0.49172997,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q08",
+        "text": "Encontre as imagens de ultrassonografia abdominal.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "2629f0653a02d24d",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.8480835,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "999036b9d7ce89dc",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-3",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.8480835,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "2ccec4ac20fb3b89",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-0",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "score": 0.6548083,
+            "label": 1,
+            "labeled": true,
+            "note": "Title of the abdominal ultrasound report, not an image"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.3333333333333333,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 0.09271639884807328
+        }
+      },
+      {
+        "query_id": "q09",
+        "text": "Mostre a imagem associada a este laudo de ultrassonografia.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "2629f0653a02d24d",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.6252823,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "999036b9d7ce89dc",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-3",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.6252823,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "287344ba65a308bb",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nLeucócitos | 6.800 | /mm³ | 4.000–10.000",
+            "score": 0.5171952,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q10",
+        "text": "Onde o documento informa a técnica utilizada no exame?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "fc7dbac45aa69b21",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.4753288,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "c496e2cdac734493",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm? | 150.000-450.000",
+            "score": 0.47048968,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "ceedd00ae5a7a290",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-2",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematócrito | 40,1 | % | 36,0–46,0",
+            "score": 0.45724472,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      }
+    ],
+    "metrics": {
+      "precision_at_3": 0.33333333333333337,
+      "hit_at_3": 0.5,
+      "ndcg_at_3": 0.4092716398848073
+    }
+  },
+  "measurements": {
+    "ingestion": {
+      "duration_ms": 2831.560708,
+      "pages": 6,
+      "chunks": 28,
+      "ms_per_page": 471.92678466666666,
+      "chunks_per_second": 9.888539532594757
+    },
+    "ingestion_model_load_ms": 3123.030667,
+    "embedding": {
+      "calls": 3,
+      "failed_calls": 0,
+      "items": 28,
+      "total_ms": 321.619417,
+      "mean_batch_latency_ms": 107.20647233333334,
+      "items_per_second": 87.05942029613217,
+      "usage_tokens": null
+    },
+    "cold_start": {
+      "model_load_ms": 2437.055833,
+      "first_query_ms": 28.447667,
+      "total_ms": 2465.5035
+    },
+    "warm_query_latency": {
+      "samples": 200,
+      "median_ms": 26.540375,
+      "p95_ms": 27.888083
+    },
+    "latency_repeats": 20,
+    "peak_local_ram": {
+      "status": "measured",
+      "value": 5221335040.0,
+      "unit": "bytes",
+      "scope": "local process memory (ru_maxrss high-water mark)"
+    },
+    "gpu_memory": {
+      "status": "unavailable",
+      "reason": "inference runs on the CPU; no GPU is used"
+    },
+    "provider_inference_memory": null,
+    "index_size": {
+      "status": "measured",
+      "value": 164840.0,
+      "unit": "bytes",
+      "scope": "active revisions on disk"
+    }
+  },
+  "cost": {
+    "ingestion": {
+      "estimate_status": "not_applicable",
+      "estimated_cost": null,
+      "reason": "local engine: no provider is billed",
+      "currency": null,
+      "price_version": null,
+      "usage_unit": null,
+      "usage": null,
+      "unit_quantity": null,
+      "unit_price": null
+    },
+    "query_set": {
+      "estimate_status": "not_applicable",
+      "estimated_cost": null,
+      "reason": "local engine: no provider is billed",
+      "currency": null,
+      "price_version": null,
+      "usage_unit": null,
+      "usage": null,
+      "unit_quantity": null,
+      "unit_price": null
+    }
+  },
+  "reliability": {
+    "failed_sources": 0,
+    "failed_pages": 0,
+    "failed_batches": 0,
+    "retries": 0,
+    "truncations": 0
+  },
+  "fidelity": {
+    "sample_version": "fidelity-synthetic-v1",
+    "sample_checksum": "sha256:ceeed0d097b6a1f2881e0bd75777f5f3bb1cc97fb22212585209a6e7e91eb789",
+    "corpus": "synthetic",
+    "rows": 16,
+    "rows_not_found": 0,
+    "overall": {
+      "correct": 54,
+      "total": 64,
+      "accuracy": 0.84375
+    },
+    "by_field": {
+      "test_name": {
+        "correct": 14,
+        "total": 16,
+        "accuracy": 0.875
+      },
+      "value": {
+        "correct": 16,
+        "total": 16,
+        "accuracy": 1.0
+      },
+      "unit": {
+        "correct": 14,
+        "total": 16,
+        "accuracy": 0.875
+      },
+      "reference_range": {
+        "correct": 10,
+        "total": 16,
+        "accuracy": 0.625
+      }
+    },
+    "by_method": {
+      "native": {
+        "correct": 32,
+        "total": 32,
+        "accuracy": 1.0
+      },
+      "ocr": {
+        "correct": 22,
+        "total": 32,
+        "accuracy": 0.6875
+      }
+    },
+    "mismatches": [
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Hemoglobina",
+        "field": "reference_range",
+        "expected": "12,0–16,0",
+        "extracted": "12,0-16,0"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Hematócrito",
+        "field": "test_name",
+        "expected": "Hematócrito",
+        "extracted": "Hematocrito"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Hematócrito",
+        "field": "reference_range",
+        "expected": "36,0–46,0",
+        "extracted": "36,0-46,0"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Leucócitos",
+        "field": "unit",
+        "expected": "/mm³",
+        "extracted": "/mms"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Leucócitos",
+        "field": "reference_range",
+        "expected": "4.000–10.000",
+        "extracted": "4.000-10.000"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Plaquetas",
+        "field": "unit",
+        "expected": "/mm³",
+        "extracted": "/mm?"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 1,
+        "row": "Plaquetas",
+        "field": "reference_range",
+        "expected": "150.000–450.000",
+        "extracted": "150.000-450.000"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 2,
+        "row": "Glicemia de jejum",
+        "field": "reference_range",
+        "expected": "70–99",
+        "extracted": "70-99"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 2,
+        "row": "Creatinina",
+        "field": "reference_range",
+        "expected": "0,6–1,1",
+        "extracted": "0,6-1,1"
+      },
+      {
+        "source_id": "lab-scanned-002",
+        "page": 2,
+        "row": "Triglicerídeos",
+        "field": "test_name",
+        "expected": "Triglicerídeos",
+        "extracted": "Triglicerideos"
+      }
+    ]
+  }
+}

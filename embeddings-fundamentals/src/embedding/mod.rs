@@ -8,6 +8,13 @@
 pub mod deterministic;
 #[cfg(feature = "engine-embed-anything")]
 pub mod embed_anything;
+#[cfg(feature = "engine-fastembed")]
+pub mod fastembed;
+#[cfg(any(feature = "engine-embed-anything", feature = "engine-fastembed"))]
+pub mod hf;
+pub mod local;
+#[cfg(feature = "engine-openai")]
+pub mod openai;
 
 use std::borrow::Cow;
 use std::fmt;
@@ -419,6 +426,11 @@ impl EmbeddingError {
 pub trait TokenCounter: Send + Sync {
     /// Number of model tokens in `text`, excluding special tokens.
     fn count(&self, text: &str) -> usize;
+
+    /// Content identity of the tokenizer (for example a digest of `tokenizer.json`).
+    /// It enters the chunking fingerprint, because chunk boundaries depend on the
+    /// tokenizer, not on the model that later embeds the chunks.
+    fn id(&self) -> &str;
 }
 
 /// The embedding strategy contract (PRD §7).

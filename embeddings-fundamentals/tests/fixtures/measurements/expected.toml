@@ -1,0 +1,50 @@
+# Controlled observations for US-05 "Save a reproducible comparison report".
+#
+# The clock is a ManualClock that advances `tick_ms` on every reading, and the memory
+# probe returns `peak_rss_bytes`. Both configurations ingest the three synthetic PDFs
+# (6 pages, 28 text chunks; batch size 32 gives one adapter call per source, 3 calls).
+# experiment::run reads the clock around each interval, and the measuring decorator
+# reads it at the start and end of every adapter call, so by hand:
+#   ingestion model load  = 1 tick                  = 10 ms
+#   ingestion duration    = 1 + 2 x 3 calls ticks   = 70 ms
+#   ms per page           = 70 / 6                  = 11.666666...
+#   chunks per second     = 28 / 0.070 s            = 400
+#   embedding total       = 3 calls x 1 tick        = 30 ms; mean batch latency 10 ms
+#   embedding throughput  = 28 / 0.030 s            = 933.333...
+#   query-side model load = 1 tick                  = 10 ms
+#   first query           = 1 + 2 (one query call)  = 30 ms; cold start total 40 ms
+#   warm query            = 30 ms per sample; median 30 ms, p95 30 ms
+#   warm samples          = latency_repeats x 10 queries = 20
+# Usage (whitespace tokens of all chunk texts) and index size (bytes of the active
+# revision files) are recomputed independently by the step from the store.
+tick_ms = 10
+peak_rss_bytes = 123456789
+latency_repeats = 2
+
+[hardware]
+os = "fixture-os"
+arch = "fixture-arch"
+cpu = "Fixture CPU"
+logical_cpus = 8
+memory_bytes = 17179869184
+accelerator = "cpu"
+
+[expected]
+ingestion_model_load_ms = 10.0
+ingestion_duration_ms = 70.0
+pages = 6
+chunks = 28
+ms_per_page = 11.666666666666666
+chunks_per_second = 400.0
+embedding_calls = 3
+embedding_total_ms = 30.0
+mean_batch_latency_ms = 10.0
+items_per_second = 933.3333333333334
+cold_model_load_ms = 10.0
+cold_first_query_ms = 30.0
+cold_total_ms = 40.0
+warm_samples = 20
+warm_median_ms = 30.0
+warm_p95_ms = 30.0
+peak_local_ram_unit = "bytes"
+index_size_unit = "bytes"

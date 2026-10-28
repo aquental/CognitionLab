@@ -1,0 +1,24 @@
+# Low-relevance fixture (US-03 "Report low relevance without hiding a completed
+# experiment"): only image items are relevant, so a text-only index can retrieve
+# nothing relevant. Every retrieved text chunk is unlabeled, which means label 0.
+version = "labels-images-only-v1"
+query_set = "queries-v1"
+corpus = "synthetic"
+
+[[label]]
+query = "q07"
+item = "chest-001-p1-image-0"
+label = 2
+note = "Synthetic chest radiograph"
+
+[[label]]
+query = "q08"
+item = "abd-us-001-p1-image-0"
+label = 2
+note = "Synthetic abdominal ultrasound image"
+
+[[label]]
+query = "q09"
+item = "us-mixed-003-p1-image-0"
+label = 2
+note = "Image embedded in the ultrasound report"
