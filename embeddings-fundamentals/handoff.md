@@ -17,7 +17,7 @@ Updated: 2026-10-28. Use this file to resume `spec/prompt/execute.md` in a new s
 |---|---|---|---|
 | 0 Scaffolding | `phase-0/scaffolding` | #3 → main | Approved. Ready for review, not merged |
 | 1 Text baseline (`@m1`) | `phase-1/text-baseline` | #4 → phase-0 | Approved with the Codex round-3 waiver. Ready for review, not merged |
-| 2 Engine comparison (`@m2`) | `phase-2/engine-comparison` | draft → phase-1 | **Implemented and validated locally. Reviews not started** |
+| 2 Engine comparison (`@m2`) | `phase-2/engine-comparison` | #5 (draft) → phase-1 | **Implemented and validated locally. Reviews not started** |
 | 3 Image retrieval (`@m3`) | — | — | Not started |
 | 4 Combined + publication (`@m4`) | — | — | Not started |
 
