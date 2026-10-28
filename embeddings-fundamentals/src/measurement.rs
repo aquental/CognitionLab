@@ -52,35 +52,35 @@ impl Clock for SystemClock {
     }
 }
 
-/// A test clock that advances by a fixed tick on every reading, so an interval read
-/// with no other readings in between always measures exactly one tick.
-#[derive(Debug)]
+/// A test clock that moves only when advanced. Controlled components advance it while
+/// they do their work (an adapter call, a model load), so an interval measures exactly
+/// the work done inside it, and nothing when the work happened outside it. Reading the
+/// clock never moves it.
+#[derive(Debug, Default)]
 pub struct ManualClock {
-    tick_micros: u64,
-    readings: AtomicU64,
+    now_micros: AtomicU64,
 }
 
 impl ManualClock {
-    /// A clock advancing `tick` per reading; the first reading returns `tick`.
+    /// A clock at time zero.
     #[must_use]
-    pub fn new(tick: Duration) -> Self {
-        Self {
-            tick_micros: u64::try_from(tick.as_micros()).unwrap_or(u64::MAX),
-            readings: AtomicU64::new(0),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Number of readings so far.
-    #[must_use]
-    pub fn readings(&self) -> u64 {
-        self.readings.load(Ordering::SeqCst)
+    /// Moves the clock forward by `by` (saturating at `u64::MAX` microseconds).
+    pub fn advance(&self, by: Duration) {
+        let micros = u64::try_from(by.as_micros()).unwrap_or(u64::MAX);
+        self.now_micros
+            .update(Ordering::SeqCst, Ordering::SeqCst, |now| {
+                now.saturating_add(micros)
+            });
     }
 }
 
 impl Clock for ManualClock {
     fn now(&self) -> Duration {
-        let n = self.readings.fetch_add(1, Ordering::SeqCst) + 1;
-        Duration::from_micros(n.saturating_mul(self.tick_micros))
+        Duration::from_micros(self.now_micros.load(Ordering::SeqCst))
     }
 }
 
@@ -632,19 +632,31 @@ mod tests {
     }
 
     #[test]
-    fn manual_clock_ticks_once_per_reading() {
-        let clock = ManualClock::new(Duration::from_millis(10));
+    fn manual_clock_moves_only_when_advanced() {
+        let clock = ManualClock::new();
         let start = clock.now();
-        let end = clock.now();
-        assert_eq!(end - start, Duration::from_millis(10));
-        assert_eq!(clock.readings(), 2);
+        assert_eq!(clock.now(), start, "reading never moves the clock");
+        clock.advance(Duration::from_millis(10));
+        assert_eq!(clock.now() - start, Duration::from_millis(10));
     }
 
     #[tokio::test]
     async fn the_decorator_times_calls_and_keeps_the_space() {
-        let inner: Arc<dyn EmbeddingStrategy> =
-            Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
-        let clock = Arc::new(ManualClock::new(Duration::from_millis(5)));
+        // The adapter's work advances the clock (5 ms per call); a decorator that read
+        // its start after the inner call returned would measure 0 ms (C2-18).
+        let clock = Arc::new(ManualClock::new());
+        let inner: Arc<dyn EmbeddingStrategy> = Arc::new(
+            DeterministicEmbedder::builder()
+                .work(
+                    Arc::clone(&clock),
+                    crate::embedding::deterministic::WorkCost {
+                        per_call: Duration::from_millis(5),
+                        per_item: Duration::ZERO,
+                    },
+                )
+                .build()
+                .expect("adapter"),
+        );
         let measured = MeasuredEmbedder::new(Arc::clone(&inner), clock);
         assert_eq!(measured.model_info(), inner.model_info());
         let input = |id: &str| TextInput {

@@ -18,6 +18,7 @@ use super::{
 };
 use crate::domain::Execution;
 use crate::ids::{IdError, ItemId};
+use crate::measurement::ManualClock;
 
 /// Which adapter method was called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,10 +96,28 @@ impl TokenCounter for WhitespaceTokenCounter {
     }
 }
 
+/// Simulated duration of one adapter call: `per_call + per_item × items`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorkCost {
+    /// Fixed cost of every call.
+    pub per_call: std::time::Duration,
+    /// Additional cost per embedded item.
+    pub per_item: std::time::Duration,
+}
+
+impl WorkCost {
+    fn of(self, items: usize) -> std::time::Duration {
+        self.per_item
+            .saturating_mul(u32::try_from(items).unwrap_or(u32::MAX))
+            .saturating_add(self.per_call)
+    }
+}
+
 /// Builder for [`DeterministicEmbedder`].
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct DeterministicBuilder {
+    work: Option<(std::sync::Arc<ManualClock>, WorkCost)>,
     usage_reporting: UsageReporting,
     model_id: String,
     dimensions: NonZeroUsize,
@@ -125,6 +144,7 @@ pub enum UsageReporting {
 impl Default for DeterministicBuilder {
     fn default() -> Self {
         Self {
+            work: None,
             usage_reporting: UsageReporting::Always,
             model_id: "deterministic-v1".to_owned(),
             dimensions: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
@@ -147,6 +167,13 @@ impl Default for DeterministicBuilder {
 }
 
 impl DeterministicBuilder {
+    /// Makes every adapter call advance `clock` by `cost` while it runs, so measured
+    /// intervals see the call's work only if they enclose it.
+    pub fn work(mut self, clock: std::sync::Arc<ManualClock>, cost: WorkCost) -> Self {
+        self.work = Some((clock, cost));
+        self
+    }
+
     /// Sets which successful text calls report provider usage.
     pub fn usage_reporting(mut self, reporting: UsageReporting) -> Self {
         self.usage_reporting = reporting;
@@ -229,6 +256,7 @@ impl DeterministicBuilder {
             calls: Mutex::new(Vec::new()),
             usage_reporting: self.usage_reporting,
             successful_text_calls: std::sync::atomic::AtomicUsize::new(0),
+            work: self.work,
         })
     }
 }
@@ -244,6 +272,7 @@ pub struct DeterministicEmbedder {
     calls: Mutex<Vec<Call>>,
     usage_reporting: UsageReporting,
     successful_text_calls: std::sync::atomic::AtomicUsize,
+    work: Option<(std::sync::Arc<ManualClock>, WorkCost)>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -441,12 +470,20 @@ impl DeterministicEmbedder {
         }
     }
 
+    /// Advances the work clock by this call's simulated duration.
+    fn do_work(&self, items: usize) {
+        if let Some((clock, cost)) = &self.work {
+            clock.advance(cost.of(items));
+        }
+    }
+
     fn embed_text(
         &self,
         method: Method,
         kind: InputKind,
         raw: &[TextInput],
     ) -> Result<EmbeddingBatch, EmbeddingError> {
+        self.do_work(raw.len());
         let submitted: Vec<String> = raw
             .iter()
             .map(|input| {
@@ -543,6 +580,7 @@ impl EmbeddingStrategy for DeterministicEmbedder {
     }
 
     async fn embed_images(&self, assets: &[AssetRef]) -> Result<EmbeddingBatch, EmbeddingError> {
+        self.do_work(assets.len());
         let keys: Vec<String> = assets
             .iter()
             .map(|a| a.path.display().to_string())

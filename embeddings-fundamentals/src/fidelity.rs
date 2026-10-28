@@ -253,8 +253,8 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
         })
         .collect();
     // Lines claimed per page, so no extracted line counts for two sample rows. Exact
-    // matches of a name that is unique among the page's sample rows are reserved for
-    // the whole page first. The value is only a fallback for the remaining rows, over
+    // matches of a name that is unique among both the page's sample rows and its
+    // extracted lines are reserved for the whole page first. The value is only a fallback for the remaining rows, over
     // the lines no name claimed: a row binds when it is the only unmatched row on its
     // page with that value and exactly one unclaimed line carries it. Ambiguity leaves
     // every row involved unbound, so the result does not depend on the order of the
@@ -280,15 +280,18 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
         let taken = claimed
             .entry((row.source_id.clone(), row.page))
             .or_default();
-        *slot = lines
+        // The name must also be unique among the extracted lines; a test printed twice
+        // on the page is left to the unique-value fallback.
+        let mut by_name = lines
             .iter()
             .enumerate()
-            .find(|(i, c)| {
+            .filter(|(i, c)| {
                 !taken.contains(i) && c.first().is_some_and(|n| n.to_lowercase() == name)
             })
             .map(|(i, _)| i);
-        if let Some(i) = *slot {
+        if let (Some(i), None) = (by_name.next(), by_name.next()) {
             taken.insert(i);
+            *slot = Some(i);
         }
     }
     let mut wanted: BTreeMap<(SourceId, u32, String), usize> = BTreeMap::new();
@@ -527,6 +530,21 @@ mod tests {
         let report = evaluate(&sample(&[one, two]), &both);
         assert_eq!(report.rows_not_found, 0, "{report:?}");
         assert_eq!(report.overall.correct, 8, "{report:?}");
+    }
+
+    #[test]
+    fn a_name_printed_twice_on_the_page_resolves_by_value_in_any_line_order() {
+        // Regression (C2-17): one sampled row `A | 2`, the page prints test A twice. The
+        // name is ambiguous among the lines, so the unique value picks the right one.
+        let row = [("A", "2", "u", "r")];
+        for text in [
+            "A | 1 | u | r\nA | 2 | u | r",
+            "A | 2 | u | r\nA | 1 | u | r",
+        ] {
+            let report = evaluate(&sample(&row), &[page(text)]);
+            assert_eq!(report.rows_not_found, 0, "{text:?}: {report:?}");
+            assert_eq!(report.overall.correct, 4, "{text:?}: {report:?}");
+        }
     }
 
     #[test]
