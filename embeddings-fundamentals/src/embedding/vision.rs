@@ -322,6 +322,12 @@ pub async fn load(
         let preprocessing = std::fs::read_to_string(&preprocessor)
             .map_err(|e| fail(e.to_string()))
             .and_then(|text| ImagePreprocessing::from_json(&text).map_err(fail))?;
+        if preprocessing.fixed_output_size().is_none() {
+            return Err(fail(
+                "the image preprocessing has no fixed input size, so images cannot be batched"
+                    .to_owned(),
+            ));
+        }
         let embedder =
             ClipEmbedder::new(id.clone(), Some(&rev), None).map_err(|e| fail(e.to_string()))?;
         if !embedder.model.supports_text() {

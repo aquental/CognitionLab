@@ -564,3 +564,94 @@ async fn an_image_run_needs_a_cross_modal_adapter() {
     assert!(text_only.calls().is_empty());
     assert_eq!(extractor.extraction_calls(), 0);
 }
+
+#[tokio::test]
+async fn an_image_reprocess_that_keeps_nothing_deactivates_the_old_revision() {
+    // Regression (G3-1): a reprocess whose filter keeps no image must not leave the
+    // previous image revision answering searches.
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let mut manifest_one = manifest.clone();
+    manifest_one
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "us-mixed-003");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(
+        DeterministicEmbedder::builder()
+            .model_id("deterministic-image-v1")
+            .text_to_image()
+            .build()
+            .expect("adapter"),
+    );
+    let space = embedder.model_info().embedding_space_id.clone();
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder,
+    };
+    let source = "us-mixed-003".parse().expect("id");
+    let mut settings = IngestSettings::new("keep-image".parse().expect("id"));
+    settings.modality = Modality::Image;
+    let first = pipeline
+        .ingest(&manifest_one, &settings)
+        .await
+        .expect("run");
+    assert_eq!(
+        first.source(&source).map(|s| s.status),
+        Some(SourceStatus::Succeeded)
+    );
+    let published = store.active_pointer(&space, &source).expect("pointer");
+    assert!(published.is_some(), "the first run publishes the image");
+
+    // The 256x192 image no longer passes a 512 px minimum.
+    settings.experiment_id = "keep-nothing".parse().expect("id");
+    settings.images.min_side_px = 512;
+    let second = pipeline
+        .ingest(&manifest_one, &settings)
+        .await
+        .expect("run");
+    let report = second.source(&source).expect("source");
+    assert_eq!(report.status, SourceStatus::NotApplicable);
+    assert_eq!(report.revision_id, None, "no revision was published");
+    assert!(
+        report
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("deactivated")),
+        "{:?}",
+        report.reason
+    );
+    assert_eq!(
+        store.active_pointer(&space, &source).expect("pointer"),
+        None
+    );
+    assert_eq!(store.active_records(&space).expect("records"), vec![]);
+    // The earlier experiment still reads the revision it pinned.
+    let snapshot = store
+        .load_experiment(&"keep-image".parse().expect("id"))
+        .expect("snapshot");
+    let pinned = store.records(&snapshot.revisions).expect("pinned records");
+    assert_eq!(pinned.len(), 1);
+    // A further run stays not applicable and has nothing left to deactivate.
+    settings.experiment_id = "keep-nothing-again".parse().expect("id");
+    let third = pipeline
+        .ingest(&manifest_one, &settings)
+        .await
+        .expect("run");
+    let report = third.source(&source).expect("source");
+    assert_eq!(report.status, SourceStatus::NotApplicable);
+    assert!(
+        report
+            .reason
+            .as_deref()
+            .is_some_and(|r| !r.contains("deactivated")),
+        "{:?}",
+        report.reason
+    );
+}

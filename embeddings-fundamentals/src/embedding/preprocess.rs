@@ -206,6 +206,17 @@ impl ImagePreprocessing {
         )
     }
 
+    /// Model input size, `(height, width)`, when it does not depend on the source image
+    /// (a crop or an exact resize). Images can only be batched when it is fixed.
+    #[must_use]
+    pub const fn fixed_output_size(&self) -> Option<(u32, u32)> {
+        match (self.crop, self.resize) {
+            (Some(crop), _) => Some(crop),
+            (None, Resize::Exact { height, width }) => Some((height, width)),
+            (None, Resize::ShortestEdge(_)) => None,
+        }
+    }
+
     /// Size of the model input, `(height, width)`.
     #[must_use]
     pub fn output_size(&self, source_height: u32, source_width: u32) -> (u32, u32) {
@@ -317,6 +328,14 @@ mod tests {
         assert_eq!(siglip.crop, None);
         assert_eq!(siglip.mean, [0.5; 3]);
         assert_ne!(clip.descriptor(), siglip.descriptor(), "spaces must differ");
+        assert_eq!(clip.fixed_output_size(), Some((224, 224)));
+        assert_eq!(siglip.fixed_output_size(), Some((256, 256)));
+        let uncropped = ImagePreprocessing { crop: None, ..clip };
+        assert_eq!(
+            uncropped.fixed_output_size(),
+            None,
+            "a shortest-edge resize without a crop depends on the source"
+        );
     }
 
     #[test]

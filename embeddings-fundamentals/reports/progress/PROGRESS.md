@@ -183,7 +183,7 @@ None for Phase 0.
 
 ## Phase 3 — Milestone 3: Image retrieval (`@m3`)
 
-**Status:** 🔄 implementation complete, adversarial reviews pending. Branch `phase-3/image-retrieval` (from `3294dbd`, the approved Phase 2 head). Review diff base `3294dbd`.
+**Status:** 🔄 implementation complete, adversarial reviews in progress (see `reports/reviews/phase-3/FINDINGS.md`). Branch `phase-3/image-retrieval` (from `3294dbd`, the approved Phase 2 head). Review diff base `3294dbd`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
@@ -215,7 +215,7 @@ None for Phase 0.
 
 ### Validation (local, 2026-10-28)
 - fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
-- `cargo test`: 139 unit, 11 pipeline, 7 experiment (new: an image run is evaluated image-only through the text-query path, metrics equal the hand-derived fixture), 3 evidence, 2 fixtures, BDD 36 scenarios, self-test 0 mismatches.
+- `cargo test`: 139 unit, 12 pipeline (incl. the G3-1 regression), 7 experiment (new: an image run is evaluated image-only through the text-query path, metrics equal the hand-derived fixture), 3 evidence, 2 fixtures, BDD 36 scenarios, self-test 0 mismatches.
 - `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 13 passed, including the new real image run (`pdfimages`: embedded page-1 image kept, page-2 scan dropped, stored asset equals the scrubbed extraction) and CLIP / SigLIP loads (dimensions, normalization, batch = single, over-limit query refused, document text refused). The OpenAI live test stays outstanding.
 - Real runs (release, Apple M3, 8 CPUs, CPU inference): macro P@3 / Hit@3 / nDCG@3 = 0.167 / 0.300 / 0.241 (CLIP) and 0.167 / 0.300 / 0.270 (SigLIP). Identical metrics in two consecutive runs. SigLIP ranks the chest image first for q07 ("Mostre a radiografia de tórax presente no conjunto de exames."); CLIP ranks it third. **Load note:** the host carried heavy unrelated load (load average about 25–29 on 8 logical CPUs, other desktop applications) during both runs, so the latencies (warm median about 0.78 s CLIP, 1.9 s SigLIP; per-call times varied 0.1–0.9 s in a direct probe) are indicative only and not comparable with the Phase 2 text runs.
 - Spike re-run with the corrected preprocessing: recorded in `reports/spikes/phase3-models.md` next to the original numbers.
