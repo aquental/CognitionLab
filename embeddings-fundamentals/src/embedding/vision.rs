@@ -333,6 +333,21 @@ pub async fn load(
         if !embedder.model.supports_text() {
             return Err(fail("the checkpoint has no text tower".to_owned()));
         }
+        // Queries are padded to the position limit and both text towers pool at the end
+        // token (CLIP: first maximal id; SigLIP: the last position, unmasked). Padding
+        // leaves the pooled token unchanged only when the pad id is the end token the
+        // tokenizer appends ("sticky EOS": `</s>` for SigLIP, `<|endoftext|>` for CLIP).
+        let end = tokens
+            .encode_ids("probe")
+            .map_err(|e| fail(format!("tokenization failed: {e}")))?
+            .last()
+            .copied();
+        if end != Some(embedder.pad_id) {
+            return Err(fail(format!(
+                "pad id {} is not the end token {end:?} of the tokenizer, so padding would change the pooled token",
+                embedder.pad_id
+            )));
+        }
         let max_len = embedder.max_len;
         Ok(Model {
             embedder,

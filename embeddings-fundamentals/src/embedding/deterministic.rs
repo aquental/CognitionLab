@@ -255,7 +255,13 @@ impl DeterministicBuilder {
             normalized: true,
             metric: DistanceMetric::Cosine,
             prefix_policy: self.prefix_policy,
-            preprocessing: "sha256-seeded".to_owned(),
+            // A cross-modal stand-in is another model than the text one (G3-5): its space
+            // must differ even with the same model id and dimensions.
+            preprocessing: if self.capabilities.text_to_image_compatible {
+                "sha256-seeded;cross-modal".to_owned()
+            } else {
+                "sha256-seeded".to_owned()
+            },
         })?;
         Ok(DeterministicEmbedder {
             info,

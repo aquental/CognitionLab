@@ -654,3 +654,73 @@ async fn an_image_reprocess_that_keeps_nothing_deactivates_the_old_revision() {
         report.reason
     );
 }
+
+#[tokio::test]
+async fn a_text_run_and_an_image_run_of_one_source_keep_two_active_revisions() {
+    // Regression (G3-5): the cross-modal stand-in with the text stand-in's model id and
+    // dimensions writes into its own space, so it never replaces the text pointer.
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let mut manifest_one = manifest.clone();
+    manifest_one
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "us-mixed-003");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let text = Arc::new(DeterministicEmbedder::builder().build().expect("text"));
+    let image = Arc::new(
+        DeterministicEmbedder::builder()
+            .text_to_image()
+            .build()
+            .expect("image"),
+    );
+    let (text_space, image_space) = (
+        text.model_info().embedding_space_id.clone(),
+        image.model_info().embedding_space_id.clone(),
+    );
+    assert_ne!(text_space, image_space);
+    let run = async |embedder: Arc<DeterministicEmbedder>, id: &str, modality| {
+        let pipeline = Pipeline {
+            text: &extractor,
+            ocr: &extractor,
+            images: &extractor,
+            sleeper: &NoSleep,
+            store: Arc::clone(&store),
+            embedder,
+        };
+        let mut settings = IngestSettings::new(id.parse().expect("id"));
+        settings.modality = modality;
+        let report = pipeline
+            .ingest(&manifest_one, &settings)
+            .await
+            .expect("run");
+        assert_eq!(
+            report.sources[0].status,
+            SourceStatus::Succeeded,
+            "{report:?}"
+        );
+    };
+    run(text, "text-run", Modality::Text).await;
+    run(image, "image-run", Modality::Image).await;
+    let source = "us-mixed-003".parse().expect("id");
+    assert!(
+        store
+            .active_pointer(&text_space, &source)
+            .expect("pointer")
+            .is_some()
+    );
+    assert!(
+        store
+            .active_pointer(&image_space, &source)
+            .expect("pointer")
+            .is_some()
+    );
+    let texts = store.active_records(&text_space).expect("text records");
+    assert!(!texts.is_empty());
+    assert!(texts.iter().all(|r| r.modality == Modality::Text));
+    let images = store.active_records(&image_space).expect("image records");
+    assert_eq!(images.len(), 1);
+    assert!(images.iter().all(|r| r.modality == Modality::Image));
+}
