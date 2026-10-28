@@ -21,7 +21,7 @@ This file lets work resume without repeating completed steps. Each phase lists i
 
 ## Phase 0 — Scaffolding & BDD harness
 
-**Status:** implemented and validated. Reviews in progress.
+**Status:** ✅ APPROVED (2026-10-28). Grok rounds 1–8 and Codex rounds 1–3 are complete; the final Grok round and the final Codex round both reported NO FINDINGS.
 
 ### Implementation
 - `lib` + `bin` split. `main.rs` is thin; the `doctor` command probes poppler and tesseract.
@@ -51,7 +51,7 @@ This file lets work resume without repeating completed steps. Each phase lists i
 ### Validation (local, 2026-10-28)
 - `cargo fmt --check`: ok
 - `cargo clippy --all-targets -- -D warnings` for none, each engine, and all features: ok
-- `cargo test`: 27 unit tests pass; `bdd` passes (milestone 0); `bdd_selftest` has 0 mismatches; `integration` has 1 test ignored by default
+- `cargo test` (final state): 36 unit tests pass; `fixtures` 2 pass; `bdd` passes (milestone 0, 3 harness scenarios); `bdd_selftest` has 12 cases + real PRD inventory with 0 mismatches; `integration` has 1 test ignored by default (and fails as outstanding if included without `RUN_INTEGRATION=1`)
 - `RUN_INTEGRATION=1 cargo test --test integration -- --include-ignored`: 1 passed (poppler 26.10.0, tesseract 5.5.3)
 - Real tools on fixtures: `pdftotext -layout` returns the lab rows intact; `pdfimages -list` shows image/smask types as expected; tesseract (`por+eng`, psm 6) OCRs the scanned page and returns `12,0-16,0` with an ASCII hyphen (input for the G28 row grammar)
 
@@ -61,7 +61,16 @@ This file lets work resume without repeating completed steps. Each phase lists i
 **Deviations from PLAN §2.3:** none. The PLAN text was updated for the self-test design and the fixture generator location.
 
 ### Reviews
-See `reports/reviews/phase-0/`.
+Verbatim reports and the tracking table are in `reports/reviews/phase-0/` (`FINDINGS.md`).
+
+| Reviewer | Rounds | Findings | Outcome |
+|---|---|---|---|
+| Grok | 8 | G0-1..G0-20 | 18 fixed. G0-18: mechanism refuted (JSON keeps `And`), coverage gap fixed. G0-20: refuted with an executable IEEE 754 proof, refutation accepted. All confirmed by Grok |
+| Codex | 3 | C0-1..C0-4 | 4 fixed; Grok checked the fixes, Codex confirmed closure |
+
+The order was respected: Grok → fixes → Codex → fixes → Grok again (Codex fixes changed reviewed contracts) → Codex. No unresolved disagreements.
+
+CI evidence: GitHub Actions run 40642440205 on PR #3: all jobs passed, rustc 1.99.1 verified (`reports/reviews/phase-0/ci-evidence.txt`). The final state is re-verified on the PR.
 
 ### Blockers
 None for Phase 0.
