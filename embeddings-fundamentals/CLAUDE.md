@@ -45,7 +45,16 @@ The pipeline runs Corpus manifest → anonymization/eligibility gate → extract
 
 Invariants that span several modules and are easy to break:
 
-- **Strategy boundary.** Orchestration depends only on traits. Adapters receive **raw** text, and each adapter applies its own model prefix (E5 `query: `/`passage: `) exactly once via its `PrefixPolicy`. CLIP and OpenAI use no prefix. Extraction, chunking, and evaluation config never reach an adapter. The trait uses `async-trait` because it is used as `dyn`. A single feature-gated factory builds the adapters.
+- **Strategy boundary.** Orchestration depends only on traits. Adapters receive **raw** text, and each adapter applies its own model prefix (E5 `query: `/`passage: `) exactly once via its `PrefixPolicy`. CLIP and OpenAI use no prefix. Extraction, chunking, and evaluation config never reach an adapter. A single feature-gated factory builds the adapters.
+- **Trait dispatch (PLAN §2.2).** `#[async_trait]` is used **only** on `EmbeddingStrategy`, the one trait used as `Arc<dyn …>` (adapter chosen at runtime; combined mode holds two adapters). Every other async trait (`TextExtractor`, `OcrEngine`, `ImageExtractor`, `Sleeper`) uses native `async fn` in traits with generics, declared as `fn op(&self, ..) -> impl Future<Output = ..> + Send`. `RecordStore`, chunking, token counting, clocks, and probes are synchronous traits. The pipeline is generic over one `Components` bundle and calls blocking work (store I/O, inference, image re-encoding) through `spawn_blocking`.
+- **Rust conventions (PLAN §2.3, §5.4).** These are enforced by Cargo `[lints]` and `clippy.toml`:
+  - no `unwrap`/`expect`/`panic!` outside `#[test]` code. The harness-less BDD runner and its steps use `?` with `anyhow` context or `assert!` with messages;
+  - `unsafe_code` is denied, and `getrusage` goes through `nix`;
+  - ID newtypes and enums instead of strings, with `deny_unknown_fields` on configs;
+  - float ordering with `total_cmp` and the `RecordId` tie-break;
+  - `thiserror` in the library and `anyhow` only in `main`/`cli`;
+  - library code only emits `tracing` events, and only `main` installs a subscriber;
+  - a lint is silenced only with `#[expect(lint, reason = "...")]`, never `#[allow]`.
 - **Engine ≠ model.** The canonical engine ids are `embed_anything`, `fastembed`, and `openai`. The Gherkin display names map to these ids. Real-model runs must pin `model_revision`.
 - **Embedding-space identity.** `embedding_space_id` hashes engine, version, model, revision, dimensions, normalization, metric, prefix policy, and preprocessing. Equal dimensions never mean compatible spaces. A query against a mismatched space must fail before similarity search.
 - **Deterministic IDs.** All hashes are SHA-256 over canonical sorted-key JSON (NFC), never `Debug` output or plain concatenation. `revision_id` = checksum + extraction fingerprint + chunking fingerprint. `chunk_id` = `{source}-p{page}-{modality}-{index}`. `record_id` = hash(revision_id, chunk_id, space). Idempotent reingestion depends on these IDs.
