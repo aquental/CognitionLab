@@ -1,0 +1,3 @@
+G1-15 is still open until I see the whole-cell header check in the updated chunker. I am reading the rest of the phase diff before I close it or file anything new.The header check is whole-cell now. I am reading publish, the ingest state machine, and the adapter next, looking for a defect the earlier rounds did not already close.G1-15: CLOSED — a digit-free line inside an open table becomes a new header only when more than half of its cells are exact whole-cell column labels, and `data_rows_containing_label_words_are_not_headers` keeps Exame parasitológico, Método | Colorimétrico, and Imunidade as TableRows under the original header with and without a blank line.
+
+NO FINDINGS
