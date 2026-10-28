@@ -233,9 +233,36 @@ string_id!(
     /// Identifier of a chunk, unique within a source revision across modalities.
     ChunkId,
     "chunk",
-    is_slug,
-    "expected 1-128 ASCII letters, digits, '-', '_' or '.'"
+    is_chunk_id,
+    "expected {source_id}-p{page}-{text|image}-{index} with page >= 1 in canonical decimal"
 );
+
+/// Canonical decimal: digits only, no sign, no leading zero (except "0" itself).
+fn is_canonical_u32(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| b.is_ascii_digit())
+        && (s == "0" || !s.starts_with('0'))
+        && s.parse::<u32>().is_ok()
+}
+
+/// `{source_id}-p{page}-{modality}-{index}`, parsed from the right because source ids
+/// may themselves contain '-'.
+fn is_chunk_id(s: &str) -> bool {
+    let mut parts = s.rsplitn(4, '-');
+    let (Some(index), Some(modality), Some(page), Some(source)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let page_ok = page
+        .strip_prefix('p')
+        .is_some_and(|n| is_canonical_u32(n) && n != "0");
+    s.len() <= 128
+        && is_slug(source)
+        && page_ok
+        && matches!(modality, "text" | "image")
+        && is_canonical_u32(index)
+}
 
 impl Checksum {
     /// Computes the checksum of `bytes`.
@@ -425,6 +452,39 @@ mod tests {
             id,
             RecordId::derive(&rev_a, &chunk, &space_b).expect("record")
         );
+    }
+
+    #[test]
+    fn chunk_ids_must_follow_the_structured_format() {
+        for bad in [
+            "bogus",
+            "src-001-p0-text-3",
+            "src-001-p2-audio-3",
+            "src-001-p02-text-3",
+            "src-001-p2-text-03",
+            "-p2-text-3",
+            "src-001-p2-text-",
+        ] {
+            assert!(bad.parse::<ChunkId>().is_err(), "{bad} must be rejected");
+            assert!(
+                serde_json::from_str::<ChunkId>(&format!("\"{bad}\"")).is_err(),
+                "{bad} via serde"
+            );
+        }
+        let source: SourceId = "lab-searchable-001".parse().expect("source");
+        for (page, modality, index) in [(1, Modality::Text, 0), (12, Modality::Image, 7)] {
+            let built = ChunkId::new(
+                &source,
+                NonZeroU32::new(page).expect("page"),
+                modality,
+                index,
+            )
+            .expect("chunk");
+            assert_eq!(
+                built.as_str().parse::<ChunkId>().expect("round trip"),
+                built
+            );
+        }
     }
 
     #[test]

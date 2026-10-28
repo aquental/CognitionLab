@@ -327,6 +327,7 @@ impl DeterministicEmbedder {
             InputKind::Query => Capability::TextQueries,
         };
         self.capabilities.require(capability, &self.info)?;
+        self.capabilities.check_batch(raw.len())?;
         if let Some(error) = self.scripted_failure() {
             return Err(error);
         }
@@ -399,6 +400,7 @@ impl EmbeddingStrategy for DeterministicEmbedder {
             .collect();
         self.record(Method::Images, keys.clone(), Vec::new());
         self.capabilities.require(Capability::Images, &self.info)?;
+        self.capabilities.check_batch(assets.len())?;
         if let Some(error) = self.scripted_failure() {
             return Err(error);
         }
@@ -572,6 +574,56 @@ mod tests {
             .await
             .expect("embed");
         approx::assert_relative_eq!(batch.embeddings[0].vector[0], 0.6, epsilon = 1e-6);
+    }
+
+    #[tokio::test]
+    async fn batch_limits_are_enforced_for_text_and_images() {
+        let inputs = |n: usize| -> Vec<TextInput> {
+            (0..n).map(|i| input(&format!("i{i}"), "texto")).collect()
+        };
+        let mut caps = DeterministicEmbedder::builder()
+            .build()
+            .expect("build")
+            .capabilities;
+        caps.max_batch = NonZeroUsize::new(2);
+        caps.images = true;
+        let limited = DeterministicEmbedder::builder()
+            .capabilities(caps.clone())
+            .build()
+            .expect("b");
+        assert!(
+            limited.embed_documents(&inputs(2)).await.is_ok(),
+            "boundary is accepted"
+        );
+        let err = limited
+            .embed_queries(&inputs(3))
+            .await
+            .expect_err("above max_batch");
+        assert!(matches!(
+            err,
+            EmbeddingError::BatchTooLarge { size: 3, max: 2 }
+        ));
+        assert_eq!(err.class(), ErrorClass::Permanent);
+        let assets: Vec<AssetRef> = (0..3)
+            .map(|i| AssetRef {
+                id: format!("a{i}").parse().expect("id"),
+                path: format!("{i}.png").into(),
+            })
+            .collect();
+        assert!(matches!(
+            limited.embed_images(&assets).await,
+            Err(EmbeddingError::BatchTooLarge { size: 3, max: 2 })
+        ));
+        caps.batch = false;
+        let single = DeterministicEmbedder::builder()
+            .capabilities(caps)
+            .build()
+            .expect("b");
+        assert!(single.embed_documents(&inputs(1)).await.is_ok());
+        assert!(matches!(
+            single.embed_documents(&inputs(2)).await,
+            Err(EmbeddingError::BatchTooLarge { size: 2, max: 1 })
+        ));
     }
 
     #[test]
