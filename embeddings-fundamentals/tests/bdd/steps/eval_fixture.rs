@@ -44,9 +44,20 @@ struct Keyword {
 
 /// Deterministic builder with the keyword axes of `tests/fixtures/evaluation`.
 pub fn keyword_builder() -> Result<DeterministicBuilder> {
-    let text = std::fs::read_to_string(fixture("evaluation/keywords.toml"))
-        .context("read keywords.toml")?;
-    let file: KeywordFile = toml::from_str(&text).context("parse keywords.toml")?;
+    keyword_builder_from("evaluation/keywords.toml")
+}
+
+/// Cross-modal deterministic builder with the image keyword axes of
+/// `tests/fixtures/evaluation/image-keywords.toml`, in its own embedding space.
+pub fn image_keyword_builder() -> Result<DeterministicBuilder> {
+    Ok(keyword_builder_from("evaluation/image-keywords.toml")?
+        .model_id("deterministic-image-v1")
+        .text_to_image())
+}
+
+fn keyword_builder_from(rel: &str) -> Result<DeterministicBuilder> {
+    let text = std::fs::read_to_string(fixture(rel)).with_context(|| format!("read {rel}"))?;
+    let file: KeywordFile = toml::from_str(&text).with_context(|| format!("parse {rel}"))?;
     let mut builder =
         embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder::builder()
             .dimensions(NonZeroUsize::new(file.dimensions).context("dimensions")?);
@@ -62,6 +73,18 @@ pub fn dataset(labels: &str) -> Result<Dataset> {
         &repo("config/evaluation/queries-v1.toml"),
         &repo(labels),
     )?)
+}
+
+/// Sources holding the three synthetic images: two image files and the mixed PDF.
+pub const IMAGE_FIXTURES: [&str; 3] = ["chest-001", "abd-us-001", "us-mixed-003"];
+
+/// Adds the image-bearing fixtures with replayed extraction.
+pub fn add_image_corpus(world: &mut LabWorld) -> Result<()> {
+    world.use_captured_extraction()?;
+    for id in IMAGE_FIXTURES {
+        world.add_fixture_source(id, None)?;
+    }
+    Ok(())
 }
 
 /// Adds the three synthetic PDFs with replayed extraction.

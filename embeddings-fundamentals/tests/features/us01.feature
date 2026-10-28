@@ -19,6 +19,13 @@ Feature: Ingest medical inputs through one pipeline
       | searchable PDF |
       | scanned PDF    |
 
+    @m3
+    Examples: Inputs that produce image records
+      | type           |
+      | mixed PDF      |
+      | PNG            |
+      | JPEG           |
+
   @m1
   Scenario: Preserve a laboratory result through extraction and chunking
     Given a scanned laboratory page containing the row "Hemoglobina | 13,5 | g/dL | 12,0–16,0"

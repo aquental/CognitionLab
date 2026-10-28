@@ -4,6 +4,11 @@
 //! query embedding or similarity computation. Scores are dot products of L2-normalized
 //! vectors (cosine), accumulated in `f64`. Results are ordered by descending score
 //! (`total_cmp`), with equal scores broken by ascending `record_id`.
+//!
+//! Text search ranks the text records of a space; image search ranks its image
+//! records. Both embed the query through the model's text-query path
+//! (`embed_queries`); image search additionally requires a model whose text queries
+//! and images share one compatible space.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -11,7 +16,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Modality;
-use crate::embedding::{EmbeddingError, EmbeddingStrategy, TextInput, validate_batch};
+use crate::embedding::{Capability, EmbeddingError, EmbeddingStrategy, TextInput, validate_batch};
 use crate::ids::{ChunkId, EmbeddingSpaceId, ItemId, RecordId, RevisionId, SourceId};
 use crate::storage::{ExperimentSnapshot, FsRecordStore, StoreError};
 
@@ -47,6 +52,9 @@ pub struct SearchHit {
     pub chunk_text: Option<String>,
     /// Asset reference (image records).
     pub asset_uri: Option<String>,
+    /// Reference to the original image (image records, see
+    /// [`crate::record::OriginalAsset::reference`]).
+    pub original: Option<String>,
     /// Cosine similarity.
     pub score: f32,
 }
@@ -189,13 +197,19 @@ fn rank(
                 modality: r.modality,
                 chunk_text: r.chunk_text,
                 asset_uri: r.asset_uri,
+                original: r
+                    .metadata
+                    .original_asset
+                    .as_ref()
+                    .map(crate::record::OriginalAsset::reference),
                 score,
             }
         })
         .collect())
 }
 
-/// Searches `index_space` with a text query embedded by `embedder`.
+/// Searches the text records of `index_space` with a text query embedded by
+/// `embedder`.
 ///
 /// # Errors
 ///
@@ -210,8 +224,61 @@ pub async fn search_text(
     limit: usize,
     scope: Scope<'_>,
 ) -> Result<Vec<SearchHit>, SearchError> {
+    search(
+        store,
+        index_space,
+        embedder,
+        query,
+        limit,
+        scope,
+        Modality::Text,
+    )
+    .await
+}
+
+/// Searches the image records of `index_space` with a text query embedded through
+/// the model's text-query path.
+///
+/// # Errors
+///
+/// Returns [`SearchError::Embedding`] with [`EmbeddingError::Unsupported`] before any
+/// store read when the model has no compatible text-to-image space, and otherwise the
+/// errors of [`search_text`].
+pub async fn search_images(
+    store: &Arc<FsRecordStore>,
+    index_space: &EmbeddingSpaceId,
+    embedder: &dyn EmbeddingStrategy,
+    query: &str,
+    limit: usize,
+    scope: Scope<'_>,
+) -> Result<Vec<SearchHit>, SearchError> {
+    embedder
+        .capabilities()
+        .require(Capability::TextToImage, embedder.model_info())?;
+    search(
+        store,
+        index_space,
+        embedder,
+        query,
+        limit,
+        scope,
+        Modality::Image,
+    )
+    .await
+}
+
+async fn search(
+    store: &Arc<FsRecordStore>,
+    index_space: &EmbeddingSpaceId,
+    embedder: &dyn EmbeddingStrategy,
+    query: &str,
+    limit: usize,
+    scope: Scope<'_>,
+    modality: Modality,
+) -> Result<Vec<SearchHit>, SearchError> {
     guard_space(index_space, &embedder.model_info().embedding_space_id)?;
-    let records = read_records(store, index_space, scope).await?;
+    let mut records = read_records(store, index_space, scope).await?;
+    records.retain(|r| r.modality == modality);
     if records.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
