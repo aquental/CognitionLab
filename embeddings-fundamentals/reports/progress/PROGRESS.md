@@ -129,7 +129,9 @@ None for Phase 0.
 
 ## Phase 2 — Milestone 2: Engine comparison (`@m2`)
 
-**Status:** implemented and validated locally; published as a draft PR on branch `phase-2/engine-comparison` (stacked on `phase-1/text-baseline`). **Adversarial reviews have not started** (Grok, then Codex; Codex may be skipped only on a usage-quota error, per the owner waiver). Phase 2 is not approved. Work stopped here at the owner's request (2026-10-28); see `handoff.md`.
+**Status:** implemented; merged to `main` as PR #5 at the owner's explicit request (2026-10-28, "pare e mescle os PRs"), **before** its adversarial reviews. Phase 2 is **not approved yet**. Review fixes go on branch `phase-2/review-fixes` (from `main` @ `44cf64a`); the review diff base is `3cdb355` (merge of PR #4, end of Phase 1).
+
+**Intermittent `WriterBusy` — fixed (commit `ff4fde9`).** Cause confirmed by reproduction: `flock` belongs to the open file description, so a child spawned concurrently by any thread holds a copy of `.writer.lock` until its `exec` and keeps the lock alive after the writer drops it. A stress loop reproduced it (26 of 4000 opens). Fix: a POSIX record lock (`fcntl F_SETLK`, per-process, never inherited) plus an in-process registry of held roots, claimed before the lock file is opened (record locks do not exclude writers within one process, and closing any descriptor of the file would drop the lock). Regression tests: `writer_lock_is_released_on_drop_while_children_are_spawned` (time-based, 4 spawner threads; against the `main` code it fails 5/5 with 318–426 `WriterBusy`, against the fix it passes 5/5) and `writer_lock_excludes_another_process` (a re-executed lock-holder child; the parent must get `WriterBusy`). Full unit suite: 0 failures in 15 consecutive runs (previously about 1 in 10).
 
 ### Decisions and PLAN changes, with justification
 | Change | Justification |
@@ -172,7 +174,7 @@ None for Phase 0.
 `trait-object-safety` (only `EmbeddingStrategy` is dyn; the `MeasuredEmbedder` decorator implements it), `trait-dyn-vs-generic` (`LocalTextAdapter<B>` static over the backend), `async-spawn-blocking` (inference, downloads, store reads), `async-async-fn-bounds` (`experiment::run` takes `impl AsyncFn`), `num-float-compare`, `num-cast-try-from`, `serde-deny-unknown-fields`, `type-newtype-ids` (`QueryId`), `err-thiserror-lib`, `api-must-use`. Lint suppressions use `#[expect(..., reason)]`.
 
 ### Outstanding (not claimed)
-- Intermittent `WriterBusy` on store reopen (see Validation): investigate and fix first.
+- ~~Intermittent `WriterBusy` on store reopen~~: fixed, see the status paragraph above.
 - Grok and Codex reviews of Phase 2 (not started).
 - OpenAI live integration: no `OPENAI_API_KEY` and no owner authorization for remote processing.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
