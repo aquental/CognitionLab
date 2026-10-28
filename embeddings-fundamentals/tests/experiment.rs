@@ -98,6 +98,7 @@ async fn run_experiment(
         Tools {
             text: &extractor,
             ocr: &extractor,
+            images: &extractor,
             sleeper: &NoSleep,
         },
         &store,

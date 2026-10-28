@@ -198,6 +198,16 @@ impl DeterministicBuilder {
         self
     }
 
+    /// Advertises a cross-modal text-to-image model (like CLIP): images and text
+    /// queries in one compatible space, no document text.
+    pub fn text_to_image(mut self) -> Self {
+        self.capabilities.text_documents = false;
+        self.capabilities.text_queries = true;
+        self.capabilities.images = true;
+        self.capabilities.text_to_image_compatible = true;
+        self
+    }
+
     /// Replaces the advertised capabilities.
     pub fn capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = capabilities;
@@ -211,7 +221,7 @@ impl DeterministicBuilder {
         self
     }
 
-    /// Returns `vector` (normalized) for inputs whose submitted text, or asset path,
+    /// Returns `vector` (normalized) for inputs whose submitted text, or image item id,
     /// equals `key`. Used to freeze rankings in fixtures.
     pub fn with_vector(mut self, key: impl Into<String>, vector: Vec<f32>) -> Self {
         self.overrides.insert(key.into(), vector);
@@ -581,10 +591,9 @@ impl EmbeddingStrategy for DeterministicEmbedder {
 
     async fn embed_images(&self, assets: &[AssetRef]) -> Result<EmbeddingBatch, EmbeddingError> {
         self.do_work(assets.len());
-        let keys: Vec<String> = assets
-            .iter()
-            .map(|a| a.path.display().to_string())
-            .collect();
+        // Keyed by item id (`<source>-p<page>-image-<n>`), not by path: stored assets
+        // are content-addressed, so their paths carry no fixture meaning.
+        let keys: Vec<String> = assets.iter().map(|a| a.id.as_str().to_owned()).collect();
         let ids: Vec<ItemId> = assets.iter().map(|a| a.id.clone()).collect();
         self.record(Method::Images, ids.clone(), keys.clone(), Vec::new());
         self.capabilities.require(Capability::Images, &self.info)?;

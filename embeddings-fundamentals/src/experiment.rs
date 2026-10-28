@@ -25,6 +25,7 @@ use crate::cost::{Billed, PriceTable, estimate};
 use crate::domain::{Execution, RunStatus, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
 use crate::evaluation::{Dataset, EvalError, check_text_labels, evaluate_text};
+use crate::extraction::images::ImageExtractor;
 use crate::extraction::{OcrEngine, TextExtractor};
 use crate::fidelity::{self, LoadedSample};
 use crate::measurement::{
@@ -71,11 +72,13 @@ pub struct Instruments<C, M> {
 
 /// Extraction tools and retry sleeper of the run.
 #[derive(Debug, Clone, Copy)]
-pub struct Tools<'a, T, O, S> {
+pub struct Tools<'a, T, O, I, S> {
     /// Text-layer extractor.
     pub text: &'a T,
     /// OCR engine.
     pub ocr: &'a O,
+    /// Embedded-image extractor.
+    pub images: &'a I,
     /// Retry sleeper.
     pub sleeper: &'a S,
 }
@@ -122,8 +125,8 @@ pub enum ExperimentError {
 /// (labels that cannot apply, query adapter, evaluation, latency), the evaluation
 /// cannot run and [`ExperimentError::EvaluationNotRun`] carries the ingestion outcome
 /// instead.
-pub async fn run<T, O, S, C, M>(
-    tools: Tools<'_, T, O, S>,
+pub async fn run<T, O, I, S, C, M>(
+    tools: Tools<'_, T, O, I, S>,
     store: &Arc<FsRecordStore>,
     build: impl AsyncFn() -> Result<Arc<dyn EmbeddingStrategy>, BuildError>,
     instruments: &Instruments<C, M>,
@@ -132,6 +135,7 @@ pub async fn run<T, O, S, C, M>(
 where
     T: TextExtractor,
     O: OcrEngine,
+    I: ImageExtractor,
     S: Sleeper,
     C: Clock + 'static,
     M: MemoryProbe,
@@ -154,6 +158,7 @@ where
     let pipeline = Pipeline {
         text: tools.text,
         ocr: tools.ocr,
+        images: tools.images,
         sleeper: tools.sleeper,
         store: Arc::clone(store),
         embedder: Arc::clone(&measured) as Arc<dyn EmbeddingStrategy>,

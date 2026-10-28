@@ -34,6 +34,24 @@ pub enum ChunkKind {
     Paragraph,
     /// One laboratory table row with its section and header.
     TableRow,
+    /// One image (image records; never produced by the text chunker).
+    Image,
+}
+
+/// The kinds of unit the text chunker produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextKind {
+    Paragraph,
+    TableRow,
+}
+
+impl From<TextKind> for ChunkKind {
+    fn from(kind: TextKind) -> Self {
+        match kind {
+            TextKind::Paragraph => Self::Paragraph,
+            TextKind::TableRow => Self::TableRow,
+        }
+    }
 }
 
 /// A recorded truncation, in model tokens.
@@ -115,7 +133,7 @@ pub enum ChunkError {
 
 /// A chunk before page-level numbering.
 struct Piece {
-    kind: ChunkKind,
+    kind: TextKind,
     section: Option<String>,
     text: String,
     bbox: Option<BoundingBox>,
@@ -212,7 +230,7 @@ fn classify(line: &str) -> LineKind {
 }
 
 struct Unit {
-    kind: ChunkKind,
+    kind: TextKind,
     section: Option<String>,
     lines: Vec<String>,
     bbox: Option<BoundingBox>,
@@ -350,7 +368,7 @@ impl StructureAwareV1 {
                            units: &mut Vec<Unit>| {
             if let (false, Some(heading)) = (used, section) {
                 units.push(Unit {
-                    kind: ChunkKind::Paragraph,
+                    kind: TextKind::Paragraph,
                     section: previous.clone(),
                     lines: vec![heading.clone()],
                     bbox: None,
@@ -405,7 +423,7 @@ impl StructureAwareV1 {
                         .chain(std::iter::once(text.to_owned()))
                         .collect();
                     units.push(Unit {
-                        kind: ChunkKind::TableRow,
+                        kind: TextKind::TableRow,
                         section: section.clone(),
                         lines,
                         bbox: line.bounding_box.clone(),
@@ -415,7 +433,7 @@ impl StructureAwareV1 {
                     heading_used = true;
                     header = None;
                     let unit = paragraph.get_or_insert_with(|| Unit {
-                        kind: ChunkKind::Paragraph,
+                        kind: TextKind::Paragraph,
                         section: section.clone(),
                         lines: Vec::new(),
                         bbox: None,
@@ -450,7 +468,7 @@ impl StructureAwareV1 {
             let tokens = counter.count(&full);
             match budget {
                 Some(limit) if tokens > limit => match unit.kind {
-                    ChunkKind::Paragraph => {
+                    TextKind::Paragraph => {
                         for piece in
                             split_paragraph(unit.section.as_deref(), &unit.lines, limit, counter)
                         {
@@ -485,7 +503,7 @@ impl StructureAwareV1 {
                             });
                         }
                     }
-                    ChunkKind::TableRow if self.config.truncation_enabled => {
+                    TextKind::TableRow if self.config.truncation_enabled => {
                         let cut = truncate_to_budget(&full, limit, counter);
                         let truncation = Truncation {
                             original_tokens: tokens,
@@ -499,7 +517,7 @@ impl StructureAwareV1 {
                             truncation: Some(truncation),
                         });
                     }
-                    ChunkKind::TableRow => {
+                    TextKind::TableRow => {
                         return Err(ChunkError::InputTooLong {
                             page: page.page,
                             tokens,
@@ -521,7 +539,7 @@ impl StructureAwareV1 {
             chunks.push(Chunk {
                 page: page.page,
                 index: u32::try_from(index).unwrap_or(u32::MAX),
-                kind: piece.kind,
+                kind: piece.kind.into(),
                 section: piece.section,
                 text: piece.text,
                 bounding_box: piece.bbox,

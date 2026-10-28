@@ -19,7 +19,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::domain::ExtractionMethod;
 use crate::extraction::PageText;
 use crate::ids::{Checksum, SourceId};
 
@@ -235,12 +234,7 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
                 .iter()
                 .find(|p| p.source_id == row.source_id && p.page.page.get() == row.page)
                 .map(|p| &p.page);
-            let method = page
-                .map_or("missing", |p| match p.method {
-                    ExtractionMethod::Native => "native",
-                    ExtractionMethod::Ocr => "ocr",
-                })
-                .to_owned();
+            let method = page.map_or("missing", |p| p.method.as_str()).to_owned();
             let lines = page
                 .map(|p| p.lines.as_slice())
                 .unwrap_or_default()
@@ -373,6 +367,7 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ExtractionMethod;
 
     #[test]
     fn cells_are_normalized_and_rows_found_by_value_when_the_name_is_wrong() {

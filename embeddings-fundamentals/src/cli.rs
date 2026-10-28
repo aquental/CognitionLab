@@ -16,7 +16,7 @@ use crate::adapters;
 use crate::anonymization;
 use crate::config::ExperimentConfig;
 use crate::corpus::LoadedManifest;
-use crate::extraction::poppler::{PopplerTextExtractor, TesseractOcr};
+use crate::extraction::poppler::{PopplerImageExtractor, PopplerTextExtractor, TesseractOcr};
 use crate::ids::{EmbeddingSpaceId, ExperimentId};
 use crate::pipeline::{Pipeline, TokioSleeper, ValidationError, check_remote_permission};
 use crate::retrieval::{Scope, search_text};
@@ -363,9 +363,11 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
     let store = open_writer(&args.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
+    let images = PopplerImageExtractor::detect().await;
     let pipeline = Pipeline {
         text: &text,
         ocr: &ocr,
+        images: &images,
         sleeper: &TokioSleeper,
         store,
         embedder,
@@ -509,6 +511,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let store = open_writer(&args.ingest.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
+    let images = PopplerImageExtractor::detect().await;
     let settings = config.ingest_settings(args.ingest.experiment.clone());
     let instruments = Instruments {
         clock: Arc::new(crate::measurement::SystemClock::new()),
@@ -519,6 +522,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
         Tools {
             text: &text,
             ocr: &ocr,
+            images: &images,
             sleeper: &TokioSleeper,
         },
         &store,

@@ -142,6 +142,7 @@ pub async fn measured_run(
         Tools {
             text: &*world.extractor,
             ocr: &*world.extractor,
+            images: &*world.extractor,
             sleeper: &NoSleep,
         },
         &world.store,

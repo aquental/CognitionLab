@@ -78,6 +78,8 @@ pub struct LabWorld {
     pub engine_config: Option<embeddings_fundamentals::config::EngineConfig>,
     /// Additional adapters of multi-model scenarios.
     pub other_embedders: Vec<Arc<DeterministicEmbedder>>,
+    /// Cross-modal adapter of image runs (its own embedding space), when a step sets one.
+    pub image_embedder: Option<Arc<DeterministicEmbedder>>,
 }
 
 impl LabWorld {
@@ -104,6 +106,7 @@ impl LabWorld {
             comparison: None,
             engine_config: None,
             other_embedders: Vec::new(),
+            image_embedder: None,
         })
     }
 
@@ -155,15 +158,36 @@ impl LabWorld {
 
     /// Runs ingestion through the real pipeline with a fresh experiment id.
     pub async fn ingest(&mut self) -> Result<()> {
-        let manifest = self.manifest()?;
+        let embedder = self.embedder.clone();
+        let settings = self.settings.clone();
+        self.ingest_with(embedder, settings).await
+    }
+
+    /// Runs an image run with the cross-modal adapter set by a step.
+    pub async fn ingest_images(&mut self) -> Result<()> {
+        let embedder = self
+            .image_embedder
+            .clone()
+            .context("no cross-modal adapter is configured")?;
         let mut settings = self.settings.clone();
+        settings.modality = embeddings_fundamentals::domain::Modality::Image;
+        self.ingest_with(embedder, settings).await
+    }
+
+    async fn ingest_with(
+        &mut self,
+        embedder: Arc<DeterministicEmbedder>,
+        mut settings: IngestSettings,
+    ) -> Result<()> {
+        let manifest = self.manifest()?;
         settings.experiment_id = ExperimentId::try_from(format!("exp-{}", self.runs.len() + 1))?;
         let pipeline = Pipeline {
             text: &*self.extractor,
             ocr: &*self.extractor,
+            images: &*self.extractor,
             sleeper: &NoSleep,
             store: Arc::clone(&self.store),
-            embedder: self.embedder.clone(),
+            embedder,
         };
         match pipeline.ingest(&manifest, &settings).await {
             Ok(report) => {
@@ -183,11 +207,16 @@ impl LabWorld {
         self.runs.last().context("no run has completed")
     }
 
-    /// Active records in the adapter's embedding space.
+    /// Active records in the adapter's embedding space, plus those of the cross-modal
+    /// adapter's space when a step configured one.
     pub fn active_records(&self) -> Result<Vec<Record>> {
-        Ok(self
+        let mut records = self
             .store
-            .active_records(&self.embedder.model_info_space())?)
+            .active_records(&self.embedder.model_info_space())?;
+        if let Some(images) = &self.image_embedder {
+            records.extend(self.store.active_records(&images.model_info_space())?);
+        }
+        Ok(records)
     }
 }
 

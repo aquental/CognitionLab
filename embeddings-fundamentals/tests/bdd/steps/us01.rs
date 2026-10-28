@@ -34,13 +34,35 @@ fn eligible_fixture(world: &mut LabWorld, input_type: String) -> Result<()> {
 
 #[given("a compatible deterministic embedding adapter")]
 fn compatible_adapter(world: &mut LabWorld) -> Result<()> {
+    // One modality per run (PLAN §0.1): a text adapter for text records, and a
+    // cross-modal adapter in its own space for image records.
     world.embedder = std::sync::Arc::new(DeterministicEmbedder::builder().build()?);
+    world.image_embedder = Some(std::sync::Arc::new(
+        DeterministicEmbedder::builder()
+            .model_id("deterministic-image-v1")
+            .text_to_image()
+            .build()?,
+    ));
     Ok(())
 }
 
 #[when("I ingest the fixture")]
 async fn ingest_fixture(world: &mut LabWorld) -> Result<()> {
-    world.ingest().await
+    // A text run and an image run over the same manifest; each source is applicable to
+    // at least one of them.
+    world
+        .notes
+        .insert("runs_before".into(), world.runs.len().to_string());
+    world.ingest().await?;
+    if world.image_embedder.is_some() {
+        ensure!(
+            world.validation_error.is_none(),
+            "the text run was refused: {:?}",
+            world.validation_error
+        );
+        world.ingest_images().await?;
+    }
+    Ok(())
 }
 
 #[when("I ingest the page")]
@@ -61,17 +83,41 @@ async fn ingest_source(world: &mut LabWorld) -> Result<()> {
 #[then(expr = "the source status is {string}")]
 fn source_status(world: &mut LabWorld, status: String) -> Result<()> {
     let id = current_source(world)?;
-    let report = world
-        .last_run()?
-        .source(&id)
-        .context("source missing from report")?;
+    world.last_run()?;
+    // Every run of the last ingestion that the source applies to must report `status`;
+    // a run the source does not apply to (an image file in a text run) reports
+    // `not_applicable` and is not counted.
+    let first = world
+        .notes
+        .get("runs_before")
+        .map(|n| n.parse::<usize>())
+        .transpose()?
+        .unwrap_or(world.runs.len().saturating_sub(1));
+    let reports: Vec<_> = world
+        .runs
+        .get(first..)
+        .unwrap_or_default()
+        .iter()
+        .map(|run| run.source(&id).context("source missing from report"))
+        .collect::<Result<_>>()?;
+    let applicable: Vec<_> = reports
+        .iter()
+        .filter(|r| r.status != SourceStatus::NotApplicable)
+        .collect();
     ensure!(
-        report.status.as_str() == status,
-        "expected status {status}, observed {} (stage {:?}, reason {:?})",
-        report.status.as_str(),
-        report.stage,
-        report.reason
+        !applicable.is_empty(),
+        "no run applied to {id}: {:?}",
+        reports.iter().map(|r| &r.reason).collect::<Vec<_>>()
     );
+    for report in applicable {
+        ensure!(
+            report.status.as_str() == status,
+            "expected status {status}, observed {} (stage {:?}, reason {:?})",
+            report.status.as_str(),
+            report.stage,
+            report.reason
+        );
+    }
     Ok(())
 }
 
@@ -92,7 +138,7 @@ fn records_match_expected(world: &mut LabWorld) -> Result<()> {
         per_page == expected_pages,
         "text records per page: expected {expected_pages:?}, observed {per_page:?}"
     );
-    for r in &records {
+    for r in records.iter().filter(|r| r.modality == Modality::Text) {
         let index = usize::try_from(r.metadata.page_number)? - 1;
         let method = expected
             .pages
@@ -105,12 +151,30 @@ fn records_match_expected(world: &mut LabWorld) -> Result<()> {
             r.metadata.extraction_method.as_str()
         );
     }
-    let images = records
+    let mut image_pages: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for r in records.iter().filter(|r| r.modality == Modality::Image) {
+        *image_pages.entry(r.metadata.page_number).or_insert(0) += 1;
+        let method = if expected.pages.is_empty() {
+            ExtractionMethod::ImageFile
+        } else {
+            ExtractionMethod::EmbeddedImage
+        };
+        ensure!(
+            r.metadata.extraction_method == method,
+            "image record {} uses {:?}, expected {method:?}",
+            r.chunk_id,
+            r.metadata.extraction_method
+        );
+    }
+    let expected_images: std::collections::BTreeMap<u32, usize> = expected
+        .image_records
         .iter()
-        .filter(|r| r.modality == Modality::Image)
-        .count();
-    // Text runs never produce image records; image records are covered from milestone 3.
-    ensure!(images == 0, "a text run produced {images} image records");
+        .map(|i| (i.page, i.count))
+        .collect();
+    ensure!(
+        image_pages == expected_images,
+        "image records per page: expected {expected_images:?}, observed {image_pages:?}"
+    );
     Ok(())
 }
 

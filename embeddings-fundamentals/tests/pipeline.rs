@@ -3,9 +3,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use embeddings_fundamentals::anonymization::image_findings;
 use embeddings_fundamentals::corpus::LoadedManifest;
-use embeddings_fundamentals::domain::SourceStatus;
+use embeddings_fundamentals::domain::{ExtractionMethod, Modality, SourceStatus};
+use embeddings_fundamentals::embedding::EmbeddingStrategy;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
+use embeddings_fundamentals::embedding::deterministic::Method;
 use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
 use embeddings_fundamentals::storage::FsRecordStore;
@@ -29,6 +32,7 @@ async fn unchanged_reingestion_skips_extraction_and_embedding() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -82,6 +86,7 @@ async fn reusing_an_experiment_id_is_refused_before_processing() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store,
         embedder: embedder.clone(),
@@ -116,6 +121,7 @@ async fn unchanged_sources_are_recognised_before_extraction() {
     let first = Pipeline {
         text: &good,
         ocr: &good,
+        images: &good,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -135,6 +141,7 @@ async fn unchanged_sources_are_recognised_before_extraction() {
     let second = Pipeline {
         text: &broken,
         ocr: &broken,
+        images: &broken,
         sleeper: &NoSleep,
         store,
         embedder: embedder.clone(),
@@ -181,6 +188,7 @@ async fn an_unreadable_experiment_file_is_refused_before_processing() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -225,6 +233,7 @@ async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -302,6 +311,7 @@ async fn ineligible_sources_refuse_the_run_before_any_processing() {
         let pipeline = Pipeline {
             text: &extractor,
             ocr: &extractor,
+            images: &extractor,
             sleeper: &NoSleep,
             store: Arc::clone(&store),
             embedder: embedder.clone(),
@@ -349,6 +359,7 @@ async fn search_refuses_a_damaged_revision_in_both_scopes() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -403,6 +414,7 @@ async fn search_vector_refuses_non_finite_query_vectors_before_scoring() {
     let pipeline = Pipeline {
         text: &extractor,
         ocr: &extractor,
+        images: &extractor,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder: embedder.clone(),
@@ -432,4 +444,123 @@ async fn search_vector_refuses_non_finite_query_vectors_before_scoring() {
             "{bad}: {outcome:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_image_run_embeds_image_files_and_qualifying_pdf_images() {
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(
+        DeterministicEmbedder::builder()
+            .model_id("deterministic-image-v1")
+            .text_to_image()
+            .build()
+            .expect("adapter"),
+    );
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder: embedder.clone(),
+    };
+    let mut settings = IngestSettings::new("images-1".parse().expect("id"));
+    settings.modality = Modality::Image;
+    let report = pipeline.ingest(&manifest, &settings).await.expect("run");
+    let status = |id: &str| {
+        report
+            .source(&id.parse().expect("id"))
+            .map(|s| s.status)
+            .expect("source")
+    };
+    // The searchable report has no images; the scanned report's rasters are its OCR
+    // sources; the mixed PDF keeps its page-1 ultrasound, not the logo or the page-2 scan.
+    assert_eq!(status("lab-searchable-001"), SourceStatus::NotApplicable);
+    assert_eq!(status("lab-scanned-002"), SourceStatus::NotApplicable);
+    for id in ["us-mixed-003", "chest-001", "abd-us-001"] {
+        assert_eq!(status(id), SourceStatus::Succeeded, "{id}: {report:?}");
+    }
+    let mut records = store
+        .active_records(&embedder.model_info().embedding_space_id)
+        .expect("records");
+    records.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
+    let ids: Vec<&str> = records.iter().map(|r| r.chunk_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "abd-us-001-p1-image-0",
+            "chest-001-p1-image-0",
+            "us-mixed-003-p1-image-0"
+        ]
+    );
+    for record in &records {
+        assert_eq!(record.modality, Modality::Image);
+        assert_eq!(record.chunk_text, None);
+        let uri = record.asset_uri.as_deref().expect("asset uri");
+        let path = store.asset_path(uri).expect("path");
+        store.read_asset(uri).expect("intact asset");
+        assert_eq!(image_findings(&path), vec![], "{uri} carries metadata");
+        let original = record.metadata.original_asset.as_ref().expect("original");
+        let expected = if record.source_id.as_str() == "us-mixed-003" {
+            (ExtractionMethod::EmbeddedImage, Some(0), (256, 192))
+        } else {
+            (
+                ExtractionMethod::ImageFile,
+                None,
+                (original.width, original.height),
+            )
+        };
+        assert_eq!(
+            (
+                record.metadata.extraction_method,
+                original.pdf_image_num,
+                (original.width, original.height)
+            ),
+            expected
+        );
+    }
+    let calls = embedder.calls();
+    assert!(
+        calls.iter().all(|c| c.method == Method::Images),
+        "{calls:?}"
+    );
+    // Unchanged reingestion re-embeds nothing.
+    let before = embedder.calls().len();
+    settings.experiment_id = "images-2".parse().expect("id");
+    let again = pipeline.ingest(&manifest, &settings).await.expect("run");
+    assert!(
+        again
+            .sources
+            .iter()
+            .filter(|s| s.status == SourceStatus::Succeeded)
+            .all(|s| s.unchanged)
+    );
+    assert_eq!(embedder.calls().len(), before);
+}
+
+#[tokio::test]
+async fn an_image_run_needs_a_cross_modal_adapter() {
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let text_only = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store,
+        embedder: text_only.clone(),
+    };
+    let mut settings = IngestSettings::new("images-refused".parse().expect("id"));
+    settings.modality = Modality::Image;
+    assert!(pipeline.ingest(&manifest, &settings).await.is_err());
+    assert!(text_only.calls().is_empty());
+    assert_eq!(extractor.extraction_calls(), 0);
 }

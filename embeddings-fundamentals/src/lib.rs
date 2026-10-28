@@ -6,6 +6,7 @@
 
 pub mod adapters;
 pub mod anonymization;
+pub mod assets;
 pub mod chunking;
 pub mod cli;
 pub mod config;
