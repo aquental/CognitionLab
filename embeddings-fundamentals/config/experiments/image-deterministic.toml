@@ -1,0 +1,12 @@
+# Deterministic cross-modal stand-in: exercises an image run end to end without a model
+# download. It measures nothing about retrieval quality.
+
+[engine]
+engine = "deterministic"
+model_kind = "text_to_image"
+model_id = "deterministic-v1"
+dimensions = 8
+max_input_tokens = 512
+
+[ingest]
+modality = "image"

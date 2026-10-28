@@ -1,0 +1,678 @@
+{
+  "hardware": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu": "Apple M3",
+    "logical_cpus": 8,
+    "memory_bytes": 17179869184,
+    "accelerator": "cpu"
+  },
+  "experiment_id": "p3-clip-vit-b32",
+  "run_status": "succeeded",
+  "engine": "embed_anything",
+  "engine_version": "0.7.1",
+  "model_id": "openai/clip-vit-base-patch32",
+  "model_revision": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+  "weight_format": "candle",
+  "dimensions": 512,
+  "prefix_policy": "none",
+  "execution": "local",
+  "embedding_space_id": "space-6603884ac3fef0f888b11488a160b13c",
+  "batch_size": 16,
+  "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+  "fingerprints": {
+    "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
+    "chunking": "943111672f245aec0cfca3256b3009429620b2a79a7e1d7bbf85189e076dd210",
+    "evaluation": "1a9658958ea101183421369a8656533c7fdb4961a6b3b7f9138207c165288852"
+  },
+  "evaluation": {
+    "mode": "image-only",
+    "status": "completed",
+    "query_set": {
+      "version": "queries-v1",
+      "checksum": "sha256:0ca4735dc8b960715916fc29ac76d8de577465e6ef232e69116d6053638ebbed"
+    },
+    "labels": {
+      "version": "labels-synthetic-v3",
+      "checksum": "sha256:ed565070d654c592e767ebaac4f94a4559925380b4f4efb41f4d6dc7ed012d56"
+    },
+    "labels_corpus": "synthetic",
+    "evaluation_fingerprint": "1a9658958ea101183421369a8656533c7fdb4961a6b3b7f9138207c165288852",
+    "spaces": [
+      "space-6603884ac3fef0f888b11488a160b13c"
+    ],
+    "k": 3,
+    "queries": [
+      {
+        "query_id": "q01",
+        "text": "Onde está o resultado da hemoglobina?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.23048446,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.22880355,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.20777649,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q02",
+        "text": "Qual é o valor da glicemia e sua unidade?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.2272723,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.22491035,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.21054327,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q03",
+        "text": "Qual intervalo de referência aparece para a creatinina?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.22723281,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.21931951,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.21777835,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q04",
+        "text": "Onde estão os resultados de colesterol e triglicerídeos?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.22892049,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.22775811,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.21163124,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q05",
+        "text": "Qual página contém a conclusão do laudo?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.22228871,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.20278539,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.2022839,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q06",
+        "text": "Onde o laudo descreve os achados do exame?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.21827967,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.21783064,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.20405978,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      },
+      {
+        "query_id": "q07",
+        "text": "Mostre a radiografia de tórax presente no conjunto de exames.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.21904618,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.216715,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.19866312,
+            "label": 2,
+            "labeled": true,
+            "note": "Synthetic chest radiograph"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.3333333333333333,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 0.5
+        }
+      },
+      {
+        "query_id": "q08",
+        "text": "Encontre as imagens de ultrassonografia abdominal.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.2381128,
+            "label": 2,
+            "labeled": true,
+            "note": "Synthetic abdominal ultrasound image"
+          },
+          {
+            "rank": 2,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.23784041,
+            "label": 2,
+            "labeled": true,
+            "note": "Ultrasound image embedded in the ultrasound report"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.21103546,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.6666666666666666,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 0.9072836011519267
+        }
+      },
+      {
+        "query_id": "q09",
+        "text": "Mostre a imagem associada a este laudo de ultrassonografia.",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.22471076,
+            "label": 2,
+            "labeled": true,
+            "note": "Image embedded in the ultrasound report"
+          },
+          {
+            "rank": 2,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.22192343,
+            "label": 1,
+            "labeled": true,
+            "note": "Abdominal ultrasound image not linked to the report"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.21680169,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.6666666666666666,
+          "hit_at_3": 1.0,
+          "ndcg_at_3": 1.0
+        }
+      },
+      {
+        "query_id": "q10",
+        "text": "Onde o documento informa a técnica utilizada no exame?",
+        "results": [
+          {
+            "rank": 1,
+            "record_id": "4ede4ff105947db6",
+            "source_id": "abd-us-001",
+            "chunk_id": "abd-us-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
+            "chunk_text": null,
+            "score": 0.21973413,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 2,
+            "record_id": "b31de32cce0ab65f",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
+            "chunk_text": null,
+            "score": 0.21869414,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "40dc527147f3c51a",
+            "source_id": "chest-001",
+            "chunk_id": "chest-001-p1-image-0",
+            "modality": "image",
+            "page_number": 1,
+            "asset_uri": "assets/6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5.png",
+            "chunk_text": null,
+            "score": 0.21162978,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          }
+        ],
+        "fewer_than_k": false,
+        "metrics": {
+          "precision_at_3": 0.0,
+          "hit_at_3": 0.0,
+          "ndcg_at_3": 0.0
+        }
+      }
+    ],
+    "metrics": {
+      "precision_at_3": 0.16666666666666666,
+      "hit_at_3": 0.3,
+      "ndcg_at_3": 0.2407283601151927
+    }
+  },
+  "measurements": {
+    "ingestion": {
+      "duration_ms": 9312.473125,
+      "pages": 0,
+      "chunks": 3,
+      "ms_per_page": null,
+      "chunks_per_second": 0.3221485806972463
+    },
+    "ingestion_model_load_ms": 2556.664333,
+    "embedding": {
+      "calls": 3,
+      "failed_calls": 0,
+      "items": 3,
+      "total_ms": 8346.204751,
+      "mean_batch_latency_ms": 2782.0682503333333,
+      "items_per_second": 0.35944481228315844,
+      "usage_tokens": null
+    },
+    "cold_start": {
+      "model_load_ms": 2556.664333,
+      "first_operation_ms": 3371.2454589999998,
+      "first_operation_items": 1,
+      "total_ms": 5927.909792
+    },
+    "query_side_start": {
+      "model_load_ms": 5372.3926249999995,
+      "first_query_ms": 1125.696125,
+      "total_ms": 6498.088749999999
+    },
+    "warm_query_latency": {
+      "samples": 200,
+      "median_ms": 776.269,
+      "p95_ms": 2457.08425
+    },
+    "latency_repeats": 20,
+    "peak_local_ram": {
+      "status": "measured",
+      "value": 700481536.0,
+      "unit": "bytes",
+      "scope": "local process memory (ru_maxrss high-water mark)"
+    },
+    "gpu_memory": {
+      "status": "unavailable",
+      "reason": "inference runs on the local CPU; no GPU is used"
+    },
+    "provider_inference_memory": null,
+    "index_size": {
+      "status": "measured",
+      "value": 23151.0,
+      "unit": "bytes",
+      "scope": "active revisions on disk"
+    }
+  },
+  "cost": {
+    "ingestion": {
+      "estimate_status": "not_applicable",
+      "estimated_cost": null,
+      "reason": "local engine: no provider is billed",
+      "currency": null,
+      "price_version": null,
+      "usage_unit": null,
+      "usage": null,
+      "unit_quantity": null,
+      "unit_price": null
+    },
+    "query_set": {
+      "estimate_status": "not_applicable",
+      "estimated_cost": null,
+      "reason": "local engine: no provider is billed",
+      "currency": null,
+      "price_version": null,
+      "usage_unit": null,
+      "usage": null,
+      "unit_quantity": null,
+      "unit_price": null
+    }
+  },
+  "reliability": {
+    "failed_sources": 0,
+    "failed_pages": 0,
+    "failed_batches": 0,
+    "retries": 0,
+    "truncations": 0
+  },
+  "fidelity": null
+}

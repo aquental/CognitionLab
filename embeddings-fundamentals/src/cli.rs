@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::adapters;
 use crate::anonymization;
@@ -19,7 +19,7 @@ use crate::corpus::LoadedManifest;
 use crate::extraction::poppler::{PopplerImageExtractor, PopplerTextExtractor, TesseractOcr};
 use crate::ids::{EmbeddingSpaceId, ExperimentId};
 use crate::pipeline::{Pipeline, TokioSleeper, ValidationError, check_remote_permission};
-use crate::retrieval::{Scope, search_text};
+use crate::retrieval::{Scope, search_images, search_text};
 use crate::storage::FsRecordStore;
 use crate::tools;
 
@@ -47,7 +47,8 @@ pub enum Command {
     Validate(RunArgs),
     /// Extract, chunk, embed, and publish every eligible source.
     Ingest(IngestArgs),
-    /// Search an index with a text query.
+    /// Search an index with a text query (text records, or image records of a
+    /// cross-modal space).
     Search(SearchArgs),
     /// Ingest, evaluate the frozen queries, and measure one configuration.
     Experiment(ExperimentArgs),
@@ -143,6 +144,9 @@ pub struct SearchArgs {
     /// Query text.
     #[arg(long)]
     pub query: String,
+    /// Records to search: text chunks, or images through the model's text-query path.
+    #[arg(long, value_enum, default_value_t = SearchMode::Text)]
+    pub mode: SearchMode,
     /// Maximum number of results.
     #[arg(long, default_value_t = 3)]
     pub limit: usize,
@@ -156,6 +160,15 @@ pub struct SearchArgs {
     /// is granted per corpus.
     #[arg(long)]
     pub manifest: Option<PathBuf>,
+}
+
+/// Retrieval mode of `search`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SearchMode {
+    /// Text queries against text records.
+    Text,
+    /// Text queries against image records (needs a cross-modal model).
+    Image,
 }
 
 /// Runs the parsed command.
@@ -473,7 +486,26 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
         .clone()
         .unwrap_or_else(|| embedder.model_info().embedding_space_id.clone());
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
-    let hits = search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await?;
+    let outcome = match args.mode {
+        SearchMode::Text => {
+            search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await
+        }
+        SearchMode::Image => {
+            search_images(&store, &space, &*embedder, &args.query, args.limit, scope).await
+        }
+    };
+    let hits = match outcome {
+        Ok(hits) => hits,
+        Err(
+            e @ crate::retrieval::SearchError::Embedding(
+                crate::embedding::EmbeddingError::Unsupported { .. },
+            ),
+        ) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+        Err(e) => return Err(e.into()),
+    };
     println!("{}", serde_json::to_string_pretty(&hits)?);
     Ok(ExitCode::SUCCESS)
 }

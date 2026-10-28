@@ -54,3 +54,30 @@ candidate therefore qualifies under PLAN §0.1 and is evaluated alongside the CL
 - Run inference in `spawn_blocking` and treat a panic (`JoinError`) as a permanent
   embedding failure, never a crash.
 - Re-run this table with the corrected preprocessing and record both sets of numbers.
+
+## Re-run with the Phase 3 adapter (corrected preprocessing)
+
+Date: 2026-10-28, same machine, release build. Produced by the integration tests
+`clip_loads_the_pinned_checkpoint_and_embeds_queries_and_images` and
+`siglip_loads_the_pinned_checkpoint_and_embeds_queries_and_images` (`tests/integration.rs`,
+`RUN_INTEGRATION=1`, feature `engine-embed-anything`) through `embedding::vision`: each
+model's pinned `preprocessor_config.json` (CLIP: shortest edge 224, bicubic, center crop
+224, CLIP mean/std; SigLIP: 256×256 bicubic, mean = std = 0.5), the pinned
+`tokenizer.json` with an explicit position-limit check, and padding to the limit with the
+engine's pad id. Same synthetic images and queries as above.
+
+| Query | CLIP chest | CLIP abd-us | SigLIP chest | SigLIP abd-us |
+|---|---:|---:|---:|---:|
+| Mostre a radiografia de tórax | 0.2221 | **0.2466** | **0.0497** | 0.0424 |
+| Encontre as imagens de ultrassonografia abdominal | 0.2077 | **0.2339** | 0.0133 | **0.0657** |
+| a chest x-ray | **0.2445** | 0.2253 | **0.0517** | 0.0436 |
+| an abdominal ultrasound image | 0.2141 | **0.2554** | 0.0250 | **0.0793** |
+
+The ranking pattern is unchanged: CLIP still ranks the abdominal image first for the
+Portuguese chest query and gets the English queries right; SigLIP-multilingual ranks the
+expected image first for all four. Margins grew for the English ultrasound query (CLIP 0.0216 →
+0.0413; SigLIP 0.0393 → 0.0543). The images are synthetic, so this is
+again a wiring check, not evidence of medical retrieval quality. The integration tests
+assert only the two rankings above that both runs agree on (CLIP: English chest query;
+SigLIP: Portuguese chest query), besides dimensions, normalization, batch = single, the
+refusal of an over-limit query, and the refusal of document text.

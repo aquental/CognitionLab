@@ -361,15 +361,16 @@ impl ComparisonReport {
         let _ = writeln!(md, "\n## Retrieval quality (k = 3, macro averages)\n");
         let _ = writeln!(
             md,
-            "| Experiment | Ingestion run | Failed sources | Evaluation | Precision@3 | Hit@3 | nDCG@3 |"
+            "| Experiment | Mode | Ingestion run | Failed sources | Evaluation | Precision@3 | Hit@3 | nDCG@3 |"
         );
-        let _ = writeln!(md, "|---|---|---:|---|---:|---:|---:|");
+        let _ = writeln!(md, "|---|---|---|---:|---|---:|---:|---:|");
         for c in &self.configurations {
             let m = &c.evaluation.metrics;
             let _ = writeln!(
                 md,
-                "| {} | {} | {} | {:?} | {:.4} | {:.4} | {:.4} |",
+                "| {} | {} | {} | {} | {:?} | {:.4} | {:.4} | {:.4} |",
                 c.experiment_id,
+                c.evaluation.mode.as_str(),
                 match c.run_status {
                     RunStatus::Succeeded => "succeeded",
                     RunStatus::Incomplete => "**INCOMPLETE**",
