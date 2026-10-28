@@ -37,6 +37,11 @@ cargo run --features engine-embed-anything -- ingest --manifest tests/fixtures/c
     --config config/experiments/baseline-text-embed-anything.toml --store store --experiment <id>
 cargo run --features engine-embed-anything -- search --config config/experiments/baseline-text-embed-anything.toml \
     --store store --query "Onde está o resultado da hemoglobina?" --limit 3
+# Image run (CLIP or SigLIP, `model_kind = "text_to_image"`, `[ingest] modality = "image"`):
+cargo run --release --features engine-embed-anything -- experiment --manifest tests/fixtures/corpus/manifest.toml \
+    --config config/experiments/image-clip-vit-b32.toml --store store --experiment <id> --report <out>.json
+cargo run --release --features engine-embed-anything -- search --mode image \
+    --config config/experiments/image-clip-vit-b32.toml --store store --query "Mostre a radiografia de tórax"
 ```
 
 Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
@@ -49,7 +54,7 @@ External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `t
 
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
-## Architecture (PLAN §1–§4; Phase 1 implemented: corpus, extraction, chunking, store, pipeline, retrieval, CLI)
+## Architecture (PLAN §1–§4; Phases 1–3 implemented: corpus, extraction, chunking, store, pipeline, text and image retrieval, evaluation, measurement, CLI)
 
 The pipeline runs Corpus manifest → anonymization/eligibility gate → extraction (native text or OCR, chosen per page) → structure-aware chunking → `EmbeddingStrategy` adapter → vector validation → atomic store → retrieval (text / image / RRF combined) → evaluation report.
 

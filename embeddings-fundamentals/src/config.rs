@@ -11,6 +11,8 @@
 //! [ingest]          # optional; defaults from PLAN §0.1
 //! max_attempts = 3
 //! ```
+//! An image run sets `modality = "image"` under `[ingest]` and selects a cross-modal
+//! model with `model_kind = "text_to_image"` under `[engine]`.
 //! Unknown keys are rejected, so a typo cannot silently fall back to a default.
 
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -19,7 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::chunking::ChunkingConfig;
-use crate::domain::Execution;
+use crate::domain::{Execution, Modality};
 use crate::embedding::{EngineId, PrefixPolicy};
 use crate::extraction::ExtractionConfig;
 
@@ -47,6 +49,29 @@ pub struct EngineConfig {
     /// API base URL of a remote engine (OpenAI: defaults to the public endpoint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_base: Option<String>,
+    /// What the model embeds: document text, or text queries and images in one
+    /// cross-modal space (CLIP, SigLIP).
+    #[serde(default, skip_serializing_if = "ModelKind::is_text")]
+    pub model_kind: ModelKind,
+}
+
+/// Kind of embedding model; selects the adapter of an engine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// A text model: documents and queries.
+    #[default]
+    Text,
+    /// A cross-modal model: text queries and images in one space, no document text.
+    TextToImage,
+}
+
+impl ModelKind {
+    /// True for [`ModelKind::Text`].
+    #[must_use]
+    pub const fn is_text(&self) -> bool {
+        matches!(self, Self::Text)
+    }
 }
 
 const fn default_prefix() -> PrefixPolicy {
@@ -76,6 +101,8 @@ pub struct IngestConfig {
     pub batch_size: Option<NonZeroUsize>,
     /// Language tag of the corpus text.
     pub language: Option<String>,
+    /// Modality the run embeds (PLAN §0.1: one modality per run); defaults to text.
+    pub modality: Option<Modality>,
 }
 
 /// A saved experiment configuration.
@@ -151,6 +178,9 @@ impl ExperimentConfig {
         if let Some(n) = self.ingest.batch_size {
             settings.batch_size = n;
         }
+        if let Some(modality) = self.ingest.modality {
+            settings.modality = modality;
+        }
         if let Some(lang) = &self.ingest.language {
             settings.language.clone_from(lang);
         }
@@ -177,6 +207,33 @@ mod tests {
         let settings = config.ingest_settings("exp-1".parse().expect("id"));
         assert_eq!(settings.max_attempts.get(), 3);
         assert_eq!(settings.extraction, ExtractionConfig::default());
+    }
+
+    #[test]
+    fn image_configs_select_a_cross_modal_model_and_an_image_run() {
+        for file in [
+            "image-clip-vit-b32.toml",
+            "image-siglip-multilingual.toml",
+            "image-deterministic.toml",
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("config/experiments")
+                .join(file);
+            let config = ExperimentConfig::load(&path).expect("load");
+            assert_eq!(config.engine.model_kind, ModelKind::TextToImage, "{file}");
+            let settings = config.ingest_settings("exp-1".parse().expect("id"));
+            assert_eq!(settings.modality, Modality::Image, "{file}");
+        }
+        let text = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config/experiments/baseline-text-embed-anything.toml");
+        let config = ExperimentConfig::load(&text).expect("load");
+        assert_eq!(config.engine.model_kind, ModelKind::Text);
+        assert_eq!(
+            config
+                .ingest_settings("exp-1".parse().expect("id"))
+                .modality,
+            Modality::Text
+        );
     }
 
     #[test]

@@ -1,8 +1,10 @@
-//! Hugging Face model files shared by the local engines: the hub cache layout, the
-//! model's position limit, and a token counter backed by the pinned `tokenizer.json`.
+//! Hugging Face model files shared by the local engines: pinned downloads, the hub
+//! cache layout, the model's position limit, and a token counter backed by the pinned
+//! `tokenizer.json`.
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
@@ -18,6 +20,16 @@ pub enum HfError {
     Model {
         /// Model identifier.
         model: String,
+        /// Reason.
+        reason: String,
+    },
+    /// A file could not be downloaded at the pinned revision.
+    #[error("cannot fetch {file} of {model}: {reason}")]
+    Fetch {
+        /// Model identifier.
+        model: String,
+        /// Repository file.
+        file: String,
         /// Reason.
         reason: String,
     },
@@ -40,6 +52,56 @@ pub enum HfError {
         /// Configured limit.
         configured: usize,
     },
+}
+
+/// Serializes downloads within the process: hf-hub's file lock gives up after about
+/// five seconds instead of waiting for a concurrent download of the same blob.
+static FETCH: Mutex<()> = Mutex::new(());
+
+/// Attempts per file while another process holds the blob lock (about 5 s each).
+const LOCK_ATTEMPTS: u32 = 120;
+
+/// Downloads `files` of `model_id` at `revision` (or reuses them from the Hugging Face
+/// cache), in order. Blocking: call it on the blocking pool.
+///
+/// # Errors
+///
+/// Returns [`HfError::Fetch`] naming the first file that cannot be fetched.
+pub fn download(model_id: &str, revision: &str, files: &[&str]) -> Result<Vec<PathBuf>, HfError> {
+    let fail = |file: &str, reason: String| HfError::Fetch {
+        model: model_id.to_owned(),
+        file: file.to_owned(),
+        reason,
+    };
+    // A poisoned guard only means another download panicked; the cache is still valid.
+    let _guard = FETCH
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let api = hf_hub::api::sync::ApiBuilder::from_env()
+        .with_progress(false)
+        .build()
+        .map_err(|e| fail("*", e.to_string()))?;
+    let repo = api.repo(hf_hub::Repo::with_revision(
+        model_id.to_owned(),
+        hf_hub::RepoType::Model,
+        revision.to_owned(),
+    ));
+    files
+        .iter()
+        .map(|file| {
+            let mut attempt = 1;
+            loop {
+                match repo.get(file) {
+                    Err(hf_hub::api::sync::ApiError::LockAcquisition(_))
+                        if attempt < LOCK_ATTEMPTS =>
+                    {
+                        attempt += 1;
+                    }
+                    other => return other.map_err(|e| fail(file, e.to_string())),
+                }
+            }
+        })
+        .collect()
 }
 
 /// Hugging Face hub cache directory: `$HF_HUB_CACHE`, `$HF_HOME/hub`, or
@@ -168,6 +230,20 @@ impl HfTokenCounter {
             special_tokens,
             id,
         })
+    }
+}
+
+impl HfTokenCounter {
+    /// Token ids of `text` with the model's special tokens, never truncated or padded.
+    ///
+    /// # Errors
+    ///
+    /// Returns the tokenizer's reason when `text` cannot be encoded.
+    pub fn encode_ids(&self, text: &str) -> Result<Vec<u32>, String> {
+        self.tokenizer
+            .encode(text, true)
+            .map(|e| e.get_ids().to_vec())
+            .map_err(|e| e.to_string())
     }
 }
 

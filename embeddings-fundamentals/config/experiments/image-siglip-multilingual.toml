@@ -1,0 +1,18 @@
+# Stage 3 multilingual candidate (PLAN §0.1): SigLIP base patch16-256 multilingual through
+# EmbedAnything (candle). Text queries and images share one 768-d space; image runs only.
+
+[engine]
+engine = "embed_anything"
+model_kind = "text_to_image"
+model_id = "google/siglip-base-patch16-256-multilingual"
+model_revision = "8952a4eafcde3cb7ab46b1dd629b33f8784ca9c6"
+dimensions = 768
+# Text position limit of the SigLIP text tower (special tokens included).
+max_input_tokens = 64
+prefix_policy = "none"
+
+[ingest]
+modality = "image"
+max_attempts = 3
+backoff_ms = 200
+batch_size = 16

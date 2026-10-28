@@ -98,7 +98,13 @@ fn an_incomplete_ingestion_is_visible_in_the_markdown() {
         .find(|l| l.starts_with(&format!("| {id} |")) && l.contains("INCOMPLETE"))
         .unwrap_or_else(|| panic!("no INCOMPLETE quality row in:\n{markdown}"));
     let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-    assert_eq!(cells.get(3), Some(&"1"), "failed sources shown in {row}");
+    // Cells: "", experiment, mode, ingestion run, failed sources, ...
+    assert_eq!(
+        cells.get(2),
+        Some(&"text-only"),
+        "retrieval mode shown in {row}"
+    );
+    assert_eq!(cells.get(4), Some(&"1"), "failed sources shown in {row}");
 }
 
 #[test]

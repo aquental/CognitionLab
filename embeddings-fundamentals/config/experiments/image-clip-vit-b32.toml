@@ -1,0 +1,19 @@
+# Stage 3 image-only baseline (PRD §10): CLIP ViT-B/32 through EmbedAnything (candle).
+# Text queries and images share one 512-d space; the model embeds no document text, so
+# this configuration runs image runs only. Spike: reports/spikes/phase3-models.md.
+
+[engine]
+engine = "embed_anything"
+model_kind = "text_to_image"
+model_id = "openai/clip-vit-base-patch32"
+model_revision = "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+dimensions = 512
+# Text position limit of the CLIP text tower (special tokens included).
+max_input_tokens = 77
+prefix_policy = "none"
+
+[ingest]
+modality = "image"
+max_attempts = 3
+backoff_ms = 200
+batch_size = 16
