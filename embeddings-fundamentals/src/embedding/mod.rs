@@ -161,6 +161,29 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Largest number of inputs one call may carry: 1 without batch support, otherwise
+    /// `max_batch` (unbounded when unset).
+    #[must_use]
+    pub fn batch_limit(&self) -> Option<usize> {
+        if self.batch {
+            self.max_batch.map(NonZeroUsize::get)
+        } else {
+            Some(1)
+        }
+    }
+
+    /// Rejects a call of `size` inputs that exceeds [`Capabilities::batch_limit`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbeddingError::BatchTooLarge`] when `size` is above the limit.
+    pub fn check_batch(&self, size: usize) -> Result<(), EmbeddingError> {
+        match self.batch_limit() {
+            Some(max) if size > max => Err(EmbeddingError::BatchTooLarge { size, max }),
+            _ => Ok(()),
+        }
+    }
+
     /// Returns an error naming the engine, model, and missing capability when
     /// `capability` is not supported.
     ///
@@ -356,6 +379,14 @@ pub enum EmbeddingError {
         /// Short reason without document content.
         reason: String,
     },
+    /// A call contains more inputs than the adapter accepts at once.
+    #[error("batch of {size} inputs exceeds the adapter maximum of {max}")]
+    BatchTooLarge {
+        /// Number of inputs in the call.
+        size: usize,
+        /// Maximum accepted (1 when the adapter does not support batching).
+        max: usize,
+    },
     /// An input is longer than the model accepts.
     #[error("input {item} has {tokens} tokens, above the model limit of {limit}")]
     InputTooLong {
@@ -374,9 +405,10 @@ impl EmbeddingError {
     pub const fn class(&self) -> ErrorClass {
         match self {
             Self::Transient { .. } => ErrorClass::Transient,
-            Self::Unsupported { .. } | Self::Permanent { .. } | Self::InputTooLong { .. } => {
-                ErrorClass::Permanent
-            }
+            Self::Unsupported { .. }
+            | Self::Permanent { .. }
+            | Self::BatchTooLarge { .. }
+            | Self::InputTooLong { .. } => ErrorClass::Permanent,
         }
     }
 }
@@ -516,12 +548,31 @@ pub fn validate_batch(
 }
 
 /// L2-normalizes `vector` in place. A zero vector is left unchanged.
+///
+/// Components are scaled by the largest magnitude and accumulated in `f64`, so very
+/// large components do not overflow and very small non-zero vectors still reach unit
+/// length. Non-finite inputs are left for [`validate_batch`] to reject.
 pub fn l2_normalize(vector: &mut [f32]) {
-    let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > f32::EPSILON {
-        for x in vector.iter_mut() {
-            *x /= norm;
-        }
+    let max_abs = vector
+        .iter()
+        .fold(0.0_f64, |m, x| m.max(f64::from(x.abs())));
+    if !(max_abs > 0.0 && max_abs.is_finite()) {
+        return;
+    }
+    let norm = vector
+        .iter()
+        .map(|x| {
+            let scaled = f64::from(*x) / max_abs;
+            scaled * scaled
+        })
+        .sum::<f64>()
+        .sqrt()
+        * max_abs;
+    for x in vector.iter_mut() {
+        // The quotient has magnitude at most 1, so narrowing back to f32 is lossless in range.
+        #[expect(clippy::cast_possible_truncation, reason = "value is in [-1, 1]")]
+        let unit = (f64::from(*x) / norm) as f32;
+        *x = unit;
     }
 }
 
@@ -739,5 +790,26 @@ mod tests {
         let mut zero = vec![0.0, 0.0];
         l2_normalize(&mut zero);
         assert!(zero.iter().all(|x| x.abs() <= f32::EPSILON));
+    }
+
+    #[test]
+    fn l2_normalize_handles_extreme_magnitudes() {
+        for input in [
+            vec![1e20_f32, 0.0],
+            vec![1e-8_f32, 0.0],
+            vec![f32::MAX, f32::MAX],
+        ] {
+            let mut v = input.clone();
+            l2_normalize(&mut v);
+            let norm = v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+            approx::assert_abs_diff_eq!(norm, 1.0, epsilon = 1e-6);
+            assert!(
+                v.iter().all(|x| x.is_finite()),
+                "{input:?} normalized to {v:?}"
+            );
+        }
+        let mut tiny = vec![1e-8_f32, 0.0];
+        l2_normalize(&mut tiny);
+        approx::assert_abs_diff_eq!(tiny[0], 1.0, epsilon = 1e-6);
     }
 }
