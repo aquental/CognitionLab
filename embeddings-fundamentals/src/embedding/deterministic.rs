@@ -35,6 +35,8 @@ pub enum Method {
 pub struct Call {
     /// Method that was called.
     pub method: Method,
+    /// Item ids of the inputs.
+    pub ids: Vec<ItemId>,
     /// Inputs exactly as received (raw text, or asset paths for images).
     pub raw_inputs: Vec<String>,
     /// Text after the prefix policy was applied (empty for images).
@@ -52,14 +54,31 @@ pub enum InjectedDefect {
     Infinite,
 }
 
+/// Which response item a defect corrupts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DefectTarget {
+    /// This exact item.
+    Item(ItemId),
+    /// The first item whose id starts with `<source>-` in each response.
+    FirstOfSource(String),
+}
+
 #[derive(Debug, Default)]
 struct FaultPlan {
     /// Fail this many upcoming calls with the given class, then succeed.
     failures: Option<(u32, ErrorClass)>,
     /// Fail every call with the given class.
     always: Option<ErrorClass>,
-    /// Corrupt the vector of one item in every response that contains it.
-    defect: Option<(ItemId, InjectedDefect)>,
+    /// Fail every call containing an item of these sources (`<source>-` id prefix).
+    source_failures: Vec<(String, ErrorClass)>,
+    /// Corrupt one vector in every response that contains the target.
+    defect: Option<(DefectTarget, InjectedDefect)>,
+}
+
+fn belongs_to(id: &ItemId, source: &str) -> bool {
+    id.as_str()
+        .strip_prefix(source)
+        .is_some_and(|rest| rest.starts_with('-'))
 }
 
 /// Whitespace token counter used by the deterministic adapter.
@@ -82,6 +101,7 @@ pub struct DeterministicBuilder {
     capabilities: Capabilities,
     engine_label: EngineId,
     overrides: HashMap<String, Vec<f32>>,
+    keywords: Vec<(String, Vec<(usize, f32)>)>,
 }
 
 impl Default for DeterministicBuilder {
@@ -102,6 +122,7 @@ impl Default for DeterministicBuilder {
             },
             engine_label: EngineId::Deterministic,
             overrides: HashMap::new(),
+            keywords: Vec::new(),
         }
     }
 }
@@ -145,6 +166,17 @@ impl DeterministicBuilder {
         self
     }
 
+    /// Keyword axes: any text containing `keyword` (case-insensitive) gets the given
+    /// `(axis, weight)` components, summed over every matching keyword, and no hash
+    /// noise. Texts without a keyword get hash vectors that are zero on every reserved
+    /// axis, so they score exactly 0 against a keyword-only query. This makes frozen
+    /// rankings derivable by hand.
+    pub fn with_keyword_vector(mut self, keyword: &str, components: &[(usize, f32)]) -> Self {
+        self.keywords
+            .push((keyword.to_lowercase(), components.to_vec()));
+        self
+    }
+
     /// Builds the adapter.
     ///
     /// # Errors
@@ -167,6 +199,7 @@ impl DeterministicBuilder {
             info,
             capabilities: self.capabilities,
             overrides: self.overrides,
+            keywords: self.keywords,
             faults: Mutex::new(FaultPlan::default()),
             calls: Mutex::new(Vec::new()),
         })
@@ -179,6 +212,7 @@ pub struct DeterministicEmbedder {
     info: ModelInfo,
     capabilities: Capabilities,
     overrides: HashMap<String, Vec<f32>>,
+    keywords: Vec<(String, Vec<(usize, f32)>)>,
     faults: Mutex<FaultPlan>,
     calls: Mutex<Vec<Call>>,
 }
@@ -206,7 +240,28 @@ impl DeterministicEmbedder {
 
     /// Corrupts the vector returned for `item`.
     pub fn inject_defect(&self, item: ItemId, defect: InjectedDefect) {
-        lock(&self.faults).defect = Some((item, defect));
+        lock(&self.faults).defect = Some((DefectTarget::Item(item), defect));
+    }
+
+    /// Corrupts the first vector of `source` in every response.
+    pub fn inject_defect_for_source(&self, source: &str, defect: InjectedDefect) {
+        lock(&self.faults).defect = Some((DefectTarget::FirstOfSource(source.to_owned()), defect));
+    }
+
+    /// Fails every call that contains an item of `source` with `class`.
+    pub fn fail_source_always(&self, source: &str, class: ErrorClass) {
+        lock(&self.faults)
+            .source_failures
+            .push((source.to_owned(), class));
+    }
+
+    /// Calls that contained at least one item of `source`.
+    #[must_use]
+    pub fn calls_for_source(&self, source: &str) -> Vec<Call> {
+        self.calls()
+            .into_iter()
+            .filter(|c| c.ids.iter().any(|id| belongs_to(id, source)))
+            .collect()
     }
 
     /// Removes all injected faults.
@@ -229,6 +284,42 @@ impl DeterministicEmbedder {
             return v;
         }
         let dims = self.info.dimensions.get();
+        if !self.keywords.is_empty() {
+            let lower = key.to_lowercase();
+            let reserved = self
+                .keywords
+                .iter()
+                .flat_map(|(_, c)| c.iter().map(|(axis, _)| axis + 1))
+                .max()
+                .unwrap_or(0)
+                .min(dims);
+            let mut v = vec![0.0_f32; dims];
+            let mut matched = false;
+            for (keyword, components) in &self.keywords {
+                if lower.contains(keyword.as_str()) {
+                    matched = true;
+                    for (axis, weight) in components {
+                        if let Some(slot) = v.get_mut(*axis) {
+                            *slot += weight;
+                        }
+                    }
+                }
+            }
+            if !matched {
+                let noise = self.hash_vector(key, dims);
+                for (slot, value) in v.iter_mut().zip(noise).skip(reserved) {
+                    *slot = value;
+                }
+            }
+            l2_normalize(&mut v);
+            return v;
+        }
+        let mut vector = self.hash_vector(key, dims);
+        l2_normalize(&mut vector);
+        vector
+    }
+
+    fn hash_vector(&self, key: &str, dims: usize) -> Vec<f32> {
         let mut vector = Vec::with_capacity(dims);
         let mut counter: u32 = 0;
         while vector.len() < dims {
@@ -247,21 +338,32 @@ impl DeterministicEmbedder {
             }
             counter = counter.wrapping_add(1);
         }
-        l2_normalize(&mut vector);
         vector
     }
 
-    fn record(&self, method: Method, raw_inputs: Vec<String>, submitted: Vec<String>) {
+    fn record(
+        &self,
+        method: Method,
+        ids: Vec<ItemId>,
+        raw_inputs: Vec<String>,
+        submitted: Vec<String>,
+    ) {
         lock(&self.calls).push(Call {
             method,
+            ids,
             raw_inputs,
             submitted,
         });
     }
 
-    fn scripted_failure(&self) -> Option<EmbeddingError> {
+    fn scripted_failure(&self, ids: &[ItemId]) -> Option<EmbeddingError> {
         let mut faults = lock(&self.faults);
-        let class = if let Some(class) = faults.always {
+        let source_class = faults
+            .source_failures
+            .iter()
+            .find(|(source, _)| ids.iter().any(|id| belongs_to(id, source)))
+            .map(|(_, class)| *class);
+        let class = if let Some(class) = faults.always.or(source_class) {
             Some(class)
         } else if let Some((remaining, class)) = faults.failures {
             faults.failures = remaining
@@ -284,8 +386,16 @@ impl DeterministicEmbedder {
 
     fn apply_defect(&self, embeddings: &mut [Embedding]) {
         let defect = lock(&self.faults).defect.clone();
-        let Some((item, defect)) = defect else { return };
-        for embedding in embeddings.iter_mut().filter(|e| e.id == item) {
+        let Some((target, defect)) = defect else {
+            return;
+        };
+        let position = match &target {
+            DefectTarget::Item(item) => embeddings.iter().position(|e| &e.id == item),
+            DefectTarget::FirstOfSource(source) => {
+                embeddings.iter().position(|e| belongs_to(&e.id, source))
+            }
+        };
+        if let Some(embedding) = position.and_then(|i| embeddings.get_mut(i)) {
             match defect {
                 InjectedDefect::WrongDimensions => embedding.vector.push(0.0),
                 InjectedDefect::NaN => {
@@ -317,8 +427,10 @@ impl DeterministicEmbedder {
                     .into_owned()
             })
             .collect();
+        let ids: Vec<ItemId> = raw.iter().map(|i| i.id.clone()).collect();
         self.record(
             method,
+            ids.clone(),
             raw.iter().map(|i| i.text.clone()).collect(),
             submitted.clone(),
         );
@@ -328,7 +440,7 @@ impl DeterministicEmbedder {
         };
         self.capabilities.require(capability, &self.info)?;
         self.capabilities.check_batch(raw.len())?;
-        if let Some(error) = self.scripted_failure() {
+        if let Some(error) = self.scripted_failure(&ids) {
             return Err(error);
         }
         if let Some(limit) = self.capabilities.max_input_tokens {
@@ -398,10 +510,11 @@ impl EmbeddingStrategy for DeterministicEmbedder {
             .iter()
             .map(|a| a.path.display().to_string())
             .collect();
-        self.record(Method::Images, keys.clone(), Vec::new());
+        let ids: Vec<ItemId> = assets.iter().map(|a| a.id.clone()).collect();
+        self.record(Method::Images, ids.clone(), keys.clone(), Vec::new());
         self.capabilities.require(Capability::Images, &self.info)?;
         self.capabilities.check_batch(assets.len())?;
-        if let Some(error) = self.scripted_failure() {
+        if let Some(error) = self.scripted_failure(&ids) {
             return Err(error);
         }
         let mut embeddings: Vec<Embedding> = assets
@@ -624,6 +737,69 @@ mod tests {
             single.embed_documents(&inputs(2)).await,
             Err(EmbeddingError::BatchTooLarge { size: 2, max: 1 })
         ));
+    }
+
+    #[tokio::test]
+    async fn source_scoped_faults_and_defects_only_hit_that_source() {
+        let embedder = DeterministicEmbedder::builder().build().expect("build");
+        embedder.fail_source_always("S1", ErrorClass::Permanent);
+        assert!(
+            embedder
+                .embed_documents(&[input("S1-p1-text-0", "a")])
+                .await
+                .is_err()
+        );
+        assert!(
+            embedder
+                .embed_documents(&[input("S2-p1-text-0", "a")])
+                .await
+                .is_ok()
+        );
+        assert!(
+            embedder
+                .embed_documents(&[input("S10-p1-text-0", "a")])
+                .await
+                .is_ok(),
+            "prefix is exact"
+        );
+        assert_eq!(embedder.calls_for_source("S1").len(), 1);
+        let embedder = DeterministicEmbedder::builder().build().expect("build");
+        embedder.inject_defect_for_source("S1", InjectedDefect::NaN);
+        let batch = embedder
+            .embed_documents(&[input("S1-p1-text-0", "a"), input("S1-p1-text-1", "b")])
+            .await
+            .expect("embed");
+        assert!(batch.embeddings[0].vector[0].is_nan());
+        assert!(
+            batch.embeddings[1].vector.iter().all(|x| x.is_finite()),
+            "only the first item"
+        );
+    }
+
+    #[test]
+    fn keyword_vectors_give_hand_derivable_scores() {
+        let embedder = DeterministicEmbedder::builder()
+            .with_keyword_vector("hemoglobina", &[(0, 1.0)])
+            .with_keyword_vector("hematócrito", &[(0, 0.8), (1, 0.6)])
+            .build()
+            .expect("build");
+        let query = embedder.vector_for("Onde está o resultado da hemoglobina?");
+        let dot = |v: Vec<f32>| v.iter().zip(&query).map(|(a, b)| a * b).sum::<f32>();
+        approx::assert_abs_diff_eq!(
+            dot(embedder.vector_for("Hemoglobina | 13,5")),
+            1.0,
+            epsilon = 1e-6
+        );
+        approx::assert_abs_diff_eq!(
+            dot(embedder.vector_for("Hematócrito | 40,1")),
+            0.8,
+            epsilon = 1e-6
+        );
+        approx::assert_abs_diff_eq!(
+            dot(embedder.vector_for("Glicemia | 92")),
+            0.0,
+            epsilon = 1e-6
+        );
     }
 
     #[test]
