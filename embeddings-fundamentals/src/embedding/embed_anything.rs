@@ -21,7 +21,7 @@ use crate::domain::Execution;
 pub const ENGINE_VERSION: &str = "0.7.1";
 
 /// The EmbedAnything adapter: the shared local contract over a candle embedder.
-pub type EmbedAnythingAdapter = LocalTextAdapter<EmbedAnythingBackend>;
+pub type EmbedAnythingAdapter = LocalTextAdapter<EmbedAnythingBackend, super::hf::HfTokenCounter>;
 
 /// Errors raised while loading the model.
 #[derive(Debug, thiserror::Error)]
@@ -159,7 +159,7 @@ pub async fn load(
         EmbedAnythingBackend {
             embedder: Arc::new(embedder),
         },
-        Box::new(tokens),
+        tokens,
         info,
         Capabilities {
             text_documents: true,

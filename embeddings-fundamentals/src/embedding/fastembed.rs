@@ -27,7 +27,7 @@ pub const ENGINE_VERSION: &str = "7.5.0";
 pub const DEFAULT_WEIGHTS: &str = "onnx/model.onnx";
 
 /// The FastEmbed adapter: the shared local contract over an ONNX session.
-pub type FastEmbedAdapter = LocalTextAdapter<FastEmbedBackend>;
+pub type FastEmbedAdapter = LocalTextAdapter<FastEmbedBackend, super::hf::HfTokenCounter>;
 
 /// Errors raised while loading the model.
 #[derive(Debug, thiserror::Error)]
@@ -251,7 +251,7 @@ pub async fn load(
         FastEmbedBackend {
             model: Mutex::new(session),
         },
-        Box::new(tokens),
+        tokens,
         info,
         Capabilities {
             text_documents: true,
