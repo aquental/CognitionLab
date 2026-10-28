@@ -313,9 +313,22 @@ impl StructureAwareV1 {
                 });
             }
         };
+        // Whether the previous non-blank line belonged to a table. Inside a table that
+        // already has a header, a line without digits is a qualitative result row
+        // ("Proteína | Negativo | Negativo"), not a new header.
+        let mut in_table = false;
         for line in &page.lines {
             let text = line.text.trim();
-            match classify(text) {
+            let kind = match classify(text) {
+                LineKind::TableHeader if in_table && header.is_some() => LineKind::TableRow,
+                other => other,
+            };
+            in_table = match kind {
+                LineKind::TableHeader | LineKind::TableRow => true,
+                LineKind::Blank => in_table,
+                LineKind::Heading | LineKind::Text => false,
+            };
+            match kind {
                 LineKind::Blank => {
                     flush(&mut paragraph, &mut units);
                     header = None;
@@ -666,6 +679,40 @@ mod tests {
             ["Achados", "Achados\nConclusão"],
             "both lines are indexed"
         );
+    }
+
+    #[test]
+    fn qualitative_rows_are_rows_not_headers() {
+        let lines = [
+            "Urina tipo I",
+            "Exame | Resultado | Referência",
+            "Proteína | Negativo | Negativo",
+            "pH | 6,0 | 5,0–7,0",
+            "Glicose | Ausente | Ausente",
+        ];
+        let chunks = chunker(false)
+            .chunk(&page(&lines), &WhitespaceTokenCounter, None)
+            .expect("chunk");
+        let rows: Vec<&str> = chunks
+            .iter()
+            .map(|c| c.text.lines().last().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "Proteína | Negativo | Negativo",
+                "pH | 6,0 | 5,0–7,0",
+                "Glicose | Ausente | Ausente"
+            ]
+        );
+        for chunk in &chunks {
+            assert_eq!(chunk.kind, ChunkKind::TableRow);
+            assert!(
+                chunk.text.contains("Exame | Resultado | Referência"),
+                "header kept: {:?}",
+                chunk.text
+            );
+        }
     }
 
     #[test]

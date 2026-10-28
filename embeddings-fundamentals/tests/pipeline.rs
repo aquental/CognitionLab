@@ -24,7 +24,7 @@ async fn unchanged_reingestion_skips_extraction_and_embedding() {
         .retain(|s| s.source_id.as_str() == "lab-scanned-002");
     let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
     let store_dir = tempfile::tempdir().expect("tmp");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &extractor,
@@ -77,7 +77,7 @@ async fn reusing_an_experiment_id_is_refused_before_processing() {
         .retain(|s| s.source_id.as_str() == "lab-searchable-001");
     let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
     let store_dir = tempfile::tempdir().expect("tmp");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &extractor,
@@ -111,7 +111,7 @@ async fn unchanged_sources_are_recognised_before_extraction() {
         .retain(|s| s.source_id.as_str() == "lab-scanned-002");
     let good = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
     let store_dir = tempfile::tempdir().expect("tmp");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let first = Pipeline {
         text: &good,
@@ -176,7 +176,7 @@ async fn an_unreadable_experiment_file_is_refused_before_processing() {
         b"{\"experiment_id\": \"run-1\", \"revis",
     )
     .expect("corrupt");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &extractor,
@@ -220,7 +220,7 @@ async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
         .retain(|s| s.source_id.as_str() == "lab-searchable-001");
     let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
     let store_dir = tempfile::tempdir().expect("tmp");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &extractor,
@@ -282,4 +282,105 @@ async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
         .await
         .expect("run");
     assert!(report.sources[0].unchanged);
+}
+
+#[tokio::test]
+async fn ineligible_sources_refuse_the_run_before_any_processing() {
+    use embeddings_fundamentals::pipeline::{EXIT_VALIDATION, ValidationError};
+    for required in [true, false] {
+        let mut manifest =
+            LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+        manifest.manifest.sources.retain(|s| s.input_type.is_pdf());
+        // One source without a recorded anonymization review.
+        manifest.manifest.sources[1].anonymization = None;
+        manifest.manifest.sources[1].required = required;
+        let extractor =
+            FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+        let store_dir = tempfile::tempdir().expect("tmp");
+        let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+        let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+        let pipeline = Pipeline {
+            text: &extractor,
+            ocr: &extractor,
+            sleeper: &NoSleep,
+            store: Arc::clone(&store),
+            embedder: embedder.clone(),
+        };
+        let err = pipeline
+            .ingest(
+                &manifest,
+                &IngestSettings::new("run-1".parse().expect("id")),
+            )
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(err, ValidationError::Ineligible(ref s) if s.len() == 1),
+            "{err}"
+        );
+        assert_eq!(err.exit_code(), EXIT_VALIDATION);
+        assert!(
+            embedder.calls().is_empty(),
+            "no adapter call (required={required})"
+        );
+        assert!(
+            extractor.ocr_calls().is_empty(),
+            "no extraction (required={required})"
+        );
+        assert!(
+            store.spaces().expect("spaces").is_empty(),
+            "nothing published (required={required})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn search_refuses_a_damaged_revision_in_both_scopes() {
+    use embeddings_fundamentals::retrieval::{Scope, SearchError, search_text};
+    let mut manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    manifest
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "lab-searchable-001");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder: embedder.clone(),
+    };
+    let report = pipeline
+        .ingest(
+            &manifest,
+            &IngestSettings::new("run-1".parse().expect("id")),
+        )
+        .await
+        .expect("ingest");
+    let revision = report.sources[0].revision_id.clone().expect("revision");
+    let records = store_dir
+        .path()
+        .join(report.space.as_str())
+        .join("revisions/lab-searchable-001")
+        .join(revision.as_str())
+        .join("records.jsonl");
+    let full = std::fs::read(&records).expect("records");
+    let first_line = [full.split(|b| *b == b'\n').next().expect("line"), b"\n"].concat();
+    let snapshot = store
+        .load_experiment(&"run-1".parse().expect("id"))
+        .expect("snapshot");
+    for damaged in [Vec::new(), first_line] {
+        std::fs::write(&records, &damaged).expect("damage");
+        for scope in [Scope::Active, Scope::Experiment(&snapshot)] {
+            let outcome =
+                search_text(&store, &report.space, &*embedder, "hemoglobina", 3, scope).await;
+            assert!(
+                matches!(outcome, Err(SearchError::Store(_))),
+                "damaged revision must not be served"
+            );
+        }
+    }
 }

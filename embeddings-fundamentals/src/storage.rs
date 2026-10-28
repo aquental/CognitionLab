@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -74,6 +74,20 @@ pub enum StoreError {
     /// An experiment snapshot with this id already exists.
     #[error("experiment {0} already exists; snapshots are append-only")]
     ExperimentExists(ExperimentId),
+    /// Another process holds the writer lock of this store.
+    #[error("store {0} is locked by another writer")]
+    WriterBusy(PathBuf),
+    /// A write was attempted through a read-only handle.
+    #[error("store opened read-only")]
+    ReadOnly,
+    /// A revision does not match its integrity seal.
+    #[error("revision {path} failed its integrity seal: {reason}")]
+    Integrity {
+        /// Revision directory.
+        path: PathBuf,
+        /// What does not match.
+        reason: String,
+    },
     /// A record does not belong to the revision being staged.
     #[error("record {record} does not belong to {source_id}/{revision}")]
     ForeignRecord {
@@ -165,20 +179,43 @@ pub struct ExperimentSnapshot {
 pub struct FsRecordStore {
     root: PathBuf,
     fault: Mutex<Option<FaultPoint>>,
+    /// Held exclusive lock on `<root>/.writer.lock`; `None` for read-only handles.
+    /// The OS releases it when the process exits, so a crashed writer never blocks.
+    writer_lock: Option<File>,
 }
 
+/// Name of the lock file that serializes writers of one store root.
+const WRITER_LOCK: &str = ".writer.lock";
+
 impl FsRecordStore {
-    /// Opens (creating if needed) a store rooted at `root`, and removes abandoned
-    /// staging directories left by interrupted runs.
+    /// Opens the store for writing: takes the exclusive writer lock and only then
+    /// removes staging directories abandoned by interrupted writers. Readers and other
+    /// writers can never lose a staged revision to this cleanup.
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::Io`] when the root cannot be created or cleaned.
-    pub fn open(root: &Path) -> Result<Self, StoreError> {
+    /// Returns [`StoreError::WriterBusy`] when another writer holds the lock, or
+    /// [`StoreError::Io`] when the root cannot be created or cleaned.
+    pub fn open_writer(root: &Path) -> Result<Self, StoreError> {
         fs::create_dir_all(root).map_err(io(root))?;
+        let lock_path = root.join(WRITER_LOCK);
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(io(&lock_path))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(StoreError::WriterBusy(root.to_owned()));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(io(&lock_path)(e)),
+        }
         let store = Self {
             root: root.to_owned(),
             fault: Mutex::new(None),
+            writer_lock: Some(lock),
         };
         for space in store.spaces()? {
             let tmp = store.space_dir(&space).join("tmp");
@@ -187,6 +224,33 @@ impl FsRecordStore {
             }
         }
         Ok(store)
+    }
+
+    /// Opens the store read-only: no lock, no cleanup, and every write is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] when the root does not exist.
+    pub fn open_reader(root: &Path) -> Result<Self, StoreError> {
+        if !root.is_dir() {
+            return Err(io(root)(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "store root not found",
+            )));
+        }
+        Ok(Self {
+            root: root.to_owned(),
+            fault: Mutex::new(None),
+            writer_lock: None,
+        })
+    }
+
+    fn require_writer(&self) -> Result<(), StoreError> {
+        if self.writer_lock.is_some() {
+            Ok(())
+        } else {
+            Err(StoreError::ReadOnly)
+        }
     }
 
     /// Store root.
@@ -268,6 +332,7 @@ impl FsRecordStore {
         revision_id: &RevisionId,
         records: &[Record],
     ) -> Result<StagedRevision, StoreError> {
+        self.require_writer()?;
         self.check_fault(FaultPoint::BeforeStage)?;
         if let Some(r) = records
             .iter()
@@ -334,6 +399,7 @@ impl FsRecordStore {
     ///
     /// Returns [`StoreError`] on I/O failure or an injected fault.
     pub fn publish(&self, staged: StagedRevision) -> Result<PublishOutcome, StoreError> {
+        self.require_writer()?;
         let target = self.revision_dir(&staged.space, &staged.source_id, &staged.revision_id);
         let parent = target
             .parent()
@@ -444,6 +510,12 @@ impl FsRecordStore {
     /// the sealed checksum, hold the sealed number of records, and every line must parse.
     /// Truncated (even empty) or altered files fail, not only unparseable ones.
     fn check_seal(dir: &Path) -> Result<(Checksum, usize), String> {
+        Self::load_sealed(dir).map(|(checksum, records)| (checksum, records.len()))
+    }
+
+    /// Reads a revision once and returns its records only if they match the seal, so the
+    /// bytes that are verified are exactly the bytes that are returned.
+    fn load_sealed(dir: &Path) -> Result<(Checksum, Vec<Record>), String> {
         let seal_path = dir.join(SEAL_FILE);
         let seal: RevisionSeal = fs::read(&seal_path)
             .map_err(|e| format!("cannot read seal: {e}"))
@@ -457,22 +529,24 @@ impl FsRecordStore {
                 seal.records_checksum
             ));
         }
-        let mut count = 0usize;
+        let mut records = Vec::with_capacity(seal.records);
         for line in String::from_utf8_lossy(&bytes)
             .lines()
             .filter(|l| !l.trim().is_empty())
         {
-            serde_json::from_str::<Record>(line)
-                .map_err(|e| format!("corrupt record line: {e}"))?;
-            count += 1;
+            records.push(
+                serde_json::from_str::<Record>(line)
+                    .map_err(|e| format!("corrupt record line: {e}"))?,
+            );
         }
-        if count != seal.records {
+        if records.len() != seal.records {
             return Err(format!(
-                "{count} records on disk, seal says {}",
+                "{} records on disk, seal says {}",
+                records.len(),
                 seal.records
             ));
         }
-        Ok((checksum, count))
+        Ok((checksum, records))
     }
 
     /// Active pointer of `source` in `space`, if any.
@@ -558,22 +632,13 @@ impl FsRecordStore {
     pub fn records(&self, revisions: &[RevisionRef]) -> Result<Vec<Record>, StoreError> {
         let mut records = Vec::new();
         for rev in revisions {
-            let path = self
-                .revision_dir(&rev.space, &rev.source_id, &rev.revision_id)
-                .join(RECORDS_FILE);
-            let file = File::open(&path).map_err(io(&path))?;
-            for line in BufReader::new(file).lines() {
-                let line = line.map_err(io(&path))?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                records.push(serde_json::from_str(&line).map_err(|source| {
-                    StoreError::Corrupt {
-                        path: path.clone(),
-                        source,
-                    }
-                })?);
-            }
+            let dir = self.revision_dir(&rev.space, &rev.source_id, &rev.revision_id);
+            let (_, mut sealed) =
+                Self::load_sealed(&dir).map_err(|reason| StoreError::Integrity {
+                    path: dir.clone(),
+                    reason,
+                })?;
+            records.append(&mut sealed);
         }
         Ok(records)
     }
@@ -593,6 +658,7 @@ impl FsRecordStore {
     ///
     /// Returns [`StoreError::ExperimentExists`] when the id is taken, or an I/O error.
     pub fn save_experiment(&self, snapshot: &ExperimentSnapshot) -> Result<(), StoreError> {
+        self.require_writer()?;
         let dir = self.root.join("experiments");
         fs::create_dir_all(&dir).map_err(io(&dir))?;
         let path = dir.join(format!("{}.json", snapshot.experiment_id));
@@ -714,7 +780,7 @@ mod tests {
     #[test]
     fn published_revision_becomes_active_and_readable() {
         let dir = tempfile::tempdir().expect("tmp");
-        let store = FsRecordStore::open(dir.path()).expect("open");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
         let s1: SourceId = "S1".parse().expect("id");
         publish(&store, &s1, &rev(1), "exp-1").expect("publish");
         let active = store.active(&space()).expect("active");
@@ -731,7 +797,7 @@ mod tests {
             FaultPoint::BeforePointerRename,
         ] {
             let dir = tempfile::tempdir().expect("tmp");
-            let store = FsRecordStore::open(dir.path()).expect("open");
+            let store = FsRecordStore::open_writer(dir.path()).expect("open");
             let s1: SourceId = "S1".parse().expect("id");
             publish(&store, &s1, &rev(1), "exp-1").expect("first publish");
             store.inject_fault(point);
@@ -767,7 +833,7 @@ mod tests {
     #[test]
     fn republishing_an_existing_revision_reuses_it_unchanged() {
         let dir = tempfile::tempdir().expect("tmp");
-        let store = FsRecordStore::open(dir.path()).expect("open");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
         let s1: SourceId = "S1".parse().expect("id");
         publish(&store, &s1, &rev(1), "exp-1").expect("publish 1");
         publish(&store, &s1, &rev(2), "exp-2").expect("publish 2");
@@ -784,7 +850,7 @@ mod tests {
     #[test]
     fn reuse_reports_the_existing_records_and_damaged_revisions_heal() {
         let dir = tempfile::tempdir().expect("tmp");
-        let store = FsRecordStore::open(dir.path()).expect("open");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
         let s1: SourceId = "S1".parse().expect("id");
         let stage = |experiment: &str| {
             let records = vec![
@@ -845,7 +911,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let s1: SourceId = "S1".parse().expect("id");
         {
-            let store = FsRecordStore::open(dir.path()).expect("open");
+            let store = FsRecordStore::open_writer(dir.path()).expect("open");
             publish(&store, &s1, &rev(1), "exp-1").expect("publish");
             let target = dir
                 .path()
@@ -858,7 +924,7 @@ mod tests {
             assert!(publish(&store, &s1, &rev(1), "exp-2").is_err());
         }
         // Reopening deletes tmp/, but the quarantined directory survives.
-        let store = FsRecordStore::open(dir.path()).expect("reopen");
+        let store = FsRecordStore::open_writer(dir.path()).expect("reopen");
         let quarantine = dir.path().join(space().as_str()).join("quarantine");
         assert_eq!(fs::read_dir(&quarantine).expect("quarantine").count(), 1);
         // A retry installs a fresh revision and the pointer resolves to parseable records.
@@ -868,9 +934,59 @@ mod tests {
     }
 
     #[test]
+    fn readers_never_clean_staging_and_writers_are_exclusive() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let writer = FsRecordStore::open_writer(dir.path()).expect("writer");
+        assert!(matches!(
+            FsRecordStore::open_writer(dir.path()),
+            Err(StoreError::WriterBusy(_))
+        ));
+        let s1: SourceId = "S1".parse().expect("id");
+        let staged = writer
+            .stage(&space(), &s1, &rev(1), &[record(&s1, &rev(1), 0, "exp-1")])
+            .expect("stage");
+        let reader = FsRecordStore::open_reader(dir.path()).expect("reader");
+        assert!(matches!(
+            reader.stage(&space(), &s1, &rev(1), &[]),
+            Err(StoreError::ReadOnly)
+        ));
+        assert_eq!(
+            writer
+                .publish(staged)
+                .expect("publish after a reader opened"),
+            PublishOutcome::Installed { records: 1 }
+        );
+        assert_eq!(reader.active_records(&space()).expect("read").len(), 1);
+        drop(writer);
+        FsRecordStore::open_writer(dir.path()).expect("lock released on drop");
+    }
+
+    #[test]
+    fn reads_refuse_revisions_that_fail_their_seal() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
+        let s1: SourceId = "S1".parse().expect("id");
+        publish(&store, &s1, &rev(1), "exp-1").expect("publish");
+        let target = dir
+            .path()
+            .join(space().as_str())
+            .join("revisions/S1")
+            .join(rev(1).as_str());
+        let full = fs::read(target.join(RECORDS_FILE)).expect("read");
+        let first_line = [full.split(|b| *b == b'\n').next().expect("line"), b"\n"].concat();
+        for damaged in [Vec::new(), first_line] {
+            fs::write(target.join(RECORDS_FILE), &damaged).expect("damage");
+            assert!(matches!(
+                store.active_records(&space()),
+                Err(StoreError::Integrity { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn experiment_snapshots_are_create_only() {
         let dir = tempfile::tempdir().expect("tmp");
-        let store = FsRecordStore::open(dir.path()).expect("open");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
         let snapshot = ExperimentSnapshot {
             experiment_id: "exp-1".parse().expect("id"),
             revisions: vec![],
@@ -895,7 +1011,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let s1: SourceId = "S1".parse().expect("id");
         {
-            let store = FsRecordStore::open(dir.path()).expect("open");
+            let store = FsRecordStore::open_writer(dir.path()).expect("open");
             let records = vec![record(&s1, &rev(1), 0, "exp-1")];
             let staged = store
                 .stage(&space(), &s1, &rev(1), &records)
@@ -903,7 +1019,7 @@ mod tests {
             assert!(store.active_records(&space()).expect("records").is_empty());
             drop(staged); // simulates a crash before publish
         }
-        let store = FsRecordStore::open(dir.path()).expect("reopen");
+        let store = FsRecordStore::open_writer(dir.path()).expect("reopen");
         assert!(!dir.path().join(space().as_str()).join("tmp").exists());
         assert!(store.active_records(&space()).expect("records").is_empty());
     }
@@ -911,7 +1027,7 @@ mod tests {
     #[test]
     fn foreign_records_cannot_be_staged() {
         let dir = tempfile::tempdir().expect("tmp");
-        let store = FsRecordStore::open(dir.path()).expect("open");
+        let store = FsRecordStore::open_writer(dir.path()).expect("open");
         let s1: SourceId = "S1".parse().expect("id");
         let s2: SourceId = "S2".parse().expect("id");
         let records = vec![record(&s2, &rev(1), 0, "exp-1")];

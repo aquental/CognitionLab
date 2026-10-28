@@ -20,13 +20,15 @@ fn parse_class(class: &str) -> Result<ErrorClass> {
 fn store_entries(world: &LabWorld) -> Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in fs::read_dir(world.store_dir.path()).context("read scenario store")? {
-        names.push(
-            entry
-                .context("read store entry")?
-                .file_name()
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let name = entry
+            .context("read store entry")?
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        // Dot-files (`.writer.lock`) belong to the store itself, not to the scenario.
+        if !name.starts_with('.') {
+            names.push(name);
+        }
     }
     names.sort();
     Ok(names)

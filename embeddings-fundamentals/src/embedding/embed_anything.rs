@@ -93,10 +93,19 @@ pub struct HfTokenCounter {
 
 impl HfTokenCounter {
     fn load(path: PathBuf) -> Result<Self, LoadError> {
-        let tokenizer = Tokenizer::from_file(&path).map_err(|e| LoadError::Tokenizer {
+        let mut tokenizer = Tokenizer::from_file(&path).map_err(|e| LoadError::Tokenizer {
             path: path.clone(),
             reason: e.to_string(),
         })?;
+        // tokenizer.json may carry truncation (MiniLM: 128) and padding settings; counts
+        // must report the full, unpadded length or truncation would be invisible.
+        tokenizer
+            .with_truncation(None)
+            .map_err(|e| LoadError::Tokenizer {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?;
+        tokenizer.with_padding(None);
         let special_tokens = tokenizer
             .encode("", true)
             .map_err(|e| LoadError::Tokenizer {
