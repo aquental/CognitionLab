@@ -25,6 +25,16 @@ use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint, Revision
 use crate::record::Record;
 
 const RECORDS_FILE: &str = "records.jsonl";
+/// Seal written with every revision: checksum and count of its records file.
+const SEAL_FILE: &str = "revision.json";
+
+/// Integrity seal of a revision, written in staging before the atomic rename.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionSeal {
+    records_checksum: Checksum,
+    records: usize,
+}
 
 /// Where an injected storage fault fires (failure-injection tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,6 +302,20 @@ impl FsRecordStore {
             let file = writer.into_inner().map_err(|e| io(&path)(e.into_error()))?;
             file.sync_all().map_err(io(&path))?;
         }
+        let seal = RevisionSeal {
+            records_checksum: Checksum::of_bytes(&bytes),
+            records: records.len(),
+        };
+        let seal_path = dir.join(SEAL_FILE);
+        let seal_json = serde_json::to_vec(&seal).map_err(|source| StoreError::Corrupt {
+            path: seal_path.clone(),
+            source,
+        })?;
+        {
+            let mut file = File::create(&seal_path).map_err(io(&seal_path))?;
+            file.write_all(&seal_json).map_err(io(&seal_path))?;
+            file.sync_all().map_err(io(&seal_path))?;
+        }
         fsync_dir(&dir)?;
         Ok(StagedRevision {
             space: space.clone(),
@@ -413,22 +437,42 @@ impl FsRecordStore {
         if !target.exists() {
             return None;
         }
-        let path = target.join(RECORDS_FILE);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(e) => return Some(Err(format!("cannot read records: {e}"))),
-        };
+        Some(Self::check_seal(target))
+    }
+
+    /// Verifies a revision directory against its seal: the records file must hash to
+    /// the sealed checksum, hold the sealed number of records, and every line must parse.
+    /// Truncated (even empty) or altered files fail, not only unparseable ones.
+    fn check_seal(dir: &Path) -> Result<(Checksum, usize), String> {
+        let seal_path = dir.join(SEAL_FILE);
+        let seal: RevisionSeal = fs::read(&seal_path)
+            .map_err(|e| format!("cannot read seal: {e}"))
+            .and_then(|b| serde_json::from_slice(&b).map_err(|e| format!("corrupt seal: {e}")))?;
+        let bytes =
+            fs::read(dir.join(RECORDS_FILE)).map_err(|e| format!("cannot read records: {e}"))?;
+        let checksum = Checksum::of_bytes(&bytes);
+        if checksum != seal.records_checksum {
+            return Err(format!(
+                "records checksum {checksum} does not match the seal {}",
+                seal.records_checksum
+            ));
+        }
         let mut count = 0usize;
         for line in String::from_utf8_lossy(&bytes)
             .lines()
             .filter(|l| !l.trim().is_empty())
         {
-            if let Err(e) = serde_json::from_str::<Record>(line) {
-                return Some(Err(format!("corrupt record line: {e}")));
-            }
+            serde_json::from_str::<Record>(line)
+                .map_err(|e| format!("corrupt record line: {e}"))?;
             count += 1;
         }
-        Some(Ok((Checksum::of_bytes(&bytes), count)))
+        if count != seal.records {
+            return Err(format!(
+                "{count} records on disk, seal says {}",
+                seal.records
+            ));
+        }
+        Ok((checksum, count))
     }
 
     /// Active pointer of `source` in `space`, if any.
@@ -465,11 +509,8 @@ impl FsRecordStore {
         let Some(pointer) = self.active_pointer(space, source)? else {
             return Ok(false);
         };
-        let path = self
-            .revision_dir(space, source, &pointer.revision_id)
-            .join(RECORDS_FILE);
-        Ok(fs::read(&path)
-            .is_ok_and(|bytes| Checksum::of_bytes(&bytes) == pointer.records_checksum))
+        let dir = self.revision_dir(space, source, &pointer.revision_id);
+        Ok(Self::check_seal(&dir).is_ok_and(|(checksum, _)| checksum == pointer.records_checksum))
     }
 
     /// Active revisions of every source in `space`, sorted by source.
@@ -781,6 +822,22 @@ mod tests {
             store.publish(stage("exp-4")).expect("heal corrupt"),
             PublishOutcome::Installed { records: 2 }
         );
+        // Truncation to zero bytes or to a valid prefix still parses, but breaks the seal.
+        let full = fs::read(target.join(RECORDS_FILE)).expect("read");
+        let first_line = full.split(|b| *b == b'\n').next().expect("line").to_vec();
+        for truncated in [Vec::new(), [first_line, b"\n".to_vec()].concat()] {
+            fs::write(target.join(RECORDS_FILE), &truncated).expect("truncate");
+            assert!(
+                !store.active_is_intact(&space(), &s1).expect("intact"),
+                "truncation detected"
+            );
+            assert_eq!(
+                store.publish(stage("exp-5")).expect("heal"),
+                PublishOutcome::Installed { records: 2 }
+            );
+            assert!(store.active_is_intact(&space(), &s1).expect("intact"));
+            assert_eq!(store.active_records(&space()).expect("records").len(), 2);
+        }
     }
 
     #[test]

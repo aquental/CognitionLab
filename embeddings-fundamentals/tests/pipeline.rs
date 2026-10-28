@@ -244,12 +244,20 @@ async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
         .join("revisions/lab-searchable-001")
         .join(revision.as_str())
         .join("records.jsonl");
-    for damage in [None, Some(&b"not json\n"[..])] {
-        match damage {
+    let full = std::fs::read(&records).expect("records");
+    let first_line = [full.split(|b| *b == b'\n').next().expect("line"), b"\n"].concat();
+    let damages: [Option<Vec<u8>>; 4] = [
+        None,
+        Some(b"not json\n".to_vec()),
+        Some(Vec::new()),
+        Some(first_line),
+    ];
+    for (run, damage) in damages.into_iter().enumerate() {
+        match &damage {
             None => std::fs::remove_file(&records).expect("delete records"),
-            Some(bytes) => std::fs::write(&records, bytes).expect("corrupt records"),
+            Some(bytes) => std::fs::write(&records, bytes).expect("damage records"),
         }
-        let id = format!("run-{}", if damage.is_none() { 2 } else { 3 });
+        let id = format!("run-{}", run + 2);
         let report = pipeline
             .ingest(&manifest, &IngestSettings::new(id.parse().expect("id")))
             .await
@@ -265,4 +273,13 @@ async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
         assert_eq!(source.records_committed, 10, "the revision was rebuilt");
         assert_eq!(store.active_records(&space).expect("readable").len(), 10);
     }
+    // After healing, an intact revision is recognised as unchanged again.
+    let report = pipeline
+        .ingest(
+            &manifest,
+            &IngestSettings::new("run-9".parse().expect("id")),
+        )
+        .await
+        .expect("run");
+    assert!(report.sources[0].unchanged);
 }
