@@ -66,6 +66,18 @@ pub struct LabWorld {
     pub notes: std::collections::BTreeMap<String, String>,
     /// Outcome of the last direct embedding attempt (harness steps).
     pub last_embedding: Option<Result<(), ErrorClass>>,
+    /// Frozen evaluation dataset.
+    pub dataset: Option<embeddings_fundamentals::evaluation::Dataset>,
+    /// Last evaluation report.
+    pub evaluation: Option<embeddings_fundamentals::evaluation::EvaluationReport>,
+    /// Measured configuration results, in run order.
+    pub configs: Vec<embeddings_fundamentals::report::ConfigurationResult>,
+    /// Last comparison report.
+    pub comparison: Option<embeddings_fundamentals::report::ComparisonReport>,
+    /// Engine configuration selected by a step.
+    pub engine_config: Option<embeddings_fundamentals::config::EngineConfig>,
+    /// Additional adapters of multi-model scenarios.
+    pub other_embedders: Vec<Arc<DeterministicEmbedder>>,
 }
 
 impl LabWorld {
@@ -86,6 +98,12 @@ impl LabWorld {
             search: None,
             notes: std::collections::BTreeMap::new(),
             last_embedding: None,
+            dataset: None,
+            evaluation: None,
+            configs: Vec::new(),
+            comparison: None,
+            engine_config: None,
+            other_embedders: Vec::new(),
         })
     }
 
