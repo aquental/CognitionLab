@@ -14,7 +14,10 @@ valid findings or stop between approved phases.
 # 1. Sources of Truth
 
 Read before implementing:
-- Applicable AGENTS.md instructions.
+- Applicable AGENTS.md and CLAUDE.md instructions.
+- The project-local Rust skill: invoke `/rust-skills` before writing,
+  reviewing, or testing Rust code. If it is unavailable, say so
+  explicitly; never claim it was applied.
 - embeddings-fundamentals/spec/PRD.md.
 - embeddings-fundamentals/spec/PLAN.md.
 - embeddings-fundamentals/README.md.
@@ -22,6 +25,10 @@ Read before implementing:
 
 The PRD defines requirements and acceptance criteria.
 The PLAN guides architecture, execution, and phase exit criteria.
+PLAN §2.2 (trait dispatch) and §2.3 (Rust engineering conventions)
+are the binding project-specific application of `rust-skills`. Where a
+generic skill rule and PLAN §2.3 differ, follow the PLAN and record
+the reason.
 The README must reflect the actual project state.
 
 Identify inconsistencies between documentation and implementation.
@@ -71,8 +78,15 @@ Traits and abstractions:
 - Preserve separation between extraction, chunking, embeddings,
   storage, retrieval, evaluation, and orchestration.
 - Avoid artificial hierarchies and abstractions without concrete use.
-- Prefer zero-cost abstractions where appropriate while respecting
-  the planned use of dynamic dispatch and asynchronous adapters.
+- Use `#[async_trait]` only on `EmbeddingStrategy`, the single trait
+  used as `dyn` (runtime adapter selection). Every other async trait
+  uses native `async fn` in traits with static dispatch; where the
+  future must be `Send`, declare
+  `fn op(&self, ..) -> impl Future<Output = ..> + Send`.
+- Keep synchronous work in synchronous traits (store, chunking,
+  token counting, clocks, probes), as listed in PLAN §2.2.
+- Keep Cargo features strictly additive: an engine feature only adds
+  an adapter and its dependencies.
 
 Error handling:
 - Use Result for failures and Option for legitimate absence.
@@ -80,12 +94,29 @@ Error handling:
 - Use anyhow where appropriate at application boundaries.
 - Preserve sufficient diagnostic context without exposing
   credentials or sensitive content.
-- Do not use unwrap() or expect() in production code.
+- Do not use unwrap() or expect() in production code. The Cargo
+  `[lints]` table (PLAN §5.4) denies them, along with `panic!`,
+  `todo!`, and `unimplemented!`.
 - Do not replace recoverable errors with panic!.
 - Intentional failures in tests must produce useful messages.
+  `#[test]` code may use `expect("<what failed>")`. Harness-less
+  targets (the Cucumber runner and its step modules) are not test
+  code for Clippy: use `?` with context, `Result`-returning steps,
+  and `assert!`/`assert_eq!` with messages.
+- Error messages and logs carry identifiers, stages, and counts,
+  never chunk text, document content, or credentials.
+
+Types and numbers:
+- Wrap identifiers in newtypes and use enums instead of strings for
+  closed sets (modality, extraction method, engine, statuses).
+- Reject unknown keys in configuration and manifests
+  (`#[serde(deny_unknown_fields)]`).
+- Order floats with `total_cmp`; compare them with a tolerance; use
+  `TryFrom` for narrowing conversions.
 
 Safety:
 - Avoid unsafe whenever an appropriate safe alternative exists.
+  The crate denies `unsafe_code`; `getrusage` goes through `nix`.
 - When indispensable, keep unsafe blocks minimal and document
   their invariants with SAFETY comments.
 - Pay particular attention to FFI boundaries and platform differences.
@@ -94,13 +125,21 @@ Asynchronous execution:
 - Follow Tokio ecosystem conventions.
 - Do not block runtime threads with CPU-intensive work,
   blocking calls, or synchronous waits.
-- Use appropriate isolation mechanisms and bounded concurrency.
+- Use appropriate isolation mechanisms and bounded concurrency:
+  `spawn_blocking` for model inference, image re-encoding, and store
+  I/O; `tokio::process` with `kill_on_drop` and timeouts for external
+  tools; a `Semaphore` for concurrent sources.
+- Never hold a lock across `.await`.
 - Preserve the specified retry limits and failure states.
 
 Validation:
 - Actually run cargo fmt, Clippy, and relevant tests.
 - Reasoning or visual inspection does not replace execution.
-- Do not add warning suppressions to hide problems.
+- Do not add warning suppressions to hide problems. When a lint is
+  genuinely wrong for one item, use `#[expect(lint, reason = "...")]`
+  and record it in the phase progress record.
+- Emit diagnostics through `tracing` in library code; only `main`
+  installs a subscriber.
 - Do not add dependencies without checking their necessity
   and compatibility with the project.
 
@@ -250,6 +289,8 @@ Request an adversarial review looking for:
 - Ownership, concurrency, and error-handling problems.
 - Integration, data-integrity, and reproducibility failures.
 - Regressions and untested failure paths.
+- Violations of PLAN §2.2/§2.3 and of the applicable `rust-skills`
+  rules (cite the rule ID, for example `async-no-lock-await`).
 
 Each finding must include:
 ID, severity, file/line, description, impact, a reproduction
@@ -300,6 +341,9 @@ Never simulate an external review. An unavailable reviewer
 blocks phase approval.
 
 # 8. Records and Phase Approval
+
+For each phase, the progress record also lists the `rust-skills`
+categories applied and any documented deviation from PLAN §2.3.
 
 Save the original reviewer reports and a tracking table containing:
 - Finding ID and reviewer.
