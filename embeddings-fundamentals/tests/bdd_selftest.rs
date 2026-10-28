@@ -93,6 +93,8 @@ struct Case {
     milestone: u32,
     args: &'static [&'static str],
     expect_pass: bool,
+    /// When set, cucumber itself (not only the inventory) must report this outcome.
+    expect_execution_failed: Option<bool>,
 }
 
 const CASES: &[Case] = &[
@@ -103,6 +105,7 @@ const CASES: &[Case] = &[
         milestone: 1,
         args: &[],
         expect_pass: true,
+        expect_execution_failed: Some(false),
     },
     Case {
         name: "milestone 0 bootstrap with no features passes",
@@ -111,6 +114,7 @@ const CASES: &[Case] = &[
         milestone: 0,
         args: &[],
         expect_pass: true,
+        expect_execution_failed: Some(false),
     },
     Case {
         name: "undefined step fails",
@@ -125,6 +129,7 @@ Feature: Selftest
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: Some(true),
     },
     Case {
         name: "ambiguous step fails",
@@ -140,6 +145,7 @@ Feature: Ambiguous
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: Some(true),
     },
     Case {
         name: "failing step fails",
@@ -156,6 +162,31 @@ Feature: Failing
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: Some(true),
+    },
+    Case {
+        name: "skipped step with PRD-identical text fails through fail_on_skipped",
+        prd: r#"
+```gherkin
+@m1
+Feature: Skipping
+  Scenario: Skipped
+    Given the value "2"
+    And a step nobody defined
+    Then the value is "2"
+```
+"#,
+        features: &[r#"
+Feature: Skipping
+  Scenario: Skipped
+    Given the value "2"
+    And a step nobody defined
+    Then the value is "2"
+"#],
+        milestone: 1,
+        args: &[],
+        expect_pass: false,
+        expect_execution_failed: Some(true),
     },
     Case {
         name: "empty required suite fails",
@@ -164,6 +195,7 @@ Feature: Failing
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: None,
     },
     Case {
         name: "weakened step text fails",
@@ -177,6 +209,7 @@ Feature: Selftest
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: None,
     },
     Case {
         name: "missing Examples row fails",
@@ -194,6 +227,7 @@ Feature: Outline
         milestone: 1,
         args: &[],
         expect_pass: false,
+        expect_execution_failed: None,
     },
     Case {
         name: "rows of later milestones are not yet required",
@@ -212,6 +246,7 @@ Feature: Outline
         milestone: 1,
         args: &[],
         expect_pass: true,
+        expect_execution_failed: Some(false),
     },
     Case {
         name: "filtered run fails the inventory",
@@ -220,6 +255,7 @@ Feature: Outline
         milestone: 1,
         args: &["--name", "does-not-match"],
         expect_pass: false,
+        expect_execution_failed: None,
     },
 ];
 
@@ -243,6 +279,15 @@ async fn run_case(case: &Case, dir: &Path) -> Result<bool> {
         cucumber_args: case.args.iter().map(|s| (*s).to_owned()).collect(),
     })
     .await?;
+    if let Some(expected) = case.expect_execution_failed
+        && report.execution_failed != expected
+    {
+        println!(
+            "       {}: cucumber execution_failed={} but expected {expected}",
+            case.name, report.execution_failed
+        );
+        return Ok(!case.expect_pass);
+    }
     println!(
         "       {}: {} required, {} executed, execution_failed={}, problems={:?}",
         case.name, report.required, report.executed, report.execution_failed, report.problems
@@ -272,9 +317,56 @@ fn check_real_prd() -> Result<usize> {
     Ok(mismatches)
 }
 
+fn check_inventory_rejects_empty_examples() -> Result<usize> {
+    let dir = tempfile::tempdir().context("temp dir")?;
+    let prd = dir.path().join("PRD.md");
+    fs::write(
+        &prd,
+        "```gherkin\nFeature: Empty\n  Scenario Outline: Rows\n    Given the value \"<v>\"\n\n    @m1\n    Examples:\n      | v |\n```\n",
+    )
+    .context("write PRD")?;
+    let rejected = support::inventory::from_prd(&prd, 1).is_err();
+    println!(
+        "{} inventory rejects an Examples block without data rows",
+        if rejected { "ok  " } else { "FAIL" }
+    );
+    Ok(usize::from(!rejected))
+}
+
+fn check_split_args() -> usize {
+    let cases: [(&str, Option<Vec<&str>>); 4] = [
+        (
+            r#"--name "Hemoglobina 13,5""#,
+            Some(vec!["--name", "Hemoglobina 13,5"]),
+        ),
+        (
+            "--tags '@m1 and @us01'",
+            Some(vec!["--tags", "@m1 and @us01"]),
+        ),
+        ("  -n  plain  ", Some(vec!["-n", "plain"])),
+        (r#"--name "unterminated"#, None),
+    ];
+    let mut mismatches = 0;
+    for (input, expected) in cases {
+        let actual = support::runner::split_args(input).ok();
+        let expected: Option<Vec<String>> =
+            expected.map(|v| v.into_iter().map(str::to_owned).collect());
+        let ok = actual == expected;
+        if !ok {
+            mismatches += 1;
+        }
+        println!(
+            "{} split_args({input:?}) = {actual:?}",
+            if ok { "ok  " } else { "FAIL" }
+        );
+    }
+    mismatches
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
-    let mut mismatches = check_real_prd()?;
+    let mut mismatches =
+        check_real_prd()? + check_inventory_rejects_empty_examples()? + check_split_args();
     for case in CASES {
         let dir = tempfile::tempdir().context("create temp dir")?;
         let passed = run_case(case, dir.path()).await?;

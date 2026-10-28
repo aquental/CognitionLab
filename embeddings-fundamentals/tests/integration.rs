@@ -13,10 +13,12 @@ fn integration_enabled() -> bool {
 #[tokio::test]
 #[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
 async fn required_external_tools_are_installed() {
-    if !integration_enabled() {
-        eprintln!("outstanding: RUN_INTEGRATION is not set");
-        return;
-    }
+    // An integration test that did not run is outstanding, never passed: fail loudly
+    // when ignored tests are included without RUN_INTEGRATION=1.
+    assert!(
+        integration_enabled(),
+        "outstanding: set RUN_INTEGRATION=1 to run integration tests (not reported as passed)"
+    );
     let statuses = tools::probe(tools::REQUIRED_TOOLS).await;
     let missing: Vec<_> = statuses
         .iter()

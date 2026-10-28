@@ -2,9 +2,14 @@
 //!
 //! All content is invented. Nothing here comes from real patients. The generated files
 //! are checked in, so tests never need this program. It runs only when the fixtures
-//! change: `cargo run --example gen_fixtures`. Scanned pages are produced by rendering
-//! a generated text page with `pdftoppm` (poppler), which must be installed for
-//! regeneration only.
+//! change: `cargo run --example gen_fixtures [-- --out DIR] [--rerender]`.
+//!
+//! Scanned pages are rasters of generated text pages. They are checked in under
+//! `tests/fixtures/sources/`, so regeneration is byte-identical on any machine without
+//! poppler. `--rerender` re-creates those rasters with `pdftoppm`, which is a deliberate
+//! content change because the output depends on the poppler build and fonts. CI
+//! regenerates the corpus into a temporary directory and diffs it against the
+//! checked-in copy.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -18,6 +23,7 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream, StringFormat, dictio
 use sha2::{Digest, Sha256};
 
 const OUT: &str = "tests/fixtures/corpus";
+const SOURCES: &str = "tests/fixtures/sources";
 
 /// Lab report, page 1 (blood count). Rows keep name | value | unit | range together.
 const LAB_PAGE_1: &[&str] = &[
@@ -311,8 +317,34 @@ fn checksum(path: &Path) -> Result<String> {
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(&bytes))))
 }
 
+/// Returns the checked-in raster `name`, re-rendering it from `pdf` page `page` first
+/// when `rerender` is set or the raster is missing.
+fn scan_raster(
+    pdf: &Path,
+    page: u32,
+    name: &str,
+    rerender: bool,
+    scratch: &Path,
+) -> Result<PathBuf> {
+    let target = Path::new(SOURCES).join(name);
+    if rerender || !target.exists() {
+        fs::create_dir_all(SOURCES).context("create sources dir")?;
+        let rendered = render_scan(pdf, page, &scratch.join(name).with_extension(""))?;
+        fs::copy(&rendered, &target).with_context(|| format!("copy {}", target.display()))?;
+    }
+    Ok(target)
+}
+
 fn main() -> Result<()> {
-    let out = Path::new(OUT);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let rerender = args.iter().any(|a| a == "--rerender");
+    let out_dir = args
+        .iter()
+        .position(|a| a == "--out")
+        .map(|i| args.get(i + 1).cloned().context("--out needs a directory"))
+        .transpose()?
+        .unwrap_or_else(|| OUT.to_owned());
+    let out = Path::new(&out_dir);
     fs::create_dir_all(out).context("create fixture dir")?;
     let scratch = tempfile::tempdir().context("temp dir")?;
 
@@ -327,8 +359,8 @@ fn main() -> Result<()> {
     )?;
 
     // 2. Scanned lab report: the same pages rendered to images, no text layer.
-    let scan1 = render_scan(&lab, 1, &scratch.path().join("scan1"))?;
-    let scan2 = render_scan(&lab, 2, &scratch.path().join("scan2"))?;
+    let scan1 = scan_raster(&lab, 1, "lab-scan-p1.png", rerender, scratch.path())?;
+    let scan2 = scan_raster(&lab, 2, "lab-scan-p2.png", rerender, scratch.path())?;
     build_pdf(
         &[
             (PageBody::Scanned(&scan1), vec![]),
@@ -341,7 +373,7 @@ fn main() -> Result<()> {
     //    masked logo; page 2 scanned.
     let us_text = scratch.path().join("us-text.pdf");
     build_pdf(&[(PageBody::Text(US_REPORT), vec![])], &us_text)?;
-    let us_scan = render_scan(&us_text, 1, &scratch.path().join("us-scan"))?;
+    let us_scan = scan_raster(&us_text, 1, "us-scan-p1.png", rerender, scratch.path())?;
     let (logo, mask) = logo_with_mask();
     build_pdf(
         &[

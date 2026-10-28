@@ -128,12 +128,22 @@ pub fn from_prd(prd: &Path, milestone: u32) -> Result<BTreeSet<ScenarioKey>> {
                 if m > milestone {
                     continue;
                 }
-                let Some(table) = &examples.table else {
-                    continue;
+                let Some((header, rows)) = examples
+                    .table
+                    .as_ref()
+                    .and_then(|table| table.rows.split_first())
+                else {
+                    bail!(
+                        "PRD outline {:?} has an Examples block without a table",
+                        scenario.name
+                    );
                 };
-                let Some((header, rows)) = table.rows.split_first() else {
-                    continue;
-                };
+                if rows.is_empty() {
+                    bail!(
+                        "PRD outline {:?} has an Examples block without data rows",
+                        scenario.name
+                    );
+                }
                 for row in rows {
                     required.insert(ScenarioKey {
                         feature: feature.name.clone(),

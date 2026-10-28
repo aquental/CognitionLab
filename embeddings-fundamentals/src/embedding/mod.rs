@@ -651,6 +651,29 @@ mod tests {
     }
 
     #[test]
+    fn embedding_space_id_is_frozen_for_known_descriptor() {
+        let info = ModelInfo::from_descriptor(SpaceDescriptor {
+            engine: EngineId::Deterministic,
+            engine_version: "0.1.0".into(),
+            model_id: "fixture-model".into(),
+            model_revision: Some("abc123".into()),
+            weight_format: None,
+            dimensions: NonZeroUsize::new(8).expect("dims"),
+            normalized: true,
+            metric: DistanceMetric::Cosine,
+            prefix_policy: PrefixPolicy::E5,
+            preprocessing: "sha256-seeded".into(),
+        })
+        .expect("info");
+        // Golden value computed independently with Python over the same field set
+        // (canonical JSON, sha256, first 32 hex characters, `space-` prefix; PLAN §2.1).
+        assert_eq!(
+            info.embedding_space_id.as_str(),
+            "space-35007f7bfcdac3ce4c66ebe17fa1793b"
+        );
+    }
+
+    #[test]
     fn engine_display_names_map_to_canonical_ids() {
         assert_eq!(
             EngineId::from_display("EmbedAnything"),

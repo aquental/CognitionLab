@@ -441,19 +441,57 @@ mod tests {
         assert!(serde_json::from_str::<RevisionId>("\"bogus\"").is_err());
     }
 
+    /// The dev-dependency enables `serde_json/preserve_order`, so in tests a `Map`
+    /// keeps insertion order and this test fails if `write_canonical` stops sorting.
+    #[test]
+    fn canonical_json_sorts_keys_inserted_out_of_order() {
+        let mut map = serde_json::Map::new();
+        map.insert("b".to_owned(), json!(1));
+        map.insert("a".to_owned(), json!(2));
+        assert_eq!(
+            map.keys().next().map(String::as_str),
+            Some("b"),
+            "preserve_order is active"
+        );
+        assert_eq!(
+            canonical_json(&Value::Object(map)).expect("canonical"),
+            r#"{"a":2,"b":1}"#
+        );
+    }
+
+    #[test]
+    fn record_id_is_frozen_for_known_inputs() {
+        let revision: RevisionId = "rev-0123456789abcdef".parse().expect("rev");
+        let chunk: ChunkId = "src-001-p2-text-3".parse().expect("chunk");
+        let space: EmbeddingSpaceId = "space-35007f7bfcdac3ce4c66ebe17fa1793b"
+            .parse()
+            .expect("space");
+        // Golden value computed independently with Python (json.dumps sort_keys, compact
+        // separators, ensure_ascii=False; hashlib.sha256, first 16 hex characters).
+        assert_eq!(
+            RecordId::derive(&revision, &chunk, &space)
+                .expect("record")
+                .as_str(),
+            "3281093a6a8c6280"
+        );
+    }
+
     proptest! {
         #[test]
         fn canonical_json_is_independent_of_key_insertion_order(
             entries in proptest::collection::btree_map("[a-z]{1,6}", 0i64..1000, 0..8)
         ) {
+            // With preserve_order enabled (dev-dependency), these maps differ in order.
             let forward: serde_json::Map<String, Value> =
                 entries.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
             let reversed: serde_json::Map<String, Value> =
                 entries.iter().rev().map(|(k, v)| (k.clone(), json!(v))).collect();
-            prop_assert_eq!(
-                canonical_json(&Value::Object(forward)).expect("forward"),
-                canonical_json(&Value::Object(reversed)).expect("reversed")
+            let sorted: String = format!(
+                "{{{}}}",
+                entries.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect::<Vec<_>>().join(",")
             );
+            prop_assert_eq!(canonical_json(&Value::Object(forward)).expect("forward"), sorted.clone());
+            prop_assert_eq!(canonical_json(&Value::Object(reversed)).expect("reversed"), sorted);
         }
     }
 }

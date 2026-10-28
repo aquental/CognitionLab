@@ -97,3 +97,43 @@ where
         problems,
     })
 }
+
+/// Splits a `BDD_ARGS` string into arguments, honouring single and double quotes so
+/// `--name "Hemoglobina 13,5"` stays one regex. Backslash escapes the next character.
+pub fn split_args(input: &str) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_arg = false;
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '\\') => {
+                let escaped = chars.next().context("dangling backslash in BDD_ARGS")?;
+                current.push(escaped);
+                in_arg = true;
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => current.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                in_arg = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_arg {
+                    args.push(std::mem::take(&mut current));
+                    in_arg = false;
+                }
+            }
+            (None, c) => {
+                current.push(c);
+                in_arg = true;
+            }
+        }
+    }
+    anyhow::ensure!(quote.is_none(), "unterminated quote in BDD_ARGS");
+    if in_arg {
+        args.push(current);
+    }
+    Ok(args)
+}
