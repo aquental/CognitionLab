@@ -50,6 +50,17 @@ pub enum LoadError {
         /// Reason.
         reason: String,
     },
+    /// The configured input limit exceeds what the model accepts, so the engine would
+    /// truncate silently.
+    #[error("model {model} accepts {model_limit} tokens, but max_input_tokens is {configured}")]
+    LimitAboveModel {
+        /// Model identifier.
+        model: String,
+        /// `max_position_embeddings` of the model.
+        model_limit: usize,
+        /// Configured limit.
+        configured: usize,
+    },
     /// The model returns vectors of another size than configured.
     #[error("model {model} returns {actual}-d vectors, config says {expected}")]
     Dimensions {
@@ -82,6 +93,42 @@ fn cached_file(model_id: &str, revision: &str, file: &str) -> PathBuf {
         .join("snapshots")
         .join(revision)
         .join(file)
+}
+
+/// The finite input limit the pipeline enforces: the configured limit, or the model's
+/// `max_position_embeddings` when none is configured. A configured limit above the
+/// model's is refused, because the engine would then truncate without provenance.
+fn effective_limit(
+    model_id: &str,
+    revision: &str,
+    configured: Option<NonZeroUsize>,
+) -> Result<NonZeroUsize, LoadError> {
+    let path = cached_file(model_id, revision, "config.json");
+    let config: serde_json::Value = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(|| LoadError::Model {
+            model: model_id.to_owned(),
+            reason: format!("cannot read {}", path.display()),
+        })?;
+    let model_limit = config
+        .get("max_position_embeddings")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| LoadError::Model {
+            model: model_id.to_owned(),
+            reason: "config.json has no max_position_embeddings".to_owned(),
+        })?;
+    match configured {
+        None => Ok(model_limit),
+        Some(limit) if limit > model_limit => Err(LoadError::LimitAboveModel {
+            model: model_id.to_owned(),
+            model_limit: model_limit.get(),
+            configured: limit.get(),
+        }),
+        Some(limit) => Ok(limit),
+    }
 }
 
 /// Token counter backed by the model's `tokenizer.json`.
@@ -189,6 +236,7 @@ impl EmbedAnythingAdapter {
             reason: e.to_string(),
         })?;
         let tokens = HfTokenCounter::load(cached_file(model_id, &revision, "tokenizer.json"))?;
+        let max_input_tokens = Some(effective_limit(model_id, &revision, max_input_tokens)?);
         let info = ModelInfo::from_descriptor(SpaceDescriptor {
             engine: EngineId::EmbedAnything,
             engine_version: ENGINE_VERSION.to_owned(),
