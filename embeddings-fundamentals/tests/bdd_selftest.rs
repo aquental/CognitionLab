@@ -108,6 +108,32 @@ const CASES: &[Case] = &[
         expect_execution_failed: Some(false),
     },
     Case {
+        name: "required scenario with And/But steps passes (keywords kept verbatim)",
+        prd: r#"
+```gherkin
+@m1
+Feature: Conjunctions
+  Scenario: And and But
+    Given the value "2"
+    And a defined step
+    Then the value is "2"
+    But the value is "2"
+```
+"#,
+        features: &[r#"
+Feature: Conjunctions
+  Scenario: And and But
+    Given the value "2"
+    And a defined step
+    Then the value is "2"
+    But the value is "2"
+"#],
+        milestone: 1,
+        args: &[],
+        expect_pass: true,
+        expect_execution_failed: Some(false),
+    },
+    Case {
         name: "milestone 0 bootstrap with no features passes",
         prd: PRD_BASIC,
         features: &[],
