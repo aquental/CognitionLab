@@ -49,6 +49,41 @@ pub struct RecordMetadata {
     pub truncation: Option<Truncation>,
     /// `verified` once the anonymization gate passed.
     pub anonymization_status: String,
+    /// Image records: where the image came from and its size (absent on text records).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_asset: Option<OriginalAsset>,
+    /// A generated caption, kept apart from source text: never embedded and never used
+    /// as query text (PRD §8). This lab generates none, so it is always absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_caption: Option<GeneratedCaption>,
+}
+
+/// The original of an image record's stored asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginalAsset {
+    /// Source file (relative to the manifest).
+    pub file: String,
+    /// 1-based page of the PDF that embeds the image (1 for an image file).
+    pub page: u32,
+    /// Image number in the PDF (`pdfimages -list` `num`), absent for an image file.
+    pub pdf_image_num: Option<u32>,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+/// A caption produced by a model, always marked as generated (PRD §8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedCaption {
+    /// Caption text.
+    pub text: String,
+    /// Always `true`.
+    pub generated: bool,
+    /// Model that generated it.
+    pub model: String,
 }
 
 /// Vector and model provenance of a record.

@@ -88,6 +88,9 @@ pub enum StoreError {
         /// What does not match.
         reason: String,
     },
+    /// An asset URI is not of the form `assets/<sha256 hex>.png`.
+    #[error("invalid asset uri {0:?}")]
+    InvalidAssetUri(String),
     /// A record does not belong to the revision being staged.
     #[error("record {record} does not belong to {source_id}/{revision}")]
     ForeignRecord {
@@ -105,6 +108,18 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> StoreError + '_ {
         path: path.to_owned(),
         source,
     }
+}
+
+/// Directory of content-addressed image assets, relative to the store root.
+const ASSETS_DIR: &str = "assets";
+
+/// `assets/<sha256 hex>.png` for an asset checksum.
+fn asset_uri(checksum: &Checksum) -> String {
+    let hex = checksum
+        .as_str()
+        .strip_prefix("sha256:")
+        .unwrap_or(checksum.as_str());
+    format!("{ASSETS_DIR}/{hex}.png")
 }
 
 fn fsync_dir(dir: &Path) -> Result<(), StoreError> {
@@ -308,6 +323,19 @@ impl FsRecordStore {
             let tmp = store.space_dir(&space).join("tmp");
             if tmp.exists() {
                 fs::remove_dir_all(&tmp).map_err(io(&tmp))?;
+            }
+        }
+        // Asset writes that never reached their rename leave `.tmp*` files behind.
+        let assets = store.root.join(ASSETS_DIR);
+        if assets.is_dir() {
+            for entry in fs::read_dir(&assets).map_err(io(&assets))? {
+                let path = entry.map_err(io(&assets))?.path();
+                if path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(".tmp"))
+                {
+                    fs::remove_file(&path).map_err(io(&path))?;
+                }
             }
         }
         Ok(store)
@@ -757,6 +785,72 @@ impl FsRecordStore {
         self.records(&self.active(space)?)
     }
 
+    /// Stores a prepared (metadata-free) PNG under `assets/<sha256>.png` and returns its
+    /// URI, relative to the store root. Assets are content-addressed and shared by every
+    /// space: an identical asset is stored once, and an existing file whose bytes no
+    /// longer match its name is replaced. The write is atomic (temporary file, fsync,
+    /// rename, directory fsync); an asset of a run that later fails is harmless.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ReadOnly`] for a reader and [`StoreError::Io`] on failure.
+    pub fn put_asset(&self, png: &[u8]) -> Result<String, StoreError> {
+        self.require_writer()?;
+        let checksum = Checksum::of_bytes(png);
+        let uri = asset_uri(&checksum);
+        let path = self.asset_path(&uri)?;
+        if fs::read(&path).is_ok_and(|bytes| Checksum::of_bytes(&bytes) == checksum) {
+            return Ok(uri);
+        }
+        let dir = self.root.join(ASSETS_DIR);
+        fs::create_dir_all(&dir).map_err(io(&dir))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&dir).map_err(io(&dir))?;
+        tmp.write_all(png).map_err(io(&path))?;
+        tmp.as_file().sync_all().map_err(io(&path))?;
+        tmp.persist(&path).map_err(|e| io(&path)(e.error))?;
+        fsync_dir(&dir)?;
+        Ok(uri)
+    }
+
+    /// Path of the asset named by `uri` (`assets/<sha256 hex>.png`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidAssetUri`] for any other form, so a URI can never
+    /// name a file outside the asset directory.
+    pub fn asset_path(&self, uri: &str) -> Result<PathBuf, StoreError> {
+        let name = uri
+            .strip_prefix("assets/")
+            .and_then(|n| n.strip_suffix(".png"))
+            .filter(|hex| {
+                hex.len() == 64
+                    && hex
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .ok_or_else(|| StoreError::InvalidAssetUri(uri.to_owned()))?;
+        Ok(self.root.join(ASSETS_DIR).join(format!("{name}.png")))
+    }
+
+    /// Reads the asset named by `uri` and checks its bytes against its name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Integrity`] when the bytes do not match, and other
+    /// [`StoreError`]s for an invalid URI or a missing file.
+    pub fn read_asset(&self, uri: &str) -> Result<Vec<u8>, StoreError> {
+        let path = self.asset_path(uri)?;
+        let bytes = fs::read(&path).map_err(io(&path))?;
+        if asset_uri(&Checksum::of_bytes(&bytes)) == uri {
+            Ok(bytes)
+        } else {
+            Err(StoreError::Integrity {
+                path,
+                reason: "asset bytes do not match their checksum".to_owned(),
+            })
+        }
+    }
+
     /// Saves an experiment snapshot. Snapshots are create-only.
     ///
     /// # Errors
@@ -852,6 +946,8 @@ mod tests {
                 overlap_tokens: 0,
                 truncation: None,
                 anonymization_status: "verified".into(),
+                original_asset: None,
+                generated_caption: None,
             },
             embedding: RecordEmbedding {
                 engine: EngineId::Deterministic,
@@ -1215,6 +1311,56 @@ mod tests {
         lines.for_each(drop); // keep the pipe open until the child's harness finishes
         assert!(child.wait().expect("wait child").success());
         FsRecordStore::open_writer(dir.path()).expect("lock is free after the holder exits");
+    }
+
+    #[test]
+    fn assets_are_content_addressed_atomic_and_verified() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = FsRecordStore::open_writer(dir.path()).expect("store");
+        let uri = store.put_asset(b"png bytes").expect("put");
+        let hex = Checksum::of_bytes(b"png bytes")
+            .as_str()
+            .trim_start_matches("sha256:")
+            .to_owned();
+        assert_eq!(uri, format!("assets/{hex}.png"));
+        assert_eq!(store.read_asset(&uri).expect("read"), b"png bytes");
+        assert_eq!(
+            store.put_asset(b"png bytes").expect("again"),
+            uri,
+            "idempotent"
+        );
+        // A damaged asset is detected on read and healed by the next put.
+        let path = store.asset_path(&uri).expect("path");
+        std::fs::write(&path, b"tampered").expect("tamper");
+        assert!(matches!(
+            store.read_asset(&uri),
+            Err(StoreError::Integrity { .. })
+        ));
+        store.put_asset(b"png bytes").expect("heal");
+        assert_eq!(store.read_asset(&uri).expect("read"), b"png bytes");
+        // URIs cannot leave the asset directory.
+        for bad in [
+            "../records.jsonl",
+            "assets/../../etc/passwd.png",
+            &format!("assets/{}.png", "A".repeat(64)),
+            "assets/abc.png",
+            &format!("/tmp/{hex}.png"),
+        ] {
+            assert!(
+                matches!(store.asset_path(bad), Err(StoreError::InvalidAssetUri(_))),
+                "{bad}"
+            );
+        }
+        // Abandoned temporary files are removed when a writer opens the store.
+        let stray = dir.path().join("assets").join(".tmpXYZ");
+        std::fs::write(&stray, b"partial").expect("stray");
+        drop(store);
+        let reader = FsRecordStore::open_reader(dir.path()).expect("reader");
+        assert!(matches!(reader.put_asset(b"x"), Err(StoreError::ReadOnly)));
+        assert!(stray.exists(), "readers never clean");
+        drop(reader);
+        let _writer = FsRecordStore::open_writer(dir.path()).expect("writer");
+        assert!(!stray.exists());
     }
 
     #[test]

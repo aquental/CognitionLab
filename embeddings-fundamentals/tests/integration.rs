@@ -11,7 +11,9 @@ use std::sync::Arc;
 use embeddings_fundamentals::corpus::LoadedManifest;
 use embeddings_fundamentals::domain::{ExtractionMethod, SourceStatus};
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
-use embeddings_fundamentals::extraction::poppler::{PopplerTextExtractor, TesseractOcr};
+use embeddings_fundamentals::extraction::poppler::{
+    PopplerImageExtractor, PopplerTextExtractor, TesseractOcr,
+};
 use embeddings_fundamentals::extraction::{ExtractionConfig, OcrEngine, TextExtractor};
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
 use embeddings_fundamentals::storage::FsRecordStore;
@@ -127,10 +129,12 @@ async fn real_tools_select_native_then_ocr_on_the_mixed_pdf() {
     let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
+    let images = PopplerImageExtractor::detect().await;
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &text,
         ocr: &ocr,
+        images: &images,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder,

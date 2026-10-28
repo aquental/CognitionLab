@@ -1,4 +1,5 @@
-//! Real extractors: poppler (`pdfinfo`, `pdftotext`, `pdftoppm`) and Tesseract.
+//! Real extractors: poppler (`pdfinfo`, `pdftotext`, `pdftoppm`, `pdfimages`) and
+//! Tesseract.
 
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -7,6 +8,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
+use super::images::{ImageExtractor, ImageInfo, parse_list};
 use super::{ExtractionConfig, ExtractionError, OcrEngine, PageText, TextExtractor, TextLine, tsv};
 use crate::domain::ExtractionMethod;
 
@@ -217,5 +219,67 @@ impl OcrEngine for TesseractOcr {
             self.config.ocr_dpi,
             &self.engine,
         )
+    }
+}
+
+/// `pdfimages -list` and `pdfimages -png -p` (poppler).
+#[derive(Debug, Clone)]
+pub struct PopplerImageExtractor {
+    engine: String,
+}
+
+impl PopplerImageExtractor {
+    /// Probes the installed poppler version.
+    pub async fn detect() -> Self {
+        Self {
+            engine: version("pdfimages", "-v").await,
+        }
+    }
+}
+
+impl ImageExtractor for PopplerImageExtractor {
+    fn engine_id(&self) -> String {
+        self.engine.clone()
+    }
+
+    async fn list_images(&self, pdf: &Path) -> Result<Vec<ImageInfo>, ExtractionError> {
+        let output = run("pdfimages", &["-list".as_ref(), pdf.as_os_str()]).await?;
+        parse_list(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    async fn extract_image(
+        &self,
+        pdf: &Path,
+        image: &ImageInfo,
+    ) -> Result<Vec<u8>, ExtractionError> {
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().join("img");
+        let n = image.page.to_string();
+        let args: [&std::ffi::OsStr; 8] = [
+            "-png".as_ref(),
+            "-p".as_ref(),
+            "-f".as_ref(),
+            n.as_ref(),
+            "-l".as_ref(),
+            n.as_ref(),
+            pdf.as_os_str(),
+            root.as_os_str(),
+        ];
+        run("pdfimages", &args).await?;
+        // With -p and one page, files are named <root>-<page:03>-<position:03>.png.
+        let file = scratch.path().join(format!(
+            "img-{:03}-{:03}.png",
+            image.page.get(),
+            image.position_on_page
+        ));
+        tokio::fs::read(&file)
+            .await
+            .map_err(|_| ExtractionError::Tool {
+                tool: "pdfimages",
+                reason: format!(
+                    "image {} of page {} was not written",
+                    image.position_on_page, image.page
+                ),
+            })
     }
 }
