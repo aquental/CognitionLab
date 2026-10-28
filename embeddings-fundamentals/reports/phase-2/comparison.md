@@ -4,7 +4,7 @@ Configurations differ in engine, weight format, or model, so differences are not
 
 ## Setup
 
-- Hardware: macos aarch64 · CPU Apple M3 Pro · 12 logical CPUs · 19327352832 bytes memory · accelerator cpu
+- Hardware: macos aarch64 · CPU Apple M3 · 8 logical CPUs · 17179869184 bytes memory · accelerator cpu
 - Corpus checksum: `sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6`
 - Query set: queries-v1 (`sha256:0ca4735dc8b960715916fc29ac76d8de577465e6ef232e69116d6053638ebbed`)
 - Labels: labels-synthetic-v1 (`sha256:c2f637cbaf5fbb1814f15c37c3251e543609b4e93da7639d388345c80c3f4b6a`)
@@ -29,9 +29,9 @@ Configurations differ in engine, weight format, or model, so differences are not
 
 | Experiment | Ingestion ms | ms/page | chunks/s | Batch latency ms | Embeds/s | Model load ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
-| p2-embed-anything-minilm | 2888.5 | 481.4 | 9.7 | 117.69 | 79.3 | 994.9 | 450.1 | 15.09 | 17.23 | 1641725952 bytes | 165702 bytes | unavailable (inference runs on the CPU; no GPU is used) |
-| p2-fastembed-minilm | 2831.6 | 471.9 | 9.9 | 107.21 | 87.1 | 3123.0 | 2465.5 | 26.54 | 27.89 | 5221335040 bytes | 164840 bytes | unavailable (inference runs on the CPU; no GPU is used) |
-| p2-fastembed-e5-base | 3297.5 | 549.6 | 8.5 | 248.05 | 37.6 | 6907.8 | 5453.4 | 48.61 | 51.61 | 7925219328 bytes | 298563 bytes | unavailable (inference runs on the CPU; no GPU is used) |
+| p2-embed-anything-minilm | 2833.1 | 472.2 | 9.9 | 130.56 | 71.5 | 12380.6 | 12531.0 | 15.69 | 17.27 | 1643429888 bytes | 165702 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p2-fastembed-minilm | 2915.4 | 485.9 | 9.6 | 122.61 | 76.1 | 26589.1 | 26731.7 | 30.75 | 34.51 | 3571269632 bytes | 164840 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p2-fastembed-e5-base | 3750.0 | 625.0 | 7.5 | 304.31 | 30.7 | 55756.2 | 56108.5 | 58.83 | 66.66 | 5448417280 bytes | 298563 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
 
 ## Cost and reliability
 
