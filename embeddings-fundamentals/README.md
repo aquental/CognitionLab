@@ -6,7 +6,7 @@ A project to investigate how reliably embeddings can retrieve information from P
 
 I am building this project as part of my portfolio for **AI engineering roles**, with a focus on information retrieval, multimodal systems, and the engineering needed to make model outputs measurable and traceable.
 
-> **Current stage: Phase 0 (scaffolding and BDD harness) implemented.** The Rust crate has deterministic identifiers, the embedding strategy contract with a fault-injectable deterministic adapter, a Cucumber runner whose required-scenario inventory is derived from the PRD, a synthetic fixture corpus, and CI. Ingestion, retrieval, the real engine adapters, and benchmark results are not implemented yet. The capabilities below describe the intended system; see `reports/progress/PROGRESS.md` for the current state.
+> **Current stage: Phase 1 (text baseline) implemented.** Searchable and scanned PDFs are ingested through native extraction or per-page OCR (poppler, Tesseract). A structure-aware chunker keeps each lab row with its header, embeddings come from EmbedAnything (multilingual MiniLM, pinned revision), revisions are published atomically to a filesystem store, and traceable text search is available from the CLI. The 18 `@m1` acceptance scenarios pass. Engine comparison, image retrieval, and fusion are not implemented yet, and all evidence so far comes from the **synthetic** fixture corpus. See `reports/progress/PROGRESS.md`.
 
 [Product requirements](spec/PRD.md) · [Implementation plan](spec/PLAN.md) · [Current source](src/main.rs)
 
@@ -94,7 +94,7 @@ The planned **Cucumber for Rust** suite maps Gherkin scenarios to `#[given]`, `#
 |---|---|---|
 | Specification | Requirements, architecture, acceptance scenarios, and implementation plan | Documented in `spec/` |
 | Phase 0 | Library/CLI structure, deterministic adapter, BDD harness, and CI | Implemented (see `reports/progress/PROGRESS.md`) |
-| Milestone 1 | PDF extraction, OCR, text embeddings, and traceable search | Planned |
+| Milestone 1 | PDF extraction, OCR, text embeddings, and traceable search | Implemented (synthetic corpus) |
 | Milestone 2 | Provider comparisons, retrieval metrics, and resource/cost reports | Planned |
 | Milestone 3 | Text-to-image retrieval and Portuguese query evaluation | Planned |
 | Milestone 4 | Rank fusion and publication of reproducible comparisons | Planned |
@@ -104,26 +104,40 @@ The current repository contains:
 ```text
 embeddings-fundamentals/
 ├── src/
-│   ├── ids.rs              # Canonical-JSON hashing and validated ID newtypes
-│   ├── domain.rs           # Shared enums (modality, execution)
-│   ├── embedding/          # Strategy trait, vector validation, deterministic adapter
-│   ├── tools.rs, cli.rs    # External-tool probe and the `doctor` command
+│   ├── ids.rs, domain.rs   # Canonical-JSON hashing, validated IDs, shared enums
+│   ├── corpus.rs           # Manifest, checksums, anonymization gate
+│   ├── extraction/         # pdftotext / per-page OCR (pdftoppm + tesseract TSV), fixture replay
+│   ├── chunking.rs         # structure-aware-v1: sections, lab rows with headers, token budgets
+│   ├── embedding/          # Strategy trait, validation, deterministic + EmbedAnything adapters
+│   ├── storage.rs          # Revisioned filesystem store, atomic pointer publish, snapshots
+│   ├── pipeline.rs         # Validation, per-source state machine, retries, run report
+│   ├── retrieval.rs        # Exact cosine search with space guard and deterministic ties
+│   ├── adapters.rs, config.rs, anonymization.rs, cli.rs
 │   └── main.rs             # Thin binary: parse, run, map to exit code
 ├── tests/
 │   ├── bdd.rs              # Cucumber suite; inventory derived from spec/PRD.md
 │   ├── bdd_selftest.rs     # Proves the runner fails on skipped/ambiguous/missing scenarios
 │   ├── integration.rs      # Real tools and engines (RUN_INTEGRATION=1)
-│   └── fixtures/corpus/    # Synthetic, invented lab reports and images + manifest
+│   ├── pipeline.rs         # Pipeline properties (idempotent skip, append-only snapshots)
+│   └── fixtures/           # Synthetic corpus, captured extraction, frozen rankings
 ├── examples/gen_fixtures.rs
-├── config/acceptance.toml  # Current acceptance milestone
+├── config/                 # Acceptance milestone and saved experiment configurations
 ├── reports/                # Progress records and adversarial review reports
 └── spec/                   # PRD, PLAN, execution prompt
 ```
 
 ```bash
-cargo test                 # unit, BDD, and runner self-tests
+cargo test                 # unit, pipeline, fixtures, BDD, and runner self-tests
 cargo run -- doctor        # check poppler and tesseract
+cargo run --features engine-embed-anything -- ingest \
+  --manifest tests/fixtures/corpus/manifest.toml \
+  --config config/experiments/baseline-text-embed-anything.toml --store store --experiment demo-1
+cargo run --features engine-embed-anything -- search \
+  --config config/experiments/baseline-text-embed-anything.toml --store store \
+  --query "Onde está o resultado da hemoglobina?" --limit 3
 ```
+
+On the synthetic corpus, the hemoglobin, glycemia, and creatinine queries rank the matching lab row first, from both the native and the OCR copy of the report. The "achados" (findings) query does not reach the findings paragraph of the ultrasound report. Low relevance is recorded as an experimental finding, not hidden. These are smoke observations; the formal evaluation arrives in Milestone 2.
 
 There is no ingestion or search demo to run yet. For a technical review, start with the [strategy contracts](spec/PLAN.md#2-core-contracts), [evaluation protocol](spec/PRD.md#9-evaluation-plan), and [reliability design](spec/PLAN.md#4-reliability--data-handling-design).
 

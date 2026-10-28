@@ -1,24 +1,39 @@
-//! Integration tests against real tools and providers (PLAN §5.3).
+//! Integration tests against real tools and engines (PLAN §5.3).
 //!
-//! These tests are `#[ignore]`d and also skip unless `RUN_INTEGRATION=1`, so the
+//! These tests are `#[ignore]`d and also fail fast unless `RUN_INTEGRATION=1`, so the
 //! default `cargo test` never depends on installed tools, downloads, or credentials.
-//! A test that did not run is reported as outstanding, never as passed.
+//! A test that did not run is outstanding, never passed.
 
+use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use embeddings_fundamentals::corpus::LoadedManifest;
+use embeddings_fundamentals::domain::{ExtractionMethod, SourceStatus};
+use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
+use embeddings_fundamentals::extraction::poppler::{PopplerTextExtractor, TesseractOcr};
+use embeddings_fundamentals::extraction::{ExtractionConfig, OcrEngine, TextExtractor};
+use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
+use embeddings_fundamentals::storage::FsRecordStore;
 use embeddings_fundamentals::tools;
 
-fn integration_enabled() -> bool {
-    std::env::var("RUN_INTEGRATION").is_ok_and(|v| v == "1")
+fn require_integration() {
+    assert!(
+        std::env::var("RUN_INTEGRATION").is_ok_and(|v| v == "1"),
+        "outstanding: set RUN_INTEGRATION=1 to run integration tests (not reported as passed)"
+    );
+}
+
+fn corpus(file: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/corpus")
+        .join(file)
 }
 
 #[tokio::test]
 #[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
 async fn required_external_tools_are_installed() {
-    // An integration test that did not run is outstanding, never passed: fail loudly
-    // when ignored tests are included without RUN_INTEGRATION=1.
-    assert!(
-        integration_enabled(),
-        "outstanding: set RUN_INTEGRATION=1 to run integration tests (not reported as passed)"
-    );
+    require_integration();
     let statuses = tools::probe(tools::REQUIRED_TOOLS).await;
     let missing: Vec<_> = statuses
         .iter()
@@ -26,4 +41,145 @@ async fn required_external_tools_are_installed() {
         .map(|s| s.name)
         .collect();
     assert!(missing.is_empty(), "missing external tools: {missing:?}");
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn real_tools_select_native_then_ocr_on_the_mixed_pdf() {
+    require_integration();
+    let manifest = LoadedManifest::load(&corpus("manifest.toml")).expect("manifest");
+    let mut manifest_one = manifest.clone();
+    manifest_one
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "us-mixed-003");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let text = PopplerTextExtractor::detect().await;
+    let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
+    let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+    let pipeline = Pipeline {
+        text: &text,
+        ocr: &ocr,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder,
+    };
+    let report = pipeline
+        .ingest(
+            &manifest_one,
+            &IngestSettings::new("integration-mixed".parse().expect("id")),
+        )
+        .await
+        .expect("ingest");
+    let source = &report.sources[0];
+    assert_eq!(
+        source.status,
+        SourceStatus::Succeeded,
+        "{:?}",
+        source.reason
+    );
+    let methods: Vec<_> = source.pages.iter().map(|p| p.method).collect();
+    assert_eq!(
+        methods,
+        vec![ExtractionMethod::Native, ExtractionMethod::Ocr]
+    );
+    assert!(
+        source.pages[1].confidence.is_some(),
+        "OCR page reports confidence"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn real_ocr_keeps_the_hemoglobin_row_together() {
+    require_integration();
+    let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
+    let page = ocr
+        .ocr_page(&corpus("lab-scanned-002.pdf"), NonZeroU32::MIN)
+        .await
+        .expect("ocr");
+    let row = page
+        .lines
+        .iter()
+        .find(|l| l.text.starts_with("Hemoglobina"))
+        .expect("a line starting with Hemoglobina");
+    for field in ["13,5", "g/dL", "12,0"] {
+        assert!(
+            row.text.contains(field),
+            "OCR row {:?} lacks {field}",
+            row.text
+        );
+    }
+    let bbox = row.bounding_box.as_ref().expect("OCR line box");
+    assert!(
+        bbox.x > 0.0 && bbox.y > 0.0 && bbox.x + bbox.w < 595.0,
+        "box in PDF points: {bbox:?}"
+    );
+    let text = PopplerTextExtractor::detect().await;
+    assert_eq!(
+        text.page_count(&corpus("lab-scanned-002.pdf"))
+            .await
+            .expect("pages")
+            .get(),
+        2
+    );
+}
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned model"]
+async fn embed_anything_adapter_loads_the_pinned_model_and_ranks_sensibly() {
+    use embeddings_fundamentals::config::ExperimentConfig;
+    use embeddings_fundamentals::embedding::TextInput;
+    require_integration();
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config/experiments/baseline-text-embed-anything.toml");
+    let config = ExperimentConfig::load(&config_path).expect("config");
+    let adapter = embeddings_fundamentals::adapters::build(&config.engine)
+        .await
+        .expect("load model");
+    let info = adapter.model_info();
+    assert_eq!(info.dimensions.get(), 384);
+    assert_eq!(
+        info.model_revision.as_deref(),
+        config.engine.model_revision.as_deref()
+    );
+    let docs = [
+        ("doc-hb", "Hemograma\nHemoglobina | 13,5 | g/dL | 12,0–16,0"),
+        (
+            "doc-gl",
+            "Bioquímica\nGlicemia de jejum | 92 | mg/dL | 70–99",
+        ),
+    ];
+    let inputs: Vec<TextInput> = docs
+        .iter()
+        .map(|(id, text)| TextInput {
+            id: id.parse().expect("id"),
+            text: (*text).to_owned(),
+        })
+        .collect();
+    let batch = adapter
+        .embed_documents(&inputs)
+        .await
+        .expect("embed documents");
+    let query = adapter
+        .embed_queries(&[TextInput {
+            id: "q".parse().expect("id"),
+            text: "Onde está o resultado da hemoglobina?".into(),
+        }])
+        .await
+        .expect("embed query");
+    let q = &query.embeddings[0].vector;
+    let score = |v: &[f32]| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
+    for e in &batch.embeddings {
+        let norm: f32 = e.vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-4, "vectors are normalized");
+    }
+    assert!(
+        score(&batch.embeddings[0].vector) > score(&batch.embeddings[1].vector),
+        "hemoglobin row should outrank glycemia for a hemoglobin query"
+    );
+    let budget = adapter.input_budget(embeddings_fundamentals::embedding::InputKind::Document);
+    assert_eq!(budget, Some(126), "128-token limit minus [CLS] and [SEP]");
 }

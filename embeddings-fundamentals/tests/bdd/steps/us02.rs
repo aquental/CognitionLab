@@ -30,7 +30,8 @@ struct Expected {
 }
 
 fn ranking() -> Result<Ranking> {
-    let text = std::fs::read_to_string(fixture("rankings/hemoglobina.toml")).context("read ranking")?;
+    let text =
+        std::fs::read_to_string(fixture("rankings/hemoglobina.toml")).context("read ranking")?;
     Ok(toml::from_str(&text)?)
 }
 
@@ -53,14 +54,26 @@ async fn text_index(world: &mut LabWorld) -> Result<()> {
 #[given(expr = "the expected ranking for {string} is frozen")]
 fn ranking_frozen(world: &mut LabWorld, query: String) -> Result<()> {
     let ranking = ranking()?;
-    ensure!(ranking.query == query, "frozen ranking is for {:?}", ranking.query);
+    ensure!(
+        ranking.query == query,
+        "frozen ranking is for {:?}",
+        ranking.query
+    );
     world.notes.insert("ranking".into(), query);
     Ok(())
 }
 
 async fn search(world: &mut LabWorld, query: &str, limit: usize) -> Result<()> {
     let space = world.embedder.model_info_space();
-    let outcome = search_text(&world.store, &space, &*world.embedder, query, limit, Scope::Active).await;
+    let outcome = search_text(
+        &world.store,
+        &space,
+        &*world.embedder,
+        query,
+        limit,
+        Scope::Active,
+    )
+    .await;
     world.search = Some(outcome.map_err(|e| e.to_string()));
     Ok(())
 }
@@ -102,7 +115,10 @@ fn three_in_order(world: &mut LabWorld) -> Result<()> {
             expected.score,
             hit.score
         );
-        ensure!(hit.modality == embeddings_fundamentals::domain::Modality::Text, "non-text result");
+        ensure!(
+            hit.modality == embeddings_fundamentals::domain::Modality::Text,
+            "non-text result"
+        );
     }
     Ok(())
 }
@@ -110,9 +126,15 @@ fn three_in_order(world: &mut LabWorld) -> Result<()> {
 #[then("each result includes its record ID, source ID, page number, chunk text, and score")]
 fn results_have_fields(world: &mut LabWorld) -> Result<()> {
     for hit in hits(world)? {
-        ensure!(!hit.record_id.as_str().is_empty() && !hit.source_id.as_str().is_empty(), "missing ids");
+        ensure!(
+            !hit.record_id.as_str().is_empty() && !hit.source_id.as_str().is_empty(),
+            "missing ids"
+        );
         ensure!(hit.page_number >= 1, "missing page number");
-        ensure!(hit.chunk_text.as_deref().is_some_and(|t| !t.is_empty()), "missing chunk text");
+        ensure!(
+            hit.chunk_text.as_deref().is_some_and(|t| !t.is_empty()),
+            "missing chunk text"
+        );
         ensure!(hit.score.is_finite(), "non-finite score");
     }
     Ok(())
@@ -122,7 +144,10 @@ fn results_have_fields(world: &mut LabWorld) -> Result<()> {
 async fn results_resolve(world: &mut LabWorld) -> Result<()> {
     let records = world.active_records()?;
     for hit in hits(world)?.clone() {
-        let record = records.iter().find(|r| r.record_id == hit.record_id).context("hit is not an active record")?;
+        let record = records
+            .iter()
+            .find(|r| r.record_id == hit.record_id)
+            .context("hit is not an active record")?;
         ensure!(
             record.source_id == hit.source_id && record.metadata.page_number == hit.page_number,
             "hit {} does not match its record",
@@ -148,8 +173,17 @@ fn empty_results(world: &mut LabWorld) -> Result<()> {
 
 #[then("no synthetic result or source reference is created")]
 fn nothing_created(world: &mut LabWorld) -> Result<()> {
-    ensure!(world.store.spaces()?.is_empty(), "the search created an index space");
-    ensure!(world.active_records()?.is_empty(), "the search created records");
-    ensure!(world.embedder.calls().is_empty(), "the search called the adapter on an empty index");
+    ensure!(
+        world.store.spaces()?.is_empty(),
+        "the search created an index space"
+    );
+    ensure!(
+        world.active_records()?.is_empty(),
+        "the search created records"
+    );
+    ensure!(
+        world.embedder.calls().is_empty(),
+        "the search called the adapter on an empty index"
+    );
     Ok(())
 }

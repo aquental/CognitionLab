@@ -149,7 +149,7 @@ Each ID is a newtype (`SourceId`, `ChunkId`, `RevisionId`, `RecordId`, `Embeddin
 | `ChunkingStrategy`, `TokenCounter`, `MetadataScrubber` | sync, CPU-bound | generic; large batches run in `spawn_blocking` | pure computation |
 | `Clock`, `MemoryProbe`, `GpuProbe`, `UsageSource` | sync | generic | cheap reads, replaced by fixtures in US-05 |
 
-The pipeline is generic over one `Components` bundle (`Pipeline<C: Components>`, where `Components` has associated types `Text`, `Ocr`, `Images`, `Store`, `Chunker`, `Sleeper`, `Clock`, `Memory`). This avoids an eight-parameter generic list, and the only `dyn` remains the embedding adapter.
+The pipeline is generic over the three components that tests replace: `Pipeline<'a, T: TextExtractor, O: OcrEngine, S: Sleeper>`. It holds the concrete `FsRecordStore` (fault injection is built into the store) and `Arc<dyn EmbeddingStrategy>`. *Phase 1 change:* the planned `Components` bundle with eight associated types was dropped as premature abstraction (`anti-over-abstraction`). Image, clock, and memory components are added as generic parameters when Phases 2–3 need them.
 
 ```rust
 // The single dyn-compatible async trait. `async fn` in traits is not dyn-compatible,
