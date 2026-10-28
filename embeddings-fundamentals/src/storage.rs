@@ -329,9 +329,23 @@ impl FsRecordStore {
             Some(Err(reason)) => {
                 // A damaged directory (missing or unreadable records) is quarantined under
                 // tmp/ and replaced, so a retry can heal it.
+                // The quarantine lives outside tmp/ (which `open` deletes), so the damaged
+                // bytes survive a crash or fault between this move and the install.
                 warn!(path = %target.display(), reason = %reason, "quarantining damaged revision");
-                let stale = staged.dir.with_extension("stale");
+                let quarantine = self.space_dir(&staged.space).join("quarantine");
+                fs::create_dir_all(&quarantine).map_err(io(&quarantine))?;
+                let stale = quarantine.join(format!(
+                    "{}-{}-{}",
+                    staged.source_id,
+                    staged.revision_id,
+                    staged
+                        .dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ));
                 fs::rename(&target, &stale).map_err(io(&target))?;
+                fsync_dir(&quarantine)?;
                 self.install(&staged, &target, &parent)?;
                 (
                     staged.records_checksum.clone(),
@@ -435,6 +449,27 @@ impl FsRecordStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(io(&path)(e)),
         }
+    }
+
+    /// Whether the active pointer of `source` names an intact revision: the records file
+    /// exists and its checksum equals the one recorded in the pointer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] when the pointer exists but cannot be read.
+    pub fn active_is_intact(
+        &self,
+        space: &EmbeddingSpaceId,
+        source: &SourceId,
+    ) -> Result<bool, StoreError> {
+        let Some(pointer) = self.active_pointer(space, source)? else {
+            return Ok(false);
+        };
+        let path = self
+            .revision_dir(space, source, &pointer.revision_id)
+            .join(RECORDS_FILE);
+        Ok(fs::read(&path)
+            .is_ok_and(|bytes| Checksum::of_bytes(&bytes) == pointer.records_checksum))
     }
 
     /// Active revisions of every source in `space`, sorted by source.
@@ -746,6 +781,33 @@ mod tests {
             store.publish(stage("exp-4")).expect("heal corrupt"),
             PublishOutcome::Installed { records: 2 }
         );
+    }
+
+    #[test]
+    fn a_fault_while_replacing_a_damaged_revision_keeps_its_bytes_outside_tmp() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let s1: SourceId = "S1".parse().expect("id");
+        {
+            let store = FsRecordStore::open(dir.path()).expect("open");
+            publish(&store, &s1, &rev(1), "exp-1").expect("publish");
+            let target = dir
+                .path()
+                .join(space().as_str())
+                .join("revisions/S1")
+                .join(rev(1).as_str());
+            fs::write(target.join(RECORDS_FILE), b"not json\n").expect("damage");
+            assert!(!store.active_is_intact(&space(), &s1).expect("intact"));
+            store.inject_fault(FaultPoint::BeforeRevisionRename);
+            assert!(publish(&store, &s1, &rev(1), "exp-2").is_err());
+        }
+        // Reopening deletes tmp/, but the quarantined directory survives.
+        let store = FsRecordStore::open(dir.path()).expect("reopen");
+        let quarantine = dir.path().join(space().as_str()).join("quarantine");
+        assert_eq!(fs::read_dir(&quarantine).expect("quarantine").count(), 1);
+        // A retry installs a fresh revision and the pointer resolves to parseable records.
+        publish(&store, &s1, &rev(1), "exp-3").expect("retry");
+        assert!(store.active_is_intact(&space(), &s1).expect("intact"));
+        assert_eq!(store.active_records(&space()).expect("records").len(), 2);
     }
 
     #[test]

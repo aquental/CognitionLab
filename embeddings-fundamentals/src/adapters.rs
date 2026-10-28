@@ -23,6 +23,14 @@ pub enum BuildError {
     /// The engine is planned for a later phase.
     #[error("engine {0} is not implemented yet")]
     NotImplemented(EngineId),
+    /// Real engines must pin an immutable model revision (PRD §6.4).
+    #[error("engine {engine} model {model} has no pinned model_revision")]
+    MissingRevision {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Model identifier.
+        model: String,
+    },
     /// The model could not be loaded.
     #[error("cannot load {engine} adapter: {reason}")]
     Load {
@@ -31,6 +39,20 @@ pub enum BuildError {
         /// Reason.
         reason: String,
     },
+}
+
+impl BuildError {
+    /// CLI exit code: configuration refusals map to
+    /// [`EXIT_VALIDATION`](crate::pipeline::EXIT_VALIDATION), load failures to 1.
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        match self {
+            Self::EngineNotCompiled { .. }
+            | Self::NotImplemented(_)
+            | Self::MissingRevision { .. } => crate::pipeline::EXIT_VALIDATION,
+            Self::Load { .. } => 1,
+        }
+    }
 }
 
 /// Builds the adapter selected by `config`. Callers must run the remote-permission
@@ -63,7 +85,15 @@ pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, 
             })?;
             Ok(Arc::new(adapter))
         }
-        EngineId::EmbedAnything => build_embed_anything(config).await,
+        EngineId::EmbedAnything => {
+            if config.model_revision.is_none() {
+                return Err(BuildError::MissingRevision {
+                    engine: config.engine,
+                    model: config.model_id.clone(),
+                });
+            }
+            build_embed_anything(config).await
+        }
         EngineId::FastEmbed | EngineId::OpenAi => Err(BuildError::NotImplemented(config.engine)),
     }
 }
@@ -125,10 +155,25 @@ mod tests {
         assert_eq!(adapter.model_info().model_id, "m");
     }
 
+    #[tokio::test]
+    async fn a_real_engine_without_a_pinned_revision_is_refused() {
+        let outcome = build(&config(EngineId::EmbedAnything)).await;
+        let err = outcome.err().expect("refused");
+        assert!(matches!(err, BuildError::MissingRevision { .. }), "{err}");
+        assert_eq!(err.exit_code(), crate::pipeline::EXIT_VALIDATION);
+        let load = BuildError::Load {
+            engine: EngineId::EmbedAnything,
+            reason: "tokenizer missing".into(),
+        };
+        assert_eq!(load.exit_code(), 1, "load failures are internal errors");
+    }
+
     #[cfg(not(feature = "engine-embed-anything"))]
     #[tokio::test]
     async fn missing_engine_feature_is_an_explicit_error() {
-        let outcome = build(&config(EngineId::EmbedAnything)).await;
+        let mut pinned = config(EngineId::EmbedAnything);
+        pinned.model_revision = Some("abc".into());
+        let outcome = build(&pinned).await;
         assert!(
             matches!(outcome, Err(BuildError::EngineNotCompiled { .. })),
             "expected EngineNotCompiled"

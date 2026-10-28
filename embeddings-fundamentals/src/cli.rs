@@ -210,6 +210,18 @@ fn anonymization_check(path: &Path) -> Result<ExitCode> {
     })
 }
 
+/// Reports an adapter build failure with the label and exit code of its kind.
+fn build_failure(error: &adapters::BuildError) -> ExitCode {
+    let code = error.exit_code();
+    let kind = if code == EXIT_VALIDATION {
+        "validation failed"
+    } else {
+        "error"
+    };
+    eprintln!("{kind}: {error}");
+    ExitCode::from(code)
+}
+
 /// Loads inputs and runs the checks that must precede adapter construction.
 fn preflight(
     args: &RunArgs,
@@ -238,10 +250,7 @@ async fn validate(args: &RunArgs) -> Result<ExitCode> {
     };
     let adapter = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
-        Err(e) => {
-            eprintln!("validation failed: {e}");
-            return Ok(ExitCode::from(EXIT_VALIDATION));
-        }
+        Err(e) => return Ok(build_failure(&e)),
     };
     let info = adapter.model_info();
     println!(
@@ -266,10 +275,7 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
     };
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
-        Err(e) => {
-            eprintln!("validation failed: {e}");
-            return Ok(ExitCode::from(EXIT_VALIDATION));
-        }
+        Err(e) => return Ok(build_failure(&e)),
     };
     let store = Arc::new(FsRecordStore::open(&args.store)?);
     let text = PopplerTextExtractor::detect().await;
@@ -335,21 +341,22 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
     }
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
-        Err(e) => {
-            eprintln!("validation failed: {e}");
-            return Ok(ExitCode::from(EXIT_VALIDATION));
-        }
+        Err(e) => return Ok(build_failure(&e)),
     };
-    let store = FsRecordStore::open(&args.store)?;
+    let (root, experiment) = (args.store.clone(), args.experiment.clone());
+    let (store, snapshot) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let store = FsRecordStore::open(&root)?;
+        let snapshot = experiment
+            .as_ref()
+            .map(|id| store.load_experiment(id))
+            .transpose()?;
+        Ok((Arc::new(store), snapshot))
+    })
+    .await??;
     let space = args
         .space
         .clone()
         .unwrap_or_else(|| embedder.model_info().embedding_space_id.clone());
-    let snapshot = args
-        .experiment
-        .as_ref()
-        .map(|id| store.load_experiment(id))
-        .transpose()?;
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
     let hits = search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await?;
     println!("{}", serde_json::to_string_pretty(&hits)?);

@@ -209,3 +209,60 @@ fn store_failures_are_internal_errors_not_refusals() {
     ));
     assert_eq!(err.exit_code(), 1);
 }
+
+#[tokio::test]
+async fn a_damaged_active_revision_is_rebuilt_on_the_next_ingestion() {
+    let mut manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    manifest
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "lab-searchable-001");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder: embedder.clone(),
+    };
+    let first = pipeline
+        .ingest(
+            &manifest,
+            &IngestSettings::new("run-1".parse().expect("id")),
+        )
+        .await
+        .expect("run 1");
+    let revision = first.sources[0].revision_id.clone().expect("revision");
+    let space = first.space.clone();
+    let records = store_dir
+        .path()
+        .join(space.as_str())
+        .join("revisions/lab-searchable-001")
+        .join(revision.as_str())
+        .join("records.jsonl");
+    for damage in [None, Some(&b"not json\n"[..])] {
+        match damage {
+            None => std::fs::remove_file(&records).expect("delete records"),
+            Some(bytes) => std::fs::write(&records, bytes).expect("corrupt records"),
+        }
+        let id = format!("run-{}", if damage.is_none() { 2 } else { 3 });
+        let report = pipeline
+            .ingest(&manifest, &IngestSettings::new(id.parse().expect("id")))
+            .await
+            .expect("run");
+        let source = &report.sources[0];
+        assert_eq!(
+            source.status,
+            SourceStatus::Succeeded,
+            "{:?}",
+            source.reason
+        );
+        assert!(!source.unchanged, "a damaged revision is not 'unchanged'");
+        assert_eq!(source.records_committed, 10, "the revision was rebuilt");
+        assert_eq!(store.active_records(&space).expect("readable").len(), 10);
+    }
+}
