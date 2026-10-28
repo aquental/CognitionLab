@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::adapters::BuildError;
 use crate::corpus::LoadedManifest;
 use crate::cost::{Billed, PriceTable, estimate};
-use crate::domain::{Execution, SourceStatus};
+use crate::domain::{Execution, RunStatus, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
 use crate::evaluation::{Dataset, EvalError, evaluate_text};
 use crate::extraction::{OcrEngine, TextExtractor};
@@ -30,10 +30,10 @@ use crate::fidelity::{self, LoadedSample};
 use crate::measurement::{
     Clock, Hardware, LatencyStats, MeasuredEmbedder, MemoryProbe, Observation, millis,
 };
-use crate::pipeline::{IngestSettings, Pipeline, Sleeper, ValidationError};
+use crate::pipeline::{IngestSettings, Pipeline, RunReport, Sleeper, ValidationError};
 use crate::report::{
-    ColdStart, ConfigurationResult, Costs, Fingerprints, IngestionMeasurement, Measurements,
-    QuerySideStart, Reliability,
+    ColdStart, ConfigurationResult, Costs, EvaluationNotRun, EvaluationNotRunStatus, Fingerprints,
+    IncompleteExperiment, IngestionMeasurement, Measurements, QuerySideStart, Reliability,
 };
 use crate::retrieval::{Scope, SearchError, search_text};
 use crate::storage::EvaluationProvenance;
@@ -104,6 +104,10 @@ pub enum ExperimentError {
     /// A blocking task failed.
     #[error("store task failed: {0}")]
     Task(String),
+    /// The ingestion was incomplete and a frozen label points into a failed source, so
+    /// the evaluation could not run. Carries the ingestion outcome to report (exit 2).
+    #[error("ingestion is incomplete and the evaluation could not run: {}", .0.evaluation.reason)]
+    EvaluationNotRun(Box<IncompleteExperiment>),
 }
 
 /// Runs one measured experiment. `build` constructs a fresh adapter for the selected
@@ -113,7 +117,9 @@ pub enum ExperimentError {
 ///
 /// Returns [`ExperimentError`] when the adapter cannot be built, ingestion is refused,
 /// or evaluation fails. An incomplete ingestion still yields a result whose
-/// `run_status` says so.
+/// `run_status` says so; when a frozen label points into a failed source the
+/// evaluation cannot run and [`ExperimentError::EvaluationNotRun`] carries the
+/// ingestion outcome instead.
 pub async fn run<T, O, S, C, M>(
     tools: Tools<'_, T, O, S>,
     store: &Arc<FsRecordStore>,
@@ -234,7 +240,27 @@ where
 
     // 3. One evaluation pass; its usage is the query-set cost.
     query_calls.clear();
-    let evaluation = evaluate_text(store, &space, &measured, inputs.dataset, scope).await?;
+    let evaluation = match evaluate_text(store, &space, &measured, inputs.dataset, scope).await {
+        Ok(evaluation) => evaluation,
+        Err(e @ EvalError::LabelNotApplicable { .. })
+            if report.run_status == RunStatus::Incomplete =>
+        {
+            return Err(ExperimentError::EvaluationNotRun(Box::new(
+                IncompleteExperiment {
+                    hardware: instruments.hardware.clone(),
+                    experiment_id,
+                    run_status: report.run_status,
+                    evaluation: EvaluationNotRun {
+                        status: EvaluationNotRunStatus::NotRun,
+                        reason: e.to_string(),
+                    },
+                    reliability: reliability(&report, embedding.failed_calls),
+                    ingestion: report,
+                },
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    };
     let query_usage = query_calls.summary(InputKind::Query).usage_tokens;
 
     // 4. Warm latency.
@@ -318,21 +344,25 @@ where
             ingestion: estimate(execution, billed, embedding.usage_tokens, inputs.price),
             query_set: estimate(execution, billed, query_usage, inputs.price),
         },
-        reliability: Reliability {
-            failed_sources: report
-                .sources
-                .iter()
-                .filter(|s| s.status == SourceStatus::Failed)
-                .count(),
-            failed_pages: report.unreadable_pages,
-            failed_batches: embedding.failed_calls,
-            retries: report.retries,
-            truncations: report.truncations,
-        },
+        reliability: reliability(&report, embedding.failed_calls),
         evaluation,
         measurements,
         fidelity,
     })
+}
+
+fn reliability(report: &RunReport, failed_batches: usize) -> Reliability {
+    Reliability {
+        failed_sources: report
+            .sources
+            .iter()
+            .filter(|s| s.status == SourceStatus::Failed)
+            .count(),
+        failed_pages: report.unreadable_pages,
+        failed_batches,
+        retries: report.retries,
+        truncations: report.truncations,
+    }
 }
 
 #[expect(

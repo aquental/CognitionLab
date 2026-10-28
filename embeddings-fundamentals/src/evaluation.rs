@@ -461,7 +461,9 @@ pub struct EvaluationReport {
 /// # Errors
 ///
 /// Returns [`EvalError::RankingMismatch`] unless there is exactly one ranking per
-/// frozen query, and [`EvalError::Fingerprint`] if the fingerprint fails.
+/// frozen query, [`EvalError::LabelNotApplicable`] when a judged text hit does not
+/// contain its label's anchor (the label belongs to other text), and
+/// [`EvalError::Fingerprint`] if the fingerprint fails.
 pub fn evaluate(
     mode: EvaluationMode,
     dataset: &Dataset,
@@ -490,7 +492,10 @@ pub fn evaluate(
             .enumerate()
             .map(|(i, hit)| {
                 let label = dataset.label(&query.id, &hit.chunk_id);
-                ResultEntry {
+                if let Some(l) = label {
+                    check_hit_applies(l, hit)?;
+                }
+                Ok(ResultEntry {
                     rank: i + 1,
                     record_id: hit.record_id.clone(),
                     source_id: hit.source_id.clone(),
@@ -506,9 +511,9 @@ pub fn evaluate(
                         || "unlabeled: not judged relevant for this query (label 0)".to_owned(),
                         |l| l.note.clone(),
                     ),
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, EvalError>>()?;
         let returned: Vec<u8> = results.iter().map(|r| r.label).collect();
         let metrics = Metrics {
             precision_at_3: precision_at_3(&returned),
@@ -550,11 +555,6 @@ pub fn evaluate(
     })
 }
 
-/// Runs every frozen query in text-only mode (top 3) and evaluates the results.
-///
-/// # Errors
-///
-/// Returns [`EvalError::Search`] when a query fails (for example a space mismatch).
 fn anchor_form(text: &str) -> String {
     text.nfc()
         .collect::<String>()
@@ -562,6 +562,24 @@ fn anchor_form(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+/// Refuses a judged text hit whose text does not contain the label's anchor.
+fn check_hit_applies(label: &Label, hit: &SearchHit) -> Result<(), EvalError> {
+    if hit.modality != Modality::Text {
+        return Ok(());
+    }
+    let text = hit.chunk_text.as_deref().unwrap_or_default();
+    let anchor = label.anchor.as_deref().unwrap_or_default();
+    if anchor_form(text).contains(&anchor_form(anchor)) {
+        Ok(())
+    } else {
+        Err(EvalError::LabelNotApplicable {
+            query: label.query.clone(),
+            item: label.item.clone(),
+            reason: "the returned chunk does not contain the label's anchor".to_owned(),
+        })
+    }
 }
 
 /// Refuses text labels that do not apply to `records` (the evaluated index): the
@@ -598,6 +616,13 @@ pub fn check_text_labels(dataset: &Dataset, records: &[Record]) -> Result<(), Ev
     Ok(())
 }
 
+/// Runs every frozen query in text-only mode (top 3) and evaluates the results.
+///
+/// # Errors
+///
+/// Returns [`EvalError::LabelNotApplicable`] when a text label does not apply to the
+/// evaluated index, and [`EvalError::Search`] when a query fails (for example a space
+/// mismatch).
 pub async fn evaluate_text(
     store: &Arc<FsRecordStore>,
     space: &EmbeddingSpaceId,
@@ -749,6 +774,48 @@ mod tests {
         // NFC, case, and whitespace differences still match.
         let ok = [record("s-p1-text-0", "Hemograma\n  HEMOGLOBINA  | 13,5")];
         check_text_labels(&dataset, &ok).expect("anchor matches");
+    }
+
+    fn hit(chunk: &str, text: &str) -> SearchHit {
+        let r = record(chunk, text);
+        SearchHit {
+            rank: 1,
+            record_id: r.record_id,
+            source_id: r.source_id,
+            source_file: r.metadata.source_file,
+            revision_id: r.revision_id,
+            chunk_id: r.chunk_id,
+            page_number: r.metadata.page_number,
+            modality: r.modality,
+            chunk_text: r.chunk_text,
+            asset_uri: r.asset_uri,
+            score: 0.9,
+        }
+    }
+
+    #[test]
+    fn public_evaluate_refuses_a_judged_hit_holding_other_text() {
+        // Regression (C2-1, round 2): the public operation, not only `evaluate_text`,
+        // must refuse a label whose chunk id now holds other text.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let rankings = |text: &str| {
+            BTreeMap::from([("q1".parse().expect("id"), vec![hit("s-p1-text-0", text)])])
+        };
+        let shifted = rankings("Hemograma\nHematócrito | 40,2 | % | 36,0–46,0");
+        assert!(matches!(
+            evaluate(
+                EvaluationMode::TextOnly,
+                &dataset,
+                vec![space.clone()],
+                &shifted
+            ),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        let intact = rankings("Hemograma\nHemoglobina | 13,5 | g/dL | 12,0–16,0");
+        let report = evaluate(EvaluationMode::TextOnly, &dataset, vec![space], &intact)
+            .expect("the anchor matches");
+        assert_eq!(report.queries[0].results[0].label, 2);
     }
 
     #[test]

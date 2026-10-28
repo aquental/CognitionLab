@@ -227,51 +227,73 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
     let mut overall = Accuracy::default();
     let mut mismatches = Vec::new();
     let mut not_found = 0;
-    // Lines already scored, per page, so no extracted line counts for two sample rows.
-    let mut used: std::collections::BTreeMap<_, std::collections::BTreeSet<usize>> =
-        std::collections::BTreeMap::new();
-    for row in &sample.sample.rows {
-        let page = pages
-            .iter()
-            .find(|p| p.source_id == row.source_id && p.page.page.get() == row.page)
-            .map(|p| &p.page);
-        let method = page
-            .map_or("missing", |p| match p.method {
-                ExtractionMethod::Native => "native",
-                ExtractionMethod::Ocr => "ocr",
-            })
-            .to_owned();
-        let lines: Vec<Vec<String>> = page
-            .map(|p| p.lines.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .map(|l| l.text.as_str())
-            .filter(|l| l.contains('|'))
-            .map(cells)
-            .collect();
-        let name = norm(&row.test_name).to_lowercase();
-        let value = norm(&row.value);
-        // Match by test name first. The value is only a fallback when exactly one line on
-        // the page carries it and no other sample row already claimed that line, so one
-        // extracted line is never scored as two rows.
-        let by_name = lines
-            .iter()
-            .position(|c| c.first().is_some_and(|n| n.to_lowercase() == name));
-        let by_value = || {
-            let mut matches = lines
+    let rows = &sample.sample.rows;
+    let prepared: Vec<(String, Vec<Vec<String>>)> = rows
+        .iter()
+        .map(|row| {
+            let page = pages
                 .iter()
-                .enumerate()
-                .filter(|(_, c)| c.get(1) == Some(&value))
-                .map(|(i, _)| i);
-            match (matches.next(), matches.next()) {
-                (Some(i), None) => Some(i),
-                _ => None,
+                .find(|p| p.source_id == row.source_id && p.page.page.get() == row.page)
+                .map(|p| &p.page);
+            let method = page
+                .map_or("missing", |p| match p.method {
+                    ExtractionMethod::Native => "native",
+                    ExtractionMethod::Ocr => "ocr",
+                })
+                .to_owned();
+            let lines = page
+                .map(|p| p.lines.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(|l| l.text.as_str())
+                .filter(|l| l.contains('|'))
+                .map(cells)
+                .collect();
+            (method, lines)
+        })
+        .collect();
+    // Lines claimed per page, so no extracted line counts for two sample rows. Exact
+    // name matches are reserved for the whole page first; the value is only a fallback
+    // for the remaining rows when exactly one line on the page carries it and no row
+    // claimed that line. The result does not depend on the order of the sample rows.
+    let mut claimed: BTreeMap<(SourceId, u32), std::collections::BTreeSet<usize>> = BTreeMap::new();
+    let mut assigned: Vec<Option<usize>> = vec![None; rows.len()];
+    for (slot, (row, (_, lines))) in assigned.iter_mut().zip(rows.iter().zip(&prepared)) {
+        let name = norm(&row.test_name).to_lowercase();
+        let taken = claimed
+            .entry((row.source_id.clone(), row.page))
+            .or_default();
+        *slot = lines
+            .iter()
+            .enumerate()
+            .find(|(i, c)| {
+                !taken.contains(i) && c.first().is_some_and(|n| n.to_lowercase() == name)
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = *slot {
+            taken.insert(i);
+        }
+    }
+    for (slot, (row, (_, lines))) in assigned.iter_mut().zip(rows.iter().zip(&prepared)) {
+        if slot.is_some() {
+            continue;
+        }
+        let value = norm(&row.value);
+        let mut matches = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.get(1) == Some(&value))
+            .map(|(i, _)| i);
+        if let (Some(i), None) = (matches.next(), matches.next()) {
+            let taken = claimed
+                .entry((row.source_id.clone(), row.page))
+                .or_default();
+            if taken.insert(i) {
+                *slot = Some(i);
             }
-        };
-        let page_key = (row.source_id.clone(), row.page);
-        let index = by_name
-            .or_else(by_value)
-            .filter(|i| used.entry(page_key.clone()).or_default().insert(*i));
+        }
+    }
+    for ((row, (method, lines)), index) in rows.iter().zip(&prepared).zip(assigned) {
         let found = index.and_then(|i| lines.get(i));
         if found.is_none() {
             not_found += 1;
@@ -398,6 +420,25 @@ mod tests {
         assert_eq!(report.rows_not_found, 1, "{report:?}");
         // Row 1: name wrong, value/unit/range right (3); row 2: all 4 right.
         assert_eq!(report.overall.correct, 7);
+    }
+
+    #[test]
+    fn a_name_match_wins_over_a_value_fallback_in_any_sample_order() {
+        // Regression (C2-11): only B's line was extracted; A shares B's value. The exact
+        // name match reserves the line for B whichever row comes first, and A is not
+        // credited with B's fields.
+        let records = [page("B | 92 | mg/dL | 70–99")];
+        let a = ("A", "92", "mg/dL", "70–99");
+        let b = ("B", "92", "mg/dL", "70–99");
+        for rows in [[a, b], [b, a]] {
+            let report = evaluate(&sample(&rows), &records);
+            assert_eq!(report.rows_not_found, 1, "{rows:?}: {report:?}");
+            assert_eq!(report.overall.correct, 4, "{rows:?}: {report:?}");
+            assert!(
+                report.mismatches.iter().all(|m| m.row == "A"),
+                "{rows:?}: B must score all four fields: {report:?}"
+            );
+        }
     }
 
     #[test]

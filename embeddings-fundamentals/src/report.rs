@@ -16,6 +16,7 @@ use crate::evaluation::{DatasetRef, EvaluationReport};
 use crate::fidelity::FidelityReport;
 use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint};
 use crate::measurement::{EmbeddingSummary, Hardware, LatencyStats, Observation};
+use crate::pipeline::RunReport;
 
 /// Wording used for every multi-configuration comparison.
 pub const COMPARISON_KIND: &str = "end-to-end configuration comparison";
@@ -169,6 +170,43 @@ pub struct ConfigurationResult {
     pub reliability: Reliability,
     /// Extraction fidelity of this run's extraction configuration.
     pub fidelity: Option<FidelityReport>,
+}
+
+/// Why an evaluation did not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationNotRunStatus {
+    /// The ingestion was incomplete and a frozen label points into what is missing.
+    NotRun,
+}
+
+/// The evaluation part of an [`IncompleteExperiment`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvaluationNotRun {
+    /// Always [`EvaluationNotRunStatus::NotRun`].
+    pub status: EvaluationNotRunStatus,
+    /// Why (label and chunk ids only, no document content).
+    pub reason: String,
+}
+
+/// An experiment whose ingestion was incomplete and whose evaluation could not run
+/// because a frozen label points into a failed source (PLAN §4.3: the run still
+/// reports its status and reliability counters, and exits with code 2). It is not a
+/// [`ConfigurationResult`] and cannot enter a comparison.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IncompleteExperiment {
+    /// Machine the run was taken on.
+    pub hardware: Hardware,
+    /// Experiment id of the ingestion run.
+    pub experiment_id: ExperimentId,
+    /// Ingestion status (always incomplete).
+    pub run_status: RunStatus,
+    /// The evaluation that did not run, and why.
+    pub evaluation: EvaluationNotRun,
+    /// Reliability counters of the ingestion.
+    pub reliability: Reliability,
+    /// The full ingestion report (per-source status, stage, and reason).
+    pub ingestion: RunReport,
 }
 
 /// A comparison of configurations evaluated on the same corpus and queries.
