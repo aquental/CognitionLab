@@ -129,7 +129,7 @@ None for Phase 0.
 
 ## Phase 2 — Milestone 2: Engine comparison (`@m2`)
 
-**Status:** implemented; merged to `main` as PR #5 at the owner's explicit request (2026-10-28, "pare e mescle os PRs"), **before** its adversarial reviews. Phase 2 is **not approved yet**. Review fixes go on branch `phase-2/review-fixes` (from `main` @ `44cf64a`); the review diff base is `3cdb355` (merge of PR #4, end of Phase 1).
+**Status:** ✅ APPROVED (2026-10-28). Implemented and merged to `main` as PR #5 at the owner's explicit request ("pare e mescle os PRs") **before** its adversarial reviews; the review fixes are on branch `phase-2/review-fixes` (from `main` @ `44cf64a`; review diff base `3cdb355`, merge of PR #4). Grok rounds 1–9 and Codex rounds 1–6 are complete; at `e0b873e` the final Grok round (9) and the final Codex round (6) both reported NO FINDINGS. 30 findings (G2-1..G2-9, C2-1..C2-21), all fixed with regression tests; see `reports/reviews/phase-2/FINDINGS.md`.
 
 **Intermittent `WriterBusy` — fixed (commit `ff4fde9`).** Cause confirmed by reproduction: `flock` belongs to the open file description, so a child spawned concurrently by any thread holds a copy of `.writer.lock` until its `exec` and keeps the lock alive after the writer drops it. A stress loop reproduced it (26 of 4000 opens). Fix: a POSIX record lock (`fcntl F_SETLK`, per-process, never inherited) plus an in-process registry of held roots, claimed before the lock file is opened (record locks do not exclude writers within one process, and closing any descriptor of the file would drop the lock). Regression tests: `writer_lock_is_released_on_drop_while_children_are_spawned` (time-based, 4 spawner threads; against the `main` code it fails 5/5 with 318–426 `WriterBusy`, against the fix it passes 5/5) and `writer_lock_excludes_another_process` (a re-executed lock-holder child; the parent must get `WriterBusy`). Full unit suite: 0 failures in 15 consecutive runs (previously about 1 in 10).
 
@@ -175,7 +175,7 @@ None for Phase 0.
 
 ### Outstanding (not claimed)
 - ~~Intermittent `WriterBusy` on store reopen~~: fixed, see the status paragraph above.
-- Reviews in progress: Grok rounds 1–3 (G2-1..G2-6, round 3 NO FINDINGS), Codex round 1 (C2-1..C2-9), Grok round 4 NO FINDINGS, Codex round 2 (C2-2..C2-9 CLOSED; C2-1 reopened; new C2-10..C2-12, all fixed). Grok round 5 raised G2-7..G2-9 (fixed); Grok round 6 NO FINDINGS; Codex round 3 closed C2-1, C2-10..C2-12 and raised C2-13..C2-16 (fixed); Grok round 7 NO FINDINGS; Codex round 4 closed C2-13..C2-16 and raised C2-17, C2-18 (fixed); Grok round 8 NO FINDINGS; Codex round 5 closed C2-17, C2-18 and raised C2-19..C2-21 (fixed); Grok round 9 then Codex round 6 confirm. See `reports/reviews/phase-2/FINDINGS.md`.
+- ~~Reviews~~: complete, Phase 2 approved (see Status).
 - Integration after the fixes: `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 10 passed after the Codex round-2 fixes, including the new CLI exit-2 test for C2-10 (2026-10-28). The OpenAI live test is not compiled without `engine-openai` and stays outstanding.
 - OpenAI live integration: no `OPENAI_API_KEY` and no owner authorization for remote processing.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
