@@ -1,0 +1,10 @@
+# Provider price table (PRD §11: prices per unit quantity, as published). Verify the
+# published price before relying on an estimate; a new price means a new version.
+version = "openai-embeddings-2026-10"
+provider = "openai"
+model = "text-embedding-3-small"
+currency = "USD"
+unit = "token"
+unit_quantity = 1000000
+unit_price = 0.02
+source = "https://openai.com/api/pricing (standard tier, as known on 2026-10-28)"

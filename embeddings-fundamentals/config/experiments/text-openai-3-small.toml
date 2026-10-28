@@ -1,0 +1,18 @@
+# Stage 2 remote comparison (PRD §10): OpenAI text-embedding-3-small. Runs only on a
+# corpus whose manifest sets remote_allowed = true and with OPENAI_API_KEY in .env.
+# The API has no commit hashes: the pin is the model snapshot name, and the adapter
+# refuses a response served by any other model.
+
+[engine]
+engine = "openai"
+model_id = "text-embedding-3-small"
+model_revision = "text-embedding-3-small"
+dimensions = 1536
+max_input_tokens = 8191
+prefix_policy = "none"
+
+[ingest]
+max_attempts = 3
+backoff_ms = 200
+batch_size = 32
+language = "pt-BR"

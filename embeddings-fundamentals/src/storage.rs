@@ -298,6 +298,24 @@ impl FsRecordStore {
             .join(format!("{source}.json"))
     }
 
+    /// Bytes on disk of the revisions active in `space` (records and seals): the index
+    /// that queries read. Retained older revisions, staging, and quarantine are excluded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] when a pointer or revision directory cannot be read.
+    pub fn index_size_bytes(&self, space: &EmbeddingSpaceId) -> Result<u64, StoreError> {
+        let mut total = 0_u64;
+        for revision in self.active(space)? {
+            let dir = self.revision_dir(space, &revision.source_id, &revision.revision_id);
+            for entry in std::fs::read_dir(&dir).map_err(io(&dir))? {
+                let path = entry.map_err(io(&dir))?.path();
+                total += std::fs::metadata(&path).map_err(io(&path))?.len();
+            }
+        }
+        Ok(total)
+    }
+
     /// Embedding spaces present in the store.
     ///
     /// # Errors

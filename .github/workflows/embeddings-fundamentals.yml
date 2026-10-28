@@ -43,6 +43,8 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Tests (unit, doc, fixtures, bdd, bdd_selftest)
         run: cargo test
+      - name: OpenAI adapter contract tests (local HTTP server, no network)
+        run: cargo test --features engine-openai --lib embedding::openai
       - name: Fixture corpus regenerates byte-identically (checked-in rasters, no poppler)
         run: |
           cargo run --example gen_fixtures -- --out "$RUNNER_TEMP/corpus"

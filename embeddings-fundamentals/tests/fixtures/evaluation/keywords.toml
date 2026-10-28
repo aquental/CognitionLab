@@ -1,0 +1,52 @@
+# Keyword axes for the US-03 / US-04 deterministic fixture index (synthetic corpus,
+# all 28 text chunks). DeterministicBuilder::with_keyword_vector gives a text that
+# contains a keyword (case-insensitive) the sum of its components and no hash noise;
+# texts without a keyword get hash vectors that are zero on axes 0..=10, so they score
+# exactly 0 against a keyword-only query. Dimensions: 16 (axes 11..15 carry hash noise).
+#
+# Every ranking below is derived by hand in tests/fixtures/metrics/text-only.toml.
+dimensions = 16
+
+[[keywords]]
+keyword = "hemoglobina"
+components = [[0, 1.0]]
+
+[[keywords]]
+keyword = "glicemia"
+components = [[1, 1.0]]
+
+[[keywords]]
+keyword = "creatinina"
+components = [[2, 1.0]]
+
+[[keywords]]
+keyword = "colesterol"
+components = [[3, 1.0]]
+
+[[keywords]]
+keyword = "triglicer"
+components = [[4, 1.0]]
+
+[[keywords]]
+keyword = "conclusão"
+components = [[5, 1.0]]
+
+[[keywords]]
+keyword = "laudo"
+components = [[6, 0.5]]
+
+[[keywords]]
+keyword = "achados"
+components = [[7, 1.0]]
+
+[[keywords]]
+keyword = "ultrassonografia"
+components = [[8, 1.0]]
+
+[[keywords]]
+keyword = "abdominal"
+components = [[9, 1.0]]
+
+[[keywords]]
+keyword = "técnica"
+components = [[10, 1.0]]

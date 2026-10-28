@@ -89,6 +89,10 @@ impl TokenCounter for WhitespaceTokenCounter {
     fn count(&self, text: &str) -> usize {
         text.split_whitespace().count()
     }
+
+    fn id(&self) -> &str {
+        "whitespace"
+    }
 }
 
 /// Builder for [`DeterministicEmbedder`].

@@ -126,3 +126,54 @@ None for Phase 0.
 
 ### Outstanding (not claimed)
 - Owner corpus, relevance labels, and fidelity sample: not supplied; evidence is synthetic.
+
+## Phase 2 — Milestone 2: Engine comparison (`@m2`)
+
+**Status:** implemented and validated locally; published as a draft PR on branch `phase-2/engine-comparison` (stacked on `phase-1/text-baseline`). **Adversarial reviews have not started** (Grok, then Codex; Codex may be skipped only on a usage-quota error, per the owner waiver). Phase 2 is not approved. Work stopped here at the owner's request (2026-10-28); see `handoff.md`.
+
+### Decisions and PLAN changes, with justification
+| Change | Justification |
+|---|---|
+| `embedding/local.rs`: one shared contract core (`LocalTextAdapter<B: TextBackend>`) for EmbedAnything and FastEmbed | Limits, prefix (applied once), blocking pool, and normalization live in one place and are unit-tested with a recording backend, without compiling an engine (PLAN Phase 2 step 1 "exact string sent to the backend") |
+| FastEmbed loads pinned files through `hf-hub` 0.5 + `try_new_from_user_defined` | The FastEmbed catalogue loader downloads `main`, which cannot be pinned. Downloads are serialized in-process and retry hf-hub's 5 s lock timeout (a real parallel-download failure was observed in the integration tests) |
+| Chunking fingerprint uses the tokenizer's content id (`hf-tokenizer:sha256:…`, `tiktoken:cl100k_base`, `whitespace`) instead of the model id | Chunk boundaries depend on the tokenizer and budget, not on the model name. Consequence: the Xenova MiniLM `tokenizer.json` differs byte-wise from the sentence-transformers one, so the two MiniLM runs have different chunking fingerprints even though the chunks are identical |
+| RoBERTa-family position limit = `max_position_embeddings − pad_token_id − 1` | E5-base (XLM-R) declares 514 positions but accepts 512 tokens |
+| OpenAI pin = model snapshot name; every response's `model` must equal it | The API has no commit hashes |
+| Retry classes for OpenAI: 408, 429, 5xx, timeouts, connection errors are transient | PLAN §0.1 |
+| `adapters::build_contract_test`: deterministic stand-in under the engine's identity | PRD §5.4 contract tests run the real orchestration without models or providers |
+| Contract runs share `max_input_tokens = 128` | The scenario fixes the pipeline configuration; the chunking budget must not vary with the stand-in |
+| Cold start = fresh query-side adapter load + the first frozen query (the discarded warm-up) | PRD §9.4 definition; ingestion model load is reported separately |
+| Labels key on `chunk_id` (space-independent); image items are labeled now | Labels stay frozen when image retrieval is evaluated (Milestone 3). Chunk ids `chest-001-p1-image-0`, `abd-us-001-p1-image-0`, and `us-mixed-003-p1-image-0` are therefore a commitment for Phase 3 |
+
+### Implementation
+- Adapters: FastEmbed (`engine-fastembed`, MiniLM ONNX and E5-base configs), OpenAI (`engine-openai`, reqwest, `cl100k_base` budget, key read only after the remote check, `.env.example`), shared `hf.rs`.
+- Pipeline: `IngestSettings.modality`; image runs check text-to-image and image capabilities before anything else (no extraction, adapter call, or store write).
+- Retrieval: `search_vector` with the space guard before any read; dimension check.
+- `evaluation`: frozen `queries-v1` (10 queries) and `labels-synthetic-v1`; P@3/Hit@3/nDCG@3 per PRD §5.3; checksums; evaluation fingerprint; unpadded results with notes.
+- `measurement`: `Clock`/`ManualClock`, `MemoryProbe`/`RusageProbe` (`nix`), nearest-rank stats, `MeasuredEmbedder` decorator, hardware detection. `cost`: versioned price tables; null with a reason when usage or price is missing. `fidelity`: field-level accuracy per extraction method. Store: index size of the active revisions.
+- `experiment::run` and `report` (JSON + Markdown, "end-to-end configuration comparison", refuses non-comparable inputs). CLI: `experiment`, `report`; `search` accepts `--manifest` for a remote engine's permission check.
+- BDD milestone 2: `us03` (text-only + low relevance), `us04` (3 engines, image rejection, separate spaces), `us05` (3 scenarios). Fixtures: keyword-vector index (`tests/fixtures/evaluation/keywords.toml`), hand-derived ranks, metrics precomputed by `scripts/precompute-metrics.py`, controlled measurements (`tests/fixtures/measurements/expected.toml`), test price table.
+
+### Acceptance criteria (PLAN Phase 2 exit)
+| Criterion | Evidence |
+|---|---|
+| All `@m1` + `@m2` pass | `bdd inventory: milestone 2, 28 required, 31 executed`; 31 scenarios / 191 steps passed |
+| Three text configurations evaluated | `reports/phase-2/comparison.md`: EmbedAnything MiniLM, FastEmbed MiniLM, FastEmbed E5-base, real runs on the **synthetic** corpus |
+| Integration report exists, or remote marked outstanding | 9 real integration tests pass (local); OpenAI live run **outstanding** |
+
+### Validation (local, 2026-10-28)
+- fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
+- `cargo test`: 101 unit, 8 pipeline, 2 fixtures, BDD 31 scenarios, self-test 0 mismatches. **Intermittent failure observed (not fixed):** `storage::tests::abandoned_staging_is_removed_on_open_and_never_visible` failed with `WriterBusy` on reopen in 2 of about 12 full `cargo test --lib` runs. It never failed alone (6 of 6 passed). Unconfirmed hypothesis: a child process spawned concurrently by another test inherits the `.writer.lock` descriptor, so the `flock` outlives the dropped store. A real writer could hit the same race. `cargo test --features engine-openai --lib embedding::openai`: 5 passed (local HTTP server).
+- `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 9 passed, including FastEmbed MiniLM and E5 loads, cross-engine MiniLM cosine > 0.99, and the E5 prefix budget.
+- BDD mutation checks (each fails at least one scenario): linear nDCG gain; relevance threshold 2; no text-to-image check; no space guard in `search_vector`; unscaled price; provider memory not reported; cold first query dropped; chunking fingerprint keyed by model (3 fail); token usage off by one (2 fail).
+- Real runs (release build, Apple M3 Pro, CPU): macro P@3 / Hit@3 / nDCG@3 = 0.333 / 0.500 / 0.409 (both MiniLM engines, identical rankings) and 0.433 / 0.700 / 0.540 (E5-base). Fidelity on the synthetic sample: native 1.000, OCR 0.688 (en dashes read as hyphens, `/mm³` read as `/mms` and `/mm?`, missing accents).
+
+### rust-skills applied
+`trait-object-safety` (only `EmbeddingStrategy` is dyn; the `MeasuredEmbedder` decorator implements it), `trait-dyn-vs-generic` (`LocalTextAdapter<B>` static over the backend), `async-spawn-blocking` (inference, downloads, store reads), `async-async-fn-bounds` (`experiment::run` takes `impl AsyncFn`), `num-float-compare`, `num-cast-try-from`, `serde-deny-unknown-fields`, `type-newtype-ids` (`QueryId`), `err-thiserror-lib`, `api-must-use`. Lint suppressions use `#[expect(..., reason)]`.
+
+### Outstanding (not claimed)
+- Intermittent `WriterBusy` on store reopen (see Validation): investigate and fix first.
+- Grok and Codex reviews of Phase 2 (not started).
+- OpenAI live integration: no `OPENAI_API_KEY` and no owner authorization for remote processing.
+- Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
+- The price in `config/prices/openai-embeddings-2026-10.toml` must be verified against the published price before an OpenAI estimate is reported.

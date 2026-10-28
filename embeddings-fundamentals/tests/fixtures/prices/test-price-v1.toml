@@ -1,0 +1,9 @@
+# Versioned price table used by the US-05 BDD scenarios (not a real published price).
+version = "test-price-v1"
+provider = "openai"
+model = "text-embedding-3-small"
+currency = "USD"
+unit = "token"
+unit_quantity = 1000000
+unit_price = 0.13
+source = "BDD fixture"
