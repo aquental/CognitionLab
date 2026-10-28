@@ -808,6 +808,15 @@ mod tests {
                 "{input:?} normalized to {v:?}"
             );
         }
+        // IEEE 754 floats are sign-symmetric: f32::MIN.abs() == f32::MAX (unlike integers).
+        assert_eq!(f32::MIN.abs().to_bits(), f32::MAX.to_bits());
+        for input in [vec![f32::MIN, 0.0], vec![f32::MIN, f32::MIN]] {
+            let mut v = input.clone();
+            l2_normalize(&mut v);
+            let norm = v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+            approx::assert_abs_diff_eq!(norm, 1.0, epsilon = 1e-6);
+            assert!(v[0] < 0.0, "{input:?} normalized to {v:?}");
+        }
         let mut tiny = vec![1e-8_f32, 0.0];
         l2_normalize(&mut tiny);
         approx::assert_abs_diff_eq!(tiny[0], 1.0, epsilon = 1e-6);
