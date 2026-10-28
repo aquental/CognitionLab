@@ -358,6 +358,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_shipped_text_and_image_stand_ins_live_in_different_spaces() {
+        // Regression (G3-5): same engine, model id, and dimensions, different model kind.
+        let load = |file: &str| {
+            crate::config::ExperimentConfig::load(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("config/experiments")
+                    .join(file),
+            )
+            .expect("config")
+            .engine
+        };
+        let text = build(&load("deterministic.toml")).await.expect("text");
+        let image = build(&load("image-deterministic.toml"))
+            .await
+            .expect("image");
+        assert_eq!(text.model_info().model_id, image.model_info().model_id);
+        assert_ne!(
+            text.model_info().embedding_space_id,
+            image.model_info().embedding_space_id
+        );
+    }
+
+    #[tokio::test]
     async fn a_cross_modal_kind_selects_a_text_to_image_adapter() {
         let mut cross = config(EngineId::Deterministic);
         cross.model_kind = ModelKind::TextToImage;
