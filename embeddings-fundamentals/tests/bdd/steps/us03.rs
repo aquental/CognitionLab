@@ -16,7 +16,7 @@ use super::eval_fixture::{self, repo};
 use crate::{LabWorld, SpaceOf, fixture};
 
 const QUERIES: &str = "config/evaluation/queries-v1.toml";
-const LABELS: &str = "config/evaluation/labels-synthetic-v1.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v2.toml";
 const IMAGE_ONLY_LABELS: &str = "tests/fixtures/evaluation/labels-images-only.toml";
 
 /// Checksum of a file computed here, independently of the library.
@@ -258,9 +258,7 @@ async fn low_relevance(world: &mut LabWorld) -> Result<()> {
 
 #[when("I generate the comparison report")]
 fn generate_report(world: &mut LabWorld) -> Result<()> {
-    let hardware = eval_fixture::controlled()?.hardware;
     let report = ComparisonReport::new(
-        hardware,
         world.configs.clone(),
         vec!["synthetic fixture corpus".to_owned()],
     )?;

@@ -26,6 +26,17 @@ use serde::{Deserialize, Serialize};
 use crate::domain::Execution;
 use crate::ids::{EmbeddingSpaceId, IdError, ItemId};
 
+/// Whether `revision` is an immutable Hugging Face Hub revision: a full 40-character
+/// lowercase hexadecimal commit id. Branch and tag names (`main`, `v1`) can move, so
+/// the same embedding space id could then stand for different weights (PRD §6.4).
+#[must_use]
+pub fn is_immutable_hub_revision(revision: &str) -> bool {
+    revision.len() == 40
+        && revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Canonical engine identifiers used in records, configuration, and reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -593,6 +604,23 @@ pub fn l2_normalize(vector: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_full_commit_ids_are_immutable_hub_revisions() {
+        assert!(is_immutable_hub_revision(
+            "2c4055b12046f11709e9df2c122e59ffbdc2f900"
+        ));
+        for moving in [
+            "main",
+            "v1.0",
+            "2c4055b",
+            "2C4055B12046F11709E9DF2C122E59FFBDC2F900",
+            "2c4055b12046f11709e9df2c122e59ffbdc2f90g",
+            "",
+        ] {
+            assert!(!is_immutable_hub_revision(moving), "{moving}");
+        }
+    }
 
     fn info(dims: usize) -> ModelInfo {
         ModelInfo::from_descriptor(SpaceDescriptor {

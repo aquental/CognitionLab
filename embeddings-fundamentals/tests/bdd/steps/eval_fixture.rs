@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use embeddings_fundamentals::adapters::BuildError;
 use embeddings_fundamentals::cost::PriceTable;
 use embeddings_fundamentals::embedding::EmbeddingStrategy;
-use embeddings_fundamentals::embedding::deterministic::DeterministicBuilder;
+use embeddings_fundamentals::embedding::deterministic::{DeterministicBuilder, WorkCost};
 use embeddings_fundamentals::evaluation::Dataset;
 use embeddings_fundamentals::experiment::{self, ExperimentInputs, Instruments, Tools};
 use embeddings_fundamentals::fidelity::LoadedSample;
@@ -76,7 +76,9 @@ pub fn add_pdf_corpus(world: &mut LabWorld) -> Result<()> {
 /// Controlled observations of `tests/fixtures/measurements/expected.toml`.
 #[derive(Debug, Deserialize)]
 pub struct Controlled {
-    pub tick_ms: u64,
+    pub model_load_ms: u64,
+    pub call_ms: u64,
+    pub item_ms: u64,
     pub peak_rss_bytes: u64,
     pub latency_repeats: usize,
     pub hardware: embeddings_fundamentals::measurement::Hardware,
@@ -90,7 +92,9 @@ pub fn controlled() -> Result<Controlled> {
     Ok(toml::from_str(&text)?)
 }
 
-/// Runs one measured experiment with a fresh `ManualClock` and a fixed memory probe.
+/// Runs one measured experiment with a fresh `ManualClock` and a fixed memory probe. The
+/// clock moves only inside controlled work: each model load (`build`) and each adapter
+/// call, so a timer that does not enclose its operation measures zero.
 pub async fn measured_run(
     world: &mut LabWorld,
     builder: DeterministicBuilder,
@@ -111,11 +115,22 @@ pub async fn measured_run(
     } else {
         None
     };
+    let clock = Arc::new(ManualClock::new());
+    let builder = builder.work(
+        Arc::clone(&clock),
+        WorkCost {
+            per_call: Duration::from_millis(controlled.call_ms),
+            per_item: Duration::from_millis(controlled.item_ms),
+        },
+    );
+    let model_load = Duration::from_millis(controlled.model_load_ms);
     let instruments = Instruments {
-        clock: Arc::new(ManualClock::new(Duration::from_millis(controlled.tick_ms))),
-        memory: Arc::new(FixedMemory(Some(controlled.peak_rss_bytes))),
+        clock: Arc::clone(&clock),
+        memory: FixedMemory(Some(controlled.peak_rss_bytes)),
+        hardware: controlled.hardware.clone(),
     };
     let build = async || -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+        clock.advance(model_load);
         let adapter = builder.clone().build().map_err(|e| BuildError::Load {
             engine: embeddings_fundamentals::embedding::EngineId::Deterministic,
             reason: e.to_string(),

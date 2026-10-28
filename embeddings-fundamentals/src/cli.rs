@@ -56,7 +56,7 @@ pub enum Command {
 }
 
 /// Arguments of `experiment`.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ExperimentArgs {
     /// Corpus manifest, configuration, store, and experiment id.
     #[command(flatten)]
@@ -65,7 +65,7 @@ pub struct ExperimentArgs {
     #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
     pub queries: PathBuf,
     /// Frozen relevance labels.
-    #[arg(long, default_value = "config/evaluation/labels-synthetic-v1.toml")]
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v2.toml")]
     pub labels: PathBuf,
     /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
     #[arg(long, default_value_t = 20)]
@@ -79,7 +79,7 @@ pub struct ExperimentArgs {
 }
 
 /// Arguments of `report`.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ReportArgs {
     /// Experiment result files written by `experiment --report`, in report order.
     #[arg(long = "result", required = true)]
@@ -96,7 +96,7 @@ pub struct ReportArgs {
 }
 
 /// Arguments naming a manifest.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ManifestArgs {
     /// Corpus manifest (`manifest.toml`).
     #[arg(long)]
@@ -104,7 +104,7 @@ pub struct ManifestArgs {
 }
 
 /// Arguments of a run.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct RunArgs {
     /// Corpus manifest.
     #[arg(long)]
@@ -115,7 +115,7 @@ pub struct RunArgs {
 }
 
 /// Arguments of `ingest`.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct IngestArgs {
     /// Corpus manifest and configuration.
     #[command(flatten)]
@@ -167,14 +167,33 @@ pub struct SearchArgs {
 pub async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Doctor => doctor().await,
-        Command::Manifest(args) => manifest_check(&args.manifest),
-        Command::AnonymizationCheck(args) => anonymization_check(&args.manifest),
+        Command::Manifest(args) => blocking(move || manifest_check(&args.manifest)).await,
+        Command::AnonymizationCheck(args) => {
+            blocking(move || anonymization_check(&args.manifest)).await
+        }
         Command::Validate(args) => validate(&args).await,
         Command::Ingest(args) => ingest(&args).await,
         Command::Search(args) => search(&args).await,
         Command::Experiment(args) => experiment(&args).await,
-        Command::Report(args) => report(&args),
+        Command::Report(args) => blocking(move || report(&args)).await,
     }
+}
+
+/// Runs synchronous file and store work on the blocking pool (PLAN §2.3), never on a
+/// runtime worker.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .context("blocking task failed")?
+}
+
+/// Opens the store for writing (directory setup and abandoned-staging cleanup) on the
+/// blocking pool.
+async fn open_writer(root: &Path) -> Result<Arc<FsRecordStore>> {
+    let root = root.to_owned();
+    blocking(move || Ok(Arc::new(FsRecordStore::open_writer(&root)?))).await
 }
 
 async fn doctor() -> Result<ExitCode> {
@@ -272,12 +291,19 @@ fn build_failure(error: &adapters::BuildError) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// Loads inputs and runs the checks that must precede adapter construction.
-fn preflight(
+/// Loads inputs (on the blocking pool) and runs the checks that must precede adapter
+/// construction.
+async fn preflight(
     args: &RunArgs,
 ) -> Result<Result<(LoadedManifest, ExperimentConfig), ValidationError>> {
-    let manifest = LoadedManifest::load(&args.manifest)?;
-    let config = ExperimentConfig::load(&args.config)?;
+    let (manifest, config) = (args.manifest.clone(), args.config.clone());
+    let (manifest, config) = blocking(move || {
+        Ok((
+            LoadedManifest::load(&manifest)?,
+            ExperimentConfig::load(&config)?,
+        ))
+    })
+    .await?;
     let engine = &config.engine;
     // Permission is checked before any adapter (and so any remote client or
     // credential) is constructed (PLAN §4.4).
@@ -291,7 +317,7 @@ fn preflight(
 }
 
 async fn validate(args: &RunArgs) -> Result<ExitCode> {
-    let (manifest, config) = match preflight(args)? {
+    let (manifest, config) = match preflight(args).await? {
         Ok(inputs) => inputs,
         Err(e) => {
             eprintln!("validation failed: {e}");
@@ -323,7 +349,7 @@ async fn validate(args: &RunArgs) -> Result<ExitCode> {
 }
 
 async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
-    let (manifest, config) = match preflight(&args.run)? {
+    let (manifest, config) = match preflight(&args.run).await? {
         Ok(inputs) => inputs,
         Err(e) => {
             eprintln!("validation failed: {e}");
@@ -334,7 +360,7 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
     };
-    let store = Arc::new(FsRecordStore::open_writer(&args.store)?);
+    let store = open_writer(&args.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
     let pipeline = Pipeline {
@@ -358,13 +384,32 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(code));
         }
     };
-    let json = serde_json::to_string_pretty(&report)?;
-    match &args.report {
+    write_json(args.report.as_deref(), &report).await?;
+    print_sources(&report);
+    eprintln!(
+        "run {}: {}",
+        report.experiment_id,
+        report.run_status.as_str()
+    );
+    Ok(ExitCode::from(report.exit_code()))
+}
+
+/// Writes `value` as pretty JSON to `path`, or to stdout when no path is given.
+async fn write_json<T: serde::Serialize>(path: Option<&Path>, value: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(value)?;
+    match path {
         Some(path) => {
-            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?
+            tokio::fs::write(path, json)
+                .await
+                .with_context(|| format!("write {}", path.display()))?;
         }
         None => println!("{json}"),
     }
+    Ok(())
+}
+
+/// Prints one status line per source (ids, stages, and counts only).
+fn print_sources(report: &crate::pipeline::RunReport) {
     for source in &report.sources {
         eprintln!(
             "{:<20} {:<15} stage={:<11} attempts={} records={}{}",
@@ -380,16 +425,11 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
                 .unwrap_or_default()
         );
     }
-    eprintln!(
-        "run {}: {}",
-        report.experiment_id,
-        report.run_status.as_str()
-    );
-    Ok(ExitCode::from(report.exit_code()))
 }
 
 async fn search(args: &SearchArgs) -> Result<ExitCode> {
-    let config = ExperimentConfig::load(&args.config)?;
+    let path = args.config.clone();
+    let config = blocking(move || Ok(ExperimentConfig::load(&path)?)).await?;
     let engine = &config.engine;
     if engine.engine.execution() == crate::domain::Execution::Remote {
         // The permission model is per corpus: a remote query model needs the manifest
@@ -400,7 +440,8 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
             );
             return Ok(ExitCode::from(EXIT_VALIDATION));
         };
-        let manifest = LoadedManifest::load(path)?;
+        let path = path.clone();
+        let manifest = blocking(move || Ok(LoadedManifest::load(&path)?)).await?;
         if let Err(e) = check_remote_permission(
             &manifest,
             engine.engine.execution(),
@@ -437,7 +478,7 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
 
 async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     use crate::experiment::{ExperimentError, ExperimentInputs, Instruments, Tools};
-    let (manifest, config) = match preflight(&args.ingest.run)? {
+    let (manifest, config) = match preflight(&args.ingest.run).await? {
         Ok(inputs) => inputs,
         Err(e) => {
             eprintln!("validation failed: {e}");
@@ -448,24 +489,31 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
         eprintln!("validation failed: --latency-repeats must be at least 1");
         return Ok(ExitCode::from(EXIT_VALIDATION));
     };
-    let dataset = crate::evaluation::Dataset::load(&args.queries, &args.labels)?;
-    let price = args
-        .price
-        .as_deref()
-        .map(crate::cost::PriceTable::load)
-        .transpose()?;
-    let fidelity = args
-        .fidelity
-        .as_deref()
-        .map(crate::fidelity::LoadedSample::load)
-        .transpose()?;
-    let store = Arc::new(FsRecordStore::open_writer(&args.ingest.store)?);
+    let inputs = args.clone();
+    let (dataset, price, fidelity) = blocking(move || {
+        Ok((
+            crate::evaluation::Dataset::load(&inputs.queries, &inputs.labels)?,
+            inputs
+                .price
+                .as_deref()
+                .map(crate::cost::PriceTable::load)
+                .transpose()?,
+            inputs
+                .fidelity
+                .as_deref()
+                .map(crate::fidelity::LoadedSample::load)
+                .transpose()?,
+        ))
+    })
+    .await?;
+    let store = open_writer(&args.ingest.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
     let settings = config.ingest_settings(args.ingest.experiment.clone());
     let instruments = Instruments {
         clock: Arc::new(crate::measurement::SystemClock::new()),
-        memory: Arc::new(crate::measurement::RusageProbe),
+        memory: crate::measurement::RusageProbe,
+        hardware: crate::measurement::Hardware::detect().await,
     };
     let outcome = crate::experiment::run(
         Tools {
@@ -489,6 +537,17 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let result = match outcome {
         Ok(result) => result,
         Err(ExperimentError::Build(e)) => return Ok(build_failure(&e)),
+        Err(ExperimentError::EvaluationNotRun(incomplete)) => {
+            write_json(args.ingest.report.as_deref(), &incomplete).await?;
+            eprintln!(
+                "experiment {}: {} | evaluation not run: {}",
+                incomplete.experiment_id,
+                incomplete.run_status.as_str(),
+                incomplete.evaluation.reason
+            );
+            print_sources(&incomplete.ingestion);
+            return Ok(ExitCode::from(EXIT_INCOMPLETE));
+        }
         Err(ExperimentError::Validation(e)) => {
             let code = e.exit_code();
             let kind = if code == EXIT_VALIDATION {
@@ -501,13 +560,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
         }
         Err(e) => return Err(e.into()),
     };
-    let json = serde_json::to_string_pretty(&result)?;
-    match &args.ingest.report {
-        Some(path) => {
-            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
-        }
-        None => println!("{json}"),
-    }
+    write_json(args.ingest.report.as_deref(), &result).await?;
     let m = &result.evaluation.metrics;
     eprintln!(
         "experiment {}: {} | P@3 {:.4} Hit@3 {:.4} nDCG@3 {:.4} | ingestion {:.0} ms | warm median {:.2} ms",
@@ -534,11 +587,7 @@ fn report(args: &ReportArgs) -> Result<ExitCode> {
             serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
         );
     }
-    let report = match crate::report::ComparisonReport::new(
-        crate::measurement::Hardware::detect(),
-        results,
-        args.notes.clone(),
-    ) {
+    let report = match crate::report::ComparisonReport::new(results, args.notes.clone()) {
         Ok(report) => report,
         Err(e) => {
             eprintln!("validation failed: {e}");
@@ -550,4 +599,40 @@ fn report(args: &ReportArgs) -> Result<ExitCode> {
     std::fs::write(&args.markdown, report.to_markdown())
         .with_context(|| format!("write {}", args.markdown.display()))?;
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_work_does_not_stall_the_runtime_worker() {
+        // Regression (C2-15): store opening and report I/O go through `blocking`; slow
+        // synchronous work there must leave the single runtime worker free.
+        let ticks = async {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+            for _ in 0..5 {
+                interval.tick().await;
+            }
+            std::time::Instant::now()
+        };
+        let work = blocking(|| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            Ok(std::time::Instant::now())
+        });
+        let (ticked, done) = tokio::join!(ticks, work);
+        let done = done.expect("blocking work");
+        assert!(
+            ticked < done,
+            "the timer must finish while the blocking work still sleeps"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_writer_store_opens_on_the_blocking_pool() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_writer(dir.path()).await.expect("store");
+        drop(store);
+        open_writer(dir.path()).await.expect("reopened after drop");
+    }
 }

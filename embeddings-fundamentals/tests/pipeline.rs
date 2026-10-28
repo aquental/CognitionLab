@@ -384,3 +384,52 @@ async fn search_refuses_a_damaged_revision_in_both_scopes() {
         }
     }
 }
+
+#[tokio::test]
+async fn search_vector_refuses_non_finite_query_vectors_before_scoring() {
+    // Regression (C2-5): the matching-space vector path checked space and size only.
+    use embeddings_fundamentals::embedding::EmbeddingStrategy as _;
+    use embeddings_fundamentals::retrieval::{Scope, SearchError, search_vector};
+    let mut manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    manifest
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "lab-searchable-001");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder: embedder.clone(),
+    };
+    pipeline
+        .ingest(
+            &manifest,
+            &IngestSettings::new("run-1".parse().expect("id")),
+        )
+        .await
+        .expect("ingest");
+    let info = embedder.model_info();
+    let space = info.embedding_space_id.clone();
+    let dims = info.dimensions.get();
+    let mut good = vec![0.0_f32; dims];
+    good[0] = 1.0;
+    let hits = search_vector(&store, &space, &space, &good, 3, Scope::Active)
+        .await
+        .expect("a finite vector searches");
+    assert_eq!(hits.len(), 3);
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut vector = good.clone();
+        vector[dims - 1] = bad;
+        let outcome = search_vector(&store, &space, &space, &vector, 3, Scope::Active).await;
+        assert!(
+            matches!(outcome, Err(SearchError::InvalidQueryVector(_))),
+            "{bad}: {outcome:?}"
+        );
+    }
+}

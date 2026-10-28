@@ -17,13 +17,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::domain::Modality;
 use crate::embedding::EmbeddingStrategy;
 use crate::ids::{
     Checksum, ChunkId, EmbeddingSpaceId, Fingerprint, IdError, QueryId, RecordId, SourceId,
 };
-use crate::retrieval::{Scope, SearchError, SearchHit, search_text};
+use crate::record::Record;
+use crate::retrieval::{Scope, SearchError, SearchHit, read_records, search_text};
 use crate::storage::FsRecordStore;
 
 /// Cut-off of every metric.
@@ -95,8 +97,14 @@ pub struct QuerySet {
 pub struct Label {
     /// Query identifier.
     pub query: QueryId,
-    /// Labeled item (chunk id, stable across embedding spaces).
+    /// Labeled item (chunk id, stable across embedding spaces but unique only within one
+    /// chunking revision).
     pub item: ChunkId,
+    /// Distinctive substring of the text the label was written for; required for text
+    /// items. A text label is scored only when its chunk exists in the evaluated index
+    /// and still contains the anchor (NFC, case-insensitive, whitespace collapsed).
+    #[serde(default)]
+    pub anchor: Option<String>,
     /// 0 = irrelevant, 1 = partially relevant, 2 = directly relevant.
     pub label: u8,
     /// Why the item is (ir)relevant.
@@ -154,6 +162,26 @@ pub enum EvalError {
     /// Rankings were supplied for another set of queries than the frozen one.
     #[error("rankings do not match the query set: {0}")]
     RankingMismatch(String),
+    /// A frozen label does not apply to the evaluated index: its chunk is missing or
+    /// holds other text (for example after a chunking change shifted chunk indices).
+    #[error("label {query} / {item} does not apply to this index: {reason}")]
+    LabelNotApplicable {
+        /// Query.
+        query: QueryId,
+        /// Labeled chunk.
+        item: ChunkId,
+        /// Why.
+        reason: String,
+    },
+    /// A ranking returned the same item more than once, which would count one
+    /// judgment several times (precision above its true value, nDCG above 1).
+    #[error("ranking for {query} returns {item} more than once")]
+    DuplicateHit {
+        /// Query.
+        query: QueryId,
+        /// Repeated item.
+        item: ChunkId,
+    },
     /// A query could not be run.
     #[error(transparent)]
     Search(#[from] SearchError),
@@ -229,6 +257,14 @@ impl Dataset {
                 return Err(EvalError::Invalid(format!(
                     "label {} for {} / {} is outside 0..=2",
                     l.label, l.query, l.item
+                )));
+            }
+            if l.item.modality() == Modality::Text
+                && l.anchor.as_deref().is_none_or(|a| a.trim().is_empty())
+            {
+                return Err(EvalError::Invalid(format!(
+                    "text label {} / {} has no anchor; a chunk id alone does not identify its text",
+                    l.query, l.item
                 )));
             }
             if !seen.insert((&l.query, &l.item)) {
@@ -434,7 +470,10 @@ pub struct EvaluationReport {
 /// # Errors
 ///
 /// Returns [`EvalError::RankingMismatch`] unless there is exactly one ranking per
-/// frozen query, and [`EvalError::Fingerprint`] if the fingerprint fails.
+/// frozen query, [`EvalError::DuplicateHit`] when a ranking repeats an item in its top
+/// `k`, [`EvalError::LabelNotApplicable`] when a judged text hit does not
+/// contain its label's anchor (the label belongs to other text), and
+/// [`EvalError::Fingerprint`] if the fingerprint fails.
 pub fn evaluate(
     mode: EvaluationMode,
     dataset: &Dataset,
@@ -457,13 +496,23 @@ pub fn evaluate(
     let mut entries = Vec::with_capacity(expected.len());
     for query in &dataset.queries.value.queries {
         let hits = rankings.get(&query.id).map_or(&[][..], Vec::as_slice);
+        let mut seen = BTreeSet::new();
+        if let Some(hit) = hits.iter().take(K).find(|h| !seen.insert(&h.chunk_id)) {
+            return Err(EvalError::DuplicateHit {
+                query: query.id.clone(),
+                item: hit.chunk_id.clone(),
+            });
+        }
         let results: Vec<ResultEntry> = hits
             .iter()
             .take(K)
             .enumerate()
             .map(|(i, hit)| {
                 let label = dataset.label(&query.id, &hit.chunk_id);
-                ResultEntry {
+                if let Some(l) = label {
+                    check_hit_applies(l, hit)?;
+                }
+                Ok(ResultEntry {
                     rank: i + 1,
                     record_id: hit.record_id.clone(),
                     source_id: hit.source_id.clone(),
@@ -479,9 +528,9 @@ pub fn evaluate(
                         || "unlabeled: not judged relevant for this query (label 0)".to_owned(),
                         |l| l.note.clone(),
                     ),
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, EvalError>>()?;
         let returned: Vec<u8> = results.iter().map(|r| r.label).collect();
         let metrics = Metrics {
             precision_at_3: precision_at_3(&returned),
@@ -523,11 +572,74 @@ pub fn evaluate(
     })
 }
 
+fn anchor_form(text: &str) -> String {
+    text.nfc()
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Refuses a judged text hit whose text does not contain the label's anchor.
+fn check_hit_applies(label: &Label, hit: &SearchHit) -> Result<(), EvalError> {
+    if hit.modality != Modality::Text {
+        return Ok(());
+    }
+    let text = hit.chunk_text.as_deref().unwrap_or_default();
+    let anchor = label.anchor.as_deref().unwrap_or_default();
+    if anchor_form(text).contains(&anchor_form(anchor)) {
+        Ok(())
+    } else {
+        Err(EvalError::LabelNotApplicable {
+            query: label.query.clone(),
+            item: label.item.clone(),
+            reason: "the returned chunk does not contain the label's anchor".to_owned(),
+        })
+    }
+}
+
+/// Refuses text labels that do not apply to `records` (the evaluated index): the
+/// labeled chunk must exist and contain the label's anchor.
+///
+/// # Errors
+///
+/// Returns [`EvalError::LabelNotApplicable`] for the first label that does not apply.
+pub fn check_text_labels(dataset: &Dataset, records: &[Record]) -> Result<(), EvalError> {
+    let texts: BTreeMap<&ChunkId, &str> = records
+        .iter()
+        .filter(|r| r.modality == Modality::Text)
+        .map(|r| (&r.chunk_id, r.chunk_text.as_deref().unwrap_or_default()))
+        .collect();
+    for l in &dataset.labels.value.labels {
+        if l.item.modality() != Modality::Text {
+            continue;
+        }
+        let not_applicable = |reason: &str| EvalError::LabelNotApplicable {
+            query: l.query.clone(),
+            item: l.item.clone(),
+            reason: reason.to_owned(),
+        };
+        let Some(text) = texts.get(&l.item) else {
+            return Err(not_applicable("the chunk is not in the evaluated index"));
+        };
+        let anchor = l.anchor.as_deref().unwrap_or_default();
+        if !anchor_form(text).contains(&anchor_form(anchor)) {
+            return Err(not_applicable(
+                "the chunk no longer contains the label's anchor (chunking or extraction changed)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Runs every frozen query in text-only mode (top 3) and evaluates the results.
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Search`] when a query fails (for example a space mismatch).
+/// Returns [`EvalError::LabelNotApplicable`] when a text label does not apply to the
+/// evaluated index, and [`EvalError::Search`] when a query fails (for example a space
+/// mismatch).
 pub async fn evaluate_text(
     store: &Arc<FsRecordStore>,
     space: &EmbeddingSpaceId,
@@ -535,6 +647,7 @@ pub async fn evaluate_text(
     dataset: &Dataset,
     scope: Scope<'_>,
 ) -> Result<EvaluationReport, EvalError> {
+    check_text_labels(dataset, &read_records(store, space, scope).await?)?;
     let mut rankings = BTreeMap::new();
     for query in &dataset.queries.value.queries {
         let hits = search_text(store, space, embedder, &query.text, K, scope).await?;
@@ -598,9 +711,201 @@ mod tests {
         Label {
             query: query.parse().expect("query"),
             item: item.parse().expect("item"),
+            anchor: Some("hemoglobina".into()),
             label: value,
             note: "n".into(),
         }
+    }
+
+    fn dataset_with(labels: Vec<Label>) -> Dataset {
+        Dataset::new(
+            frozen(queries(), b"q"),
+            frozen(
+                LabelSet {
+                    version: "l".into(),
+                    query_set: "v".into(),
+                    corpus: "synthetic".into(),
+                    labels,
+                },
+                b"l",
+            ),
+        )
+        .expect("dataset")
+    }
+
+    fn record(chunk: &str, text: &str) -> Record {
+        let mut record: Record =
+            serde_json::from_str(include_str!("../reports/examples/record-001.json"))
+                .expect("example record");
+        record.chunk_id = chunk.parse().expect("chunk");
+        record.chunk_text = Some(text.to_owned());
+        record
+    }
+
+    #[test]
+    fn a_text_label_without_an_anchor_is_rejected() {
+        let mut unanchored = label("q1", "s-p1-text-0", 2);
+        unanchored.anchor = None;
+        let outcome = Dataset::new(
+            frozen(queries(), b"q"),
+            frozen(
+                LabelSet {
+                    version: "l".into(),
+                    query_set: "v".into(),
+                    corpus: "synthetic".into(),
+                    labels: vec![unanchored],
+                },
+                b"l",
+            ),
+        );
+        assert!(matches!(outcome, Err(EvalError::Invalid(_))));
+        // Image labels need no text anchor.
+        let mut image = label("q1", "s-p1-image-0", 2);
+        image.anchor = None;
+        dataset_with(vec![image]);
+    }
+
+    #[test]
+    fn labels_that_no_longer_match_their_chunk_are_refused() {
+        // Regression (C2-1): a chunking change shifted the hemoglobin row from index 0 to
+        // index 1; chunk 0 now holds another row.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let shifted = [
+            record(
+                "s-p1-text-0",
+                "Hemograma\nHematócrito | 40,2 | % | 36,0–46,0",
+            ),
+            record(
+                "s-p1-text-1",
+                "Hemograma\nHemoglobina | 13,5 | g/dL | 12,0–16,0",
+            ),
+        ];
+        assert!(matches!(
+            check_text_labels(&dataset, &shifted),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        assert!(matches!(
+            check_text_labels(&dataset, &[]),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        // NFC, case, and whitespace differences still match.
+        let ok = [record("s-p1-text-0", "Hemograma\n  HEMOGLOBINA  | 13,5")];
+        check_text_labels(&dataset, &ok).expect("anchor matches");
+    }
+
+    fn hit(chunk: &str, text: &str) -> SearchHit {
+        let r = record(chunk, text);
+        SearchHit {
+            rank: 1,
+            record_id: r.record_id,
+            source_id: r.source_id,
+            source_file: r.metadata.source_file,
+            revision_id: r.revision_id,
+            chunk_id: r.chunk_id,
+            page_number: r.metadata.page_number,
+            modality: r.modality,
+            chunk_text: r.chunk_text,
+            asset_uri: r.asset_uri,
+            score: 0.9,
+        }
+    }
+
+    #[test]
+    fn public_evaluate_refuses_a_judged_hit_holding_other_text() {
+        // Regression (C2-1, round 2): the public operation, not only `evaluate_text`,
+        // must refuse a label whose chunk id now holds other text.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let rankings = |text: &str| {
+            BTreeMap::from([("q1".parse().expect("id"), vec![hit("s-p1-text-0", text)])])
+        };
+        let shifted = rankings("Hemograma\nHematócrito | 40,2 | % | 36,0–46,0");
+        assert!(matches!(
+            evaluate(
+                EvaluationMode::TextOnly,
+                &dataset,
+                vec![space.clone()],
+                &shifted
+            ),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        let intact = rankings("Hemograma\nHemoglobina | 13,5 | g/dL | 12,0–16,0");
+        let report = evaluate(EvaluationMode::TextOnly, &dataset, vec![space], &intact)
+            .expect("the anchor matches");
+        assert_eq!(report.queries[0].results[0].label, 2);
+    }
+
+    #[test]
+    fn a_ranking_that_repeats_a_chunk_is_refused() {
+        // Regression (C2-19): three copies of one relevant hit scored P@3 = 1 and
+        // nDCG@3 > 2.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let copy = hit("s-p1-text-0", "Hemoglobina | 13,5");
+        let rankings = BTreeMap::from([(
+            "q1".parse().expect("id"),
+            vec![copy.clone(), copy.clone(), copy],
+        )]);
+        assert!(matches!(
+            evaluate(EvaluationMode::TextOnly, &dataset, vec![space], &rankings),
+            Err(EvalError::DuplicateHit { .. })
+        ));
+    }
+
+    #[test]
+    fn every_accepted_ranking_keeps_its_metrics_within_zero_and_one() {
+        // Exhaustive over every ordered ranking of up to 3 distinct hits drawn from four
+        // labeled chunks (labels 2, 2, 1, 0) and one unlabeled chunk.
+        let labeled = [
+            ("s-p1-text-0", 2),
+            ("s-p1-text-1", 2),
+            ("s-p1-text-2", 1),
+            ("s-p1-text-3", 0),
+        ];
+        let dataset = dataset_with(
+            labeled
+                .iter()
+                .map(|(item, value)| label("q1", item, *value))
+                .collect(),
+        );
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let pool: Vec<&str> = labeled
+            .iter()
+            .map(|(item, _)| *item)
+            .chain(["s-p1-text-4"])
+            .collect();
+        let mut rankings_checked = 0;
+        let mut stack: Vec<Vec<usize>> = vec![Vec::new()];
+        while let Some(order) = stack.pop() {
+            let hits: Vec<SearchHit> = order
+                .iter()
+                .map(|&i| hit(pool[i], "Hemoglobina | 13,5"))
+                .collect();
+            let rankings = BTreeMap::from([("q1".parse().expect("id"), hits)]);
+            let report = evaluate(
+                EvaluationMode::TextOnly,
+                &dataset,
+                vec![space.clone()],
+                &rankings,
+            )
+            .expect("distinct hits evaluate");
+            let m = &report.metrics;
+            for value in [m.precision_at_3, m.hit_at_3, m.ndcg_at_3] {
+                assert!((0.0..=1.0).contains(&value), "{order:?}: {m:?}");
+            }
+            rankings_checked += 1;
+            if order.len() < K {
+                for next in 0..pool.len() {
+                    if !order.contains(&next) {
+                        let mut longer = order.clone();
+                        longer.push(next);
+                        stack.push(longer);
+                    }
+                }
+            }
+        }
+        // 1 empty + 5 + 5*4 + 5*4*3 orderings.
+        assert_eq!(rankings_checked, 86);
     }
 
     #[test]
@@ -636,7 +941,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/evaluation");
         let dataset = Dataset::load(
             &root.join("queries-v1.toml"),
-            &root.join("labels-synthetic-v1.toml"),
+            &root.join("labels-synthetic-v2.toml"),
         )
         .expect("dataset");
         assert_eq!(dataset.queries.value.queries.len(), 10);

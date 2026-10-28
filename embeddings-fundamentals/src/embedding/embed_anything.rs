@@ -21,7 +21,7 @@ use crate::domain::Execution;
 pub const ENGINE_VERSION: &str = "0.7.1";
 
 /// The EmbedAnything adapter: the shared local contract over a candle embedder.
-pub type EmbedAnythingAdapter = LocalTextAdapter<EmbedAnythingBackend>;
+pub type EmbedAnythingAdapter = LocalTextAdapter<EmbedAnythingBackend, super::hf::HfTokenCounter>;
 
 /// Errors raised while loading the model.
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +31,14 @@ pub enum LoadError {
     MissingRevision {
         /// Model identifier.
         model: String,
+    },
+    /// The revision is a branch or tag, not an immutable commit id (PRD §6.4).
+    #[error("model {model}: revision {revision:?} is not an immutable commit id")]
+    MutableRevision {
+        /// Model identifier.
+        model: String,
+        /// The given revision.
+        revision: String,
     },
     /// The model could not be downloaded or loaded.
     #[error("cannot load model {model}: {reason}")]
@@ -104,6 +112,12 @@ pub async fn load(
             model: model_id.to_owned(),
         })?
         .to_owned();
+    if !super::is_immutable_hub_revision(&revision) {
+        return Err(LoadError::MutableRevision {
+            model: model_id.to_owned(),
+            revision,
+        });
+    }
     let model_error = |reason: String| LoadError::Model {
         model: model_id.to_owned(),
         reason,
@@ -115,12 +129,19 @@ pub async fn load(
     .await
     .map_err(|e| model_error(e.to_string()))?
     .map_err(|e| model_error(e.to_string()))?;
-    let tokens = HfTokenCounter::load(&hf::cached_file(model_id, &revision, "tokenizer.json"))?;
-    let max_input_tokens = hf::effective_limit(
-        model_id,
-        &hf::cached_file(model_id, &revision, "config.json"),
-        max_input_tokens,
-    )?;
+    // Tokenizer deserialization and config reads are blocking file work (C2-8).
+    let (model, rev) = (model_id.to_owned(), revision.clone());
+    let (tokens, max_input_tokens) = tokio::task::spawn_blocking(move || {
+        let tokens = HfTokenCounter::load(&hf::cached_file(&model, &rev, "tokenizer.json"))?;
+        let limit = hf::effective_limit(
+            &model,
+            &hf::cached_file(&model, &rev, "config.json"),
+            max_input_tokens,
+        )?;
+        Ok::<_, LoadError>((tokens, limit))
+    })
+    .await
+    .map_err(|e| model_error(e.to_string()))??;
     let info = ModelInfo::from_descriptor(SpaceDescriptor {
         engine: EngineId::EmbedAnything,
         engine_version: ENGINE_VERSION.to_owned(),
@@ -138,7 +159,7 @@ pub async fn load(
         EmbedAnythingBackend {
             embedder: Arc::new(embedder),
         },
-        Box::new(tokens),
+        tokens,
         info,
         Capabilities {
             text_documents: true,

@@ -82,6 +82,16 @@ impl TokenCounter for Cl100kTokenCounter {
     }
 }
 
+/// Input budget in `cl100k_base` tokens: the model limit minus prefix tokens.
+fn budget(
+    limit: Option<std::num::NonZeroUsize>,
+    policy: super::PrefixPolicy,
+    kind: InputKind,
+) -> Option<usize> {
+    let prefix = Cl100kTokenCounter.count(policy.prefix(kind));
+    Some(limit?.get().saturating_sub(prefix))
+}
+
 /// The OpenAI adapter.
 pub struct OpenAiAdapter {
     client: reqwest::Client,
@@ -351,25 +361,38 @@ impl OpenAiAdapter {
         };
         self.capabilities.require(capability, &self.info)?;
         self.capabilities.check_batch(raw.len())?;
-        if let Some(budget) = self.input_budget(kind) {
-            for input in raw {
-                let tokens = Cl100kTokenCounter.count(&input.text);
-                if tokens > budget {
-                    return Err(EmbeddingError::InputTooLong {
-                        item: input.id.clone(),
-                        tokens,
-                        limit: budget,
-                    });
-                }
-            }
-        }
         if raw.is_empty() {
             return Ok(EmbeddingBatch::default());
         }
-        let texts: Vec<String> = raw
-            .iter()
-            .map(|i| self.info.prefix_policy.apply(kind, &i.text).into_owned())
-            .collect();
+        // BPE tokenization (and the first load of the cl100k tables) is CPU work, so the
+        // budget check and prefixing run on the blocking pool (PLAN §2.3).
+        let (limit, policy, inputs) = (
+            self.capabilities.max_input_tokens,
+            self.info.prefix_policy,
+            raw.to_vec(),
+        );
+        let texts = tokio::task::spawn_blocking(move || {
+            if let Some(budget) = budget(limit, policy, kind) {
+                for input in &inputs {
+                    let tokens = Cl100kTokenCounter.count(&input.text);
+                    if tokens > budget {
+                        return Err(EmbeddingError::InputTooLong {
+                            item: input.id.clone(),
+                            tokens,
+                            limit: budget,
+                        });
+                    }
+                }
+            }
+            Ok(inputs
+                .iter()
+                .map(|i| policy.apply(kind, &i.text).into_owned())
+                .collect::<Vec<String>>())
+        })
+        .await
+        .map_err(|e| EmbeddingError::Permanent {
+            reason: format!("tokenization task failed: {e}"),
+        })??;
         let (vectors, usage) = self.call(&texts).await?;
         let embeddings = raw
             .iter()
@@ -438,9 +461,11 @@ impl EmbeddingStrategy for OpenAiAdapter {
     }
 
     fn input_budget(&self, kind: InputKind) -> Option<usize> {
-        let limit = self.capabilities.max_input_tokens?.get();
-        let prefix = Cl100kTokenCounter.count(self.info.prefix_policy.prefix(kind));
-        Some(limit.saturating_sub(prefix))
+        budget(
+            self.capabilities.max_input_tokens,
+            self.info.prefix_policy,
+            kind,
+        )
     }
 
     async fn embed_documents(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError> {

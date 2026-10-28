@@ -16,6 +16,7 @@ use crate::evaluation::{DatasetRef, EvaluationReport};
 use crate::fidelity::FidelityReport;
 use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint};
 use crate::measurement::{EmbeddingSummary, Hardware, LatencyStats, Observation};
+use crate::pipeline::RunReport;
 
 /// Wording used for every multi-configuration comparison.
 pub const COMPARISON_KIND: &str = "end-to-end configuration comparison";
@@ -46,12 +47,30 @@ pub struct IngestionMeasurement {
     pub chunks_per_second: Option<f64>,
 }
 
-/// Cold-start measurement: the first operation in a fresh adapter instance.
+/// Cold start (PRD §9.4): the first operation in a fresh process. The experiment process
+/// starts fresh, so this is its first model load (local) or client construction (remote)
+/// plus its first embedding call, which also opens the first connection of a remote engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColdStart {
-    /// Model load (local) or client construction (remote), in milliseconds.
+    /// First model load or client construction of the process, in milliseconds.
     pub model_load_ms: f64,
-    /// The first query, including the first connection for remote engines.
+    /// First embedding call of the process (the first ingestion batch); `None` when
+    /// ingestion made no call, for example because every source was unchanged.
+    pub first_operation_ms: Option<f64>,
+    /// Inputs in that first call.
+    pub first_operation_items: Option<usize>,
+    /// `model_load_ms + first_operation_ms`; `None` without a first call.
+    pub total_ms: Option<f64>,
+}
+
+/// The query side's adapter load and first query. It runs after ingestion inside the
+/// same, already warm process, so it is **not** a cold start; it is reported to show the
+/// query-side load cost separately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuerySideStart {
+    /// Second model load or client construction, in milliseconds.
+    pub model_load_ms: f64,
+    /// First query on that adapter (the discarded warm-up query).
     pub first_query_ms: f64,
     /// Sum of both.
     pub total_ms: f64,
@@ -66,8 +85,10 @@ pub struct Measurements {
     pub ingestion_model_load_ms: f64,
     /// Document embedding calls during ingestion.
     pub embedding: EmbeddingSummary,
-    /// Cold start of the query side.
+    /// Cold start of the process (PRD §9.4).
     pub cold_start: ColdStart,
+    /// Query-side load and first query within the same process (not a cold start).
+    pub query_side_start: QuerySideStart,
     /// Warm query latency over `latency_repeats` repetitions of every frozen query.
     pub warm_query_latency: LatencyStats,
     /// Repetitions per query.
@@ -109,6 +130,8 @@ pub struct Reliability {
 /// Everything reported for one configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigurationResult {
+    /// Machine the measurements were taken on (captured by the experiment run).
+    pub hardware: Hardware,
     /// Experiment id of the ingestion run.
     pub experiment_id: ExperimentId,
     /// Ingestion status.
@@ -147,6 +170,44 @@ pub struct ConfigurationResult {
     pub reliability: Reliability,
     /// Extraction fidelity of this run's extraction configuration.
     pub fidelity: Option<FidelityReport>,
+}
+
+/// Why an evaluation did not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationNotRunStatus {
+    /// The ingestion was incomplete and the query side failed.
+    NotRun,
+}
+
+/// The evaluation part of an [`IncompleteExperiment`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvaluationNotRun {
+    /// Always [`EvaluationNotRunStatus::NotRun`].
+    pub status: EvaluationNotRunStatus,
+    /// Why (ids and error messages only, no document content).
+    pub reason: String,
+}
+
+/// An experiment whose ingestion was incomplete and whose evaluation could not run,
+/// for example because a frozen label points into a failed source or the query-side
+/// adapter failed (PLAN §4.3: the run still
+/// reports its status and reliability counters, and exits with code 2). It is not a
+/// [`ConfigurationResult`] and cannot enter a comparison.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IncompleteExperiment {
+    /// Machine the run was taken on.
+    pub hardware: Hardware,
+    /// Experiment id of the ingestion run.
+    pub experiment_id: ExperimentId,
+    /// Ingestion status (always incomplete).
+    pub run_status: RunStatus,
+    /// The evaluation that did not run, and why.
+    pub evaluation: EvaluationNotRun,
+    /// Reliability counters of the ingestion.
+    pub reliability: Reliability,
+    /// The full ingestion report (per-source status, stage, and reason).
+    pub ingestion: RunReport,
 }
 
 /// A comparison of configurations evaluated on the same corpus and queries.
@@ -193,11 +254,11 @@ impl ComparisonReport {
     ///
     /// Returns [`ReportError`] for an empty or non-comparable set.
     pub fn new(
-        hardware: Hardware,
         configurations: Vec<ConfigurationResult>,
         notes: Vec<String>,
     ) -> Result<Self, ReportError> {
         let first = configurations.first().ok_or(ReportError::Empty)?;
+        let mut hardware = first.hardware.clone();
         for c in &configurations {
             let differs = |what| ReportError::NotComparable {
                 experiment: c.experiment_id.clone(),
@@ -218,6 +279,11 @@ impl ComparisonReport {
             if c.fingerprints.evaluation != first.fingerprints.evaluation {
                 return Err(differs("evaluation fingerprint"));
             }
+            // Timings and memory from different machines are not comparable; a probe
+            // field one run could not read is unknown, not different.
+            hardware = hardware
+                .merge(&c.hardware)
+                .ok_or_else(|| differs("measurement hardware"))?;
         }
         Ok(Self {
             comparison_kind: COMPARISON_KIND.to_owned(),
@@ -293,14 +359,26 @@ impl ComparisonReport {
         }
 
         let _ = writeln!(md, "\n## Retrieval quality (k = 3, macro averages)\n");
-        let _ = writeln!(md, "| Experiment | Status | Precision@3 | Hit@3 | nDCG@3 |");
-        let _ = writeln!(md, "|---|---|---:|---:|---:|");
+        let _ = writeln!(
+            md,
+            "| Experiment | Ingestion run | Failed sources | Evaluation | Precision@3 | Hit@3 | nDCG@3 |"
+        );
+        let _ = writeln!(md, "|---|---|---:|---|---:|---:|---:|");
         for c in &self.configurations {
             let m = &c.evaluation.metrics;
             let _ = writeln!(
                 md,
-                "| {} | {:?} | {:.4} | {:.4} | {:.4} |",
-                c.experiment_id, c.evaluation.status, m.precision_at_3, m.hit_at_3, m.ndcg_at_3
+                "| {} | {} | {} | {:?} | {:.4} | {:.4} | {:.4} |",
+                c.experiment_id,
+                match c.run_status {
+                    RunStatus::Succeeded => "succeeded",
+                    RunStatus::Incomplete => "**INCOMPLETE**",
+                },
+                c.reliability.failed_sources,
+                c.evaluation.status,
+                m.precision_at_3,
+                m.hit_at_3,
+                m.ndcg_at_3
             );
         }
 
@@ -317,7 +395,7 @@ impl ComparisonReport {
             let m = &c.measurements;
             let _ = writeln!(
                 md,
-                "| {} | {:.1} | {} | {} | {:.2} | {:.1} | {:.1} | {:.1} | {:.2} | {:.2} | {} | {} | {} |",
+                "| {} | {:.1} | {} | {} | {:.2} | {:.1} | {:.1} | {} | {:.2} | {:.2} | {} | {} | {} |",
                 c.experiment_id,
                 m.ingestion.duration_ms,
                 opt(m.ingestion.ms_per_page, 1),
@@ -325,7 +403,7 @@ impl ComparisonReport {
                 m.embedding.mean_batch_latency_ms,
                 m.embedding.items_per_second,
                 m.ingestion_model_load_ms,
-                m.cold_start.total_ms,
+                opt(m.cold_start.total_ms, 1),
                 m.warm_query_latency.median_ms,
                 m.warm_query_latency.p95_ms,
                 observation(&m.peak_local_ram),

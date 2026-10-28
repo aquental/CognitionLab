@@ -31,6 +31,18 @@ pub enum BuildError {
         /// Model identifier.
         model: String,
     },
+    /// A local engine's revision is a branch or tag, which can move (PRD §6.4).
+    #[error(
+        "engine {engine} model {model}: model_revision {revision:?} is not an immutable commit id (40 lowercase hex characters)"
+    )]
+    MutableRevision {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Model identifier.
+        model: String,
+        /// The configured revision.
+        revision: String,
+    },
     /// The engine's credential is not configured.
     #[error("engine {engine} needs the {variable} environment variable (see .env.example)")]
     MissingCredential {
@@ -58,6 +70,7 @@ impl BuildError {
             Self::EngineNotCompiled { .. }
             | Self::NotImplemented(_)
             | Self::MissingRevision { .. }
+            | Self::MutableRevision { .. }
             | Self::MissingCredential { .. } => crate::pipeline::EXIT_VALIDATION,
             Self::Load { .. } => 1,
         }
@@ -100,6 +113,18 @@ pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, 
             Err(BuildError::MissingRevision {
                 engine: config.engine,
                 model: config.model_id.clone(),
+            })
+        }
+        EngineId::EmbedAnything | EngineId::FastEmbed
+            if !config
+                .model_revision
+                .as_deref()
+                .is_some_and(crate::embedding::is_immutable_hub_revision) =>
+        {
+            Err(BuildError::MutableRevision {
+                engine: config.engine,
+                model: config.model_id.clone(),
+                revision: config.model_revision.clone().unwrap_or_default(),
             })
         }
         EngineId::EmbedAnything => build_embed_anything(config).await,
@@ -278,11 +303,28 @@ mod tests {
         assert_eq!(load.exit_code(), 1, "load failures are internal errors");
     }
 
+    #[tokio::test]
+    async fn a_moving_hub_revision_is_refused_before_any_download() {
+        // Regression (C2-13): a branch or tag can change the weights behind one space id.
+        for engine in [EngineId::EmbedAnything, EngineId::FastEmbed] {
+            for revision in ["main", "v1.0", "e8f8c21"] {
+                let mut moving = config(engine);
+                moving.model_revision = Some(revision.into());
+                let err = build(&moving).await.err().expect("refused");
+                assert!(
+                    matches!(err, BuildError::MutableRevision { .. }),
+                    "{engine:?} {revision}: {err}"
+                );
+                assert_eq!(err.exit_code(), crate::pipeline::EXIT_VALIDATION);
+            }
+        }
+    }
+
     #[cfg(not(feature = "engine-embed-anything"))]
     #[tokio::test]
     async fn missing_engine_feature_is_an_explicit_error() {
         let mut pinned = config(EngineId::EmbedAnything);
-        pinned.model_revision = Some("abc".into());
+        pinned.model_revision = Some("e8f8c211226b894fcb81acc59f3b34ba3efd5f42".into());
         let outcome = build(&pinned).await;
         assert!(
             matches!(outcome, Err(BuildError::EngineNotCompiled { .. })),
