@@ -20,8 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain from rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
+      - name: Install Rust 1.99.1 (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - name: Verify toolchain
+        run: rustc --version | grep -F "rustc 1.99.1"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: embeddings-fundamentals
@@ -58,8 +63,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install poppler and tesseract
         run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-por
-      - name: Install toolchain from rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
+      - name: Install Rust 1.99.1 (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - name: Verify toolchain
+        run: rustc --version | grep -F "rustc 1.99.1"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: embeddings-fundamentals
