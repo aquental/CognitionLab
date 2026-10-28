@@ -1,0 +1,537 @@
+//! Efficiency measurements (PRD §9.4): injectable clocks and memory probes, a measuring
+//! adapter decorator, and nearest-rank latency statistics.
+//!
+//! Collection and computation are separate. [`MeasuredEmbedder`] records every adapter
+//! call with an injected [`Clock`]; [`EmbeddingCalls::summary`] and
+//! [`LatencyStats::from_samples`] turn the observations into reported values. Tests
+//! inject a [`ManualClock`] and a [`FixedMemory`] probe, so expected measurements can
+//! be derived by hand.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+use crate::embedding::{
+    AssetRef, Capabilities, EmbeddingBatch, EmbeddingError, EmbeddingStrategy, InputKind,
+    ModelInfo, TextInput, TokenCounter,
+};
+
+/// A monotonic clock: time elapsed since an arbitrary, fixed origin.
+pub trait Clock: Send + Sync {
+    /// Elapsed time since the clock's origin.
+    fn now(&self) -> Duration;
+}
+
+/// The process's monotonic clock.
+#[derive(Debug, Clone, Copy)]
+pub struct SystemClock {
+    origin: Instant,
+}
+
+impl SystemClock {
+    /// Starts a clock at the current instant.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl Default for SystemClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for SystemClock {
+    fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
+}
+
+/// A test clock that advances by a fixed tick on every reading, so an interval read
+/// with no other readings in between always measures exactly one tick.
+#[derive(Debug)]
+pub struct ManualClock {
+    tick_micros: u64,
+    readings: AtomicU64,
+}
+
+impl ManualClock {
+    /// A clock advancing `tick` per reading; the first reading returns `tick`.
+    #[must_use]
+    pub fn new(tick: Duration) -> Self {
+        Self {
+            tick_micros: u64::try_from(tick.as_micros()).unwrap_or(u64::MAX),
+            readings: AtomicU64::new(0),
+        }
+    }
+
+    /// Number of readings so far.
+    #[must_use]
+    pub fn readings(&self) -> u64 {
+        self.readings.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> Duration {
+        let n = self.readings.fetch_add(1, Ordering::SeqCst) + 1;
+        Duration::from_micros(n.saturating_mul(self.tick_micros))
+    }
+}
+
+/// Reads the process's peak resident memory.
+pub trait MemoryProbe: Send + Sync {
+    /// High-water mark of resident memory in bytes, when observable.
+    fn peak_rss_bytes(&self) -> Option<u64>;
+}
+
+/// `getrusage(RUSAGE_SELF).ru_maxrss`, normalized to bytes (macOS reports bytes,
+/// Linux and the BSDs report KiB).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RusageProbe;
+
+impl MemoryProbe for RusageProbe {
+    fn peak_rss_bytes(&self) -> Option<u64> {
+        let usage =
+            nix::sys::resource::getrusage(nix::sys::resource::UsageWho::RUSAGE_SELF).ok()?;
+        let raw = u64::try_from(usage.max_rss()).ok()?;
+        if cfg!(target_os = "macos") {
+            Some(raw)
+        } else {
+            raw.checked_mul(1024)
+        }
+    }
+}
+
+/// A probe returning a fixed value (tests).
+#[derive(Debug, Clone, Copy)]
+pub struct FixedMemory(pub Option<u64>);
+
+impl MemoryProbe for FixedMemory {
+    fn peak_rss_bytes(&self) -> Option<u64> {
+        self.0
+    }
+}
+
+/// A measured value, or the honest reason it is not available.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Observation {
+    /// A measured value with its unit.
+    Measured {
+        /// Value.
+        value: f64,
+        /// Unit, for example `bytes` or `ms`.
+        unit: String,
+        /// What exactly was measured.
+        scope: String,
+    },
+    /// Not observable in this run.
+    Unavailable {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl Observation {
+    /// A value in bytes.
+    #[must_use]
+    pub fn bytes(value: u64, scope: &str) -> Self {
+        Self::Measured {
+            value: u64_f64(value),
+            unit: "bytes".to_owned(),
+            scope: scope.to_owned(),
+        }
+    }
+
+    /// Not available, with a reason.
+    #[must_use]
+    pub fn unavailable(reason: &str) -> Self {
+        Self::Unavailable {
+            reason: reason.to_owned(),
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "measurement magnitudes (bytes, counts) are far below 2^52"
+)]
+const fn u64_f64(n: u64) -> f64 {
+    n as f64
+}
+
+/// Milliseconds of a duration.
+#[must_use]
+pub fn millis(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+/// Nearest-rank percentile `p` (0 < p ≤ 100) of `samples`: the value at 1-based rank
+/// `ceil(p / 100 × n)` after sorting. `None` for no samples.
+#[must_use]
+pub fn nearest_rank(samples: &[f64], p: f64) -> Option<f64> {
+    if samples.is_empty() || !(p > 0.0 && p <= 100.0) {
+        return None;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = u64_f64(u64::try_from(sorted.len()).ok()?);
+    let rank = (p / 100.0 * n).ceil();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "rank is in 1..=n, a small positive integer"
+    )]
+    let index = (rank as usize).clamp(1, sorted.len()) - 1;
+    sorted.get(index).copied()
+}
+
+/// Latency statistics over pooled warm samples.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LatencyStats {
+    /// Number of samples.
+    pub samples: usize,
+    /// Nearest-rank median in milliseconds.
+    pub median_ms: f64,
+    /// Nearest-rank p95 in milliseconds.
+    pub p95_ms: f64,
+}
+
+impl LatencyStats {
+    /// Statistics of `samples_ms`; `None` when there are no samples.
+    #[must_use]
+    pub fn from_samples(samples_ms: &[f64]) -> Option<Self> {
+        Some(Self {
+            samples: samples_ms.len(),
+            median_ms: nearest_rank(samples_ms, 50.0)?,
+            p95_ms: nearest_rank(samples_ms, 95.0)?,
+        })
+    }
+}
+
+/// One observed adapter call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallRecord {
+    /// Documents or queries.
+    pub kind: InputKind,
+    /// Inputs in the call.
+    pub items: usize,
+    /// Wall time of the call.
+    pub duration: Duration,
+    /// Whether the call succeeded.
+    pub ok: bool,
+    /// Provider usage reported by the call.
+    pub usage_tokens: Option<u64>,
+}
+
+/// Shared log of adapter calls.
+#[derive(Debug, Clone, Default)]
+pub struct EmbeddingCalls(Arc<Mutex<Vec<CallRecord>>>);
+
+/// Embedding throughput over a set of calls.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingSummary {
+    /// Calls made, including failed attempts.
+    pub calls: usize,
+    /// Failed calls.
+    pub failed_calls: usize,
+    /// Inputs embedded by successful calls.
+    pub items: usize,
+    /// Total time inside the adapter, in milliseconds.
+    pub total_ms: f64,
+    /// Mean latency of one call (one batch), in milliseconds.
+    pub mean_batch_latency_ms: f64,
+    /// Inputs per second inside the adapter.
+    pub items_per_second: f64,
+    /// Provider usage summed over successful calls; `None` when no call reported it.
+    pub usage_tokens: Option<u64>,
+}
+
+impl EmbeddingCalls {
+    fn push(&self, record: CallRecord) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
+    }
+
+    /// Every call observed so far.
+    #[must_use]
+    pub fn records(&self) -> Vec<CallRecord> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Clears the log (for example between ingestion and querying).
+    pub fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Summarizes the calls of `kind`.
+    #[must_use]
+    pub fn summary(&self, kind: InputKind) -> EmbeddingSummary {
+        let records: Vec<CallRecord> = self
+            .records()
+            .into_iter()
+            .filter(|r| r.kind == kind)
+            .collect();
+        let ok: Vec<&CallRecord> = records.iter().filter(|r| r.ok).collect();
+        let total: Duration = records.iter().map(|r| r.duration).sum();
+        let items: usize = ok.iter().map(|r| r.items).sum();
+        let calls = records.len();
+        let total_ms = millis(total);
+        let reported: Vec<u64> = ok.iter().filter_map(|r| r.usage_tokens).collect();
+        EmbeddingSummary {
+            calls,
+            failed_calls: calls - ok.len(),
+            items,
+            total_ms,
+            mean_batch_latency_ms: if calls == 0 {
+                0.0
+            } else {
+                total_ms / u64_f64(u64::try_from(calls).unwrap_or(u64::MAX))
+            },
+            items_per_second: if total.is_zero() {
+                0.0
+            } else {
+                u64_f64(u64::try_from(items).unwrap_or(u64::MAX)) / total.as_secs_f64()
+            },
+            usage_tokens: (!reported.is_empty()).then(|| reported.iter().sum()),
+        }
+    }
+}
+
+/// Decorator that times every adapter call. It reports the wrapped adapter's model
+/// information unchanged, so records and spaces are identical with or without it.
+pub struct MeasuredEmbedder {
+    inner: Arc<dyn EmbeddingStrategy>,
+    clock: Arc<dyn Clock>,
+    calls: EmbeddingCalls,
+}
+
+impl MeasuredEmbedder {
+    /// Wraps `inner`, reading `clock` around each call.
+    #[must_use]
+    pub fn new(inner: Arc<dyn EmbeddingStrategy>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            inner,
+            clock,
+            calls: EmbeddingCalls::default(),
+        }
+    }
+
+    /// The shared call log.
+    #[must_use]
+    pub fn calls(&self) -> EmbeddingCalls {
+        self.calls.clone()
+    }
+
+    fn observe(
+        &self,
+        kind: InputKind,
+        items: usize,
+        start: Duration,
+        outcome: &Result<EmbeddingBatch, EmbeddingError>,
+    ) {
+        let duration = self.clock.now().saturating_sub(start);
+        self.calls.push(CallRecord {
+            kind,
+            items,
+            duration,
+            ok: outcome.is_ok(),
+            usage_tokens: outcome
+                .as_ref()
+                .ok()
+                .and_then(|b| b.usage)
+                .map(|u| u.tokens),
+        });
+    }
+}
+
+impl std::fmt::Debug for MeasuredEmbedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MeasuredEmbedder")
+            .field("model", self.inner.model_info())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingStrategy for MeasuredEmbedder {
+    fn capabilities(&self) -> &Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn model_info(&self) -> &ModelInfo {
+        self.inner.model_info()
+    }
+
+    fn token_counter(&self) -> &dyn TokenCounter {
+        self.inner.token_counter()
+    }
+
+    fn input_budget(&self, kind: InputKind) -> Option<usize> {
+        self.inner.input_budget(kind)
+    }
+
+    async fn embed_documents(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError> {
+        let start = self.clock.now();
+        let outcome = self.inner.embed_documents(raw).await;
+        self.observe(InputKind::Document, raw.len(), start, &outcome);
+        outcome
+    }
+
+    async fn embed_queries(&self, raw: &[TextInput]) -> Result<EmbeddingBatch, EmbeddingError> {
+        let start = self.clock.now();
+        let outcome = self.inner.embed_queries(raw).await;
+        self.observe(InputKind::Query, raw.len(), start, &outcome);
+        outcome
+    }
+
+    async fn embed_images(&self, assets: &[AssetRef]) -> Result<EmbeddingBatch, EmbeddingError> {
+        // Image runs arrive with Milestone 3; they are passed through unmeasured.
+        self.inner.embed_images(assets).await
+    }
+}
+
+/// Collected hardware facts for reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hardware {
+    /// Operating system.
+    pub os: String,
+    /// CPU architecture.
+    pub arch: String,
+    /// CPU model, when known.
+    pub cpu: Option<String>,
+    /// Logical CPUs available to the process.
+    pub logical_cpus: Option<usize>,
+    /// Physical memory in bytes, when known.
+    pub memory_bytes: Option<u64>,
+    /// Accelerator used for inference.
+    pub accelerator: String,
+}
+
+impl Hardware {
+    /// Detects the current machine (best effort; unknown fields stay `None`). Engines
+    /// in this build run on the CPU.
+    #[must_use]
+    pub fn detect() -> Self {
+        let sysctl = |key: &str| {
+            std::process::Command::new("sysctl")
+                .args(["-n", key])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .filter(|s| !s.is_empty())
+        };
+        let proc_field = |file: &str, key: &str| {
+            std::fs::read_to_string(file).ok().and_then(|t| {
+                t.lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split_once(':'))
+                    .map(|(_, v)| v.trim().to_owned())
+            })
+        };
+        let (cpu, memory_bytes) = if cfg!(target_os = "macos") {
+            (
+                sysctl("machdep.cpu.brand_string"),
+                sysctl("hw.memsize").and_then(|m| m.parse().ok()),
+            )
+        } else {
+            (
+                proc_field("/proc/cpuinfo", "model name"),
+                proc_field("/proc/meminfo", "MemTotal")
+                    .and_then(|m| m.trim_end_matches("kB").trim().parse::<u64>().ok())
+                    .and_then(|kib| kib.checked_mul(1024)),
+            )
+        };
+        Self {
+            os: std::env::consts::OS.to_owned(),
+            arch: std::env::consts::ARCH.to_owned(),
+            cpu,
+            logical_cpus: std::thread::available_parallelism()
+                .ok()
+                .map(std::num::NonZeroUsize::get),
+            memory_bytes,
+            accelerator: "cpu".to_owned(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedding::deterministic::DeterministicEmbedder;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn nearest_rank_matches_the_definition() {
+        let samples: Vec<f64> = (1..=20).map(f64::from).collect();
+        // n = 20: median rank ceil(10) = 10, p95 rank ceil(19) = 19.
+        assert_eq!(nearest_rank(&samples, 50.0), Some(10.0));
+        assert_eq!(nearest_rank(&samples, 95.0), Some(19.0));
+        let odd = [5.0, 1.0, 3.0];
+        assert_eq!(nearest_rank(&odd, 50.0), Some(3.0), "rank ceil(1.5) = 2");
+        assert_eq!(nearest_rank(&odd, 95.0), Some(5.0));
+        assert_eq!(nearest_rank(&[], 50.0), None);
+        assert_eq!(nearest_rank(&odd, 0.0), None);
+    }
+
+    #[test]
+    fn manual_clock_ticks_once_per_reading() {
+        let clock = ManualClock::new(Duration::from_millis(10));
+        let start = clock.now();
+        let end = clock.now();
+        assert_eq!(end - start, Duration::from_millis(10));
+        assert_eq!(clock.readings(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_decorator_times_calls_and_keeps_the_space() {
+        let inner: Arc<dyn EmbeddingStrategy> =
+            Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
+        let clock = Arc::new(ManualClock::new(Duration::from_millis(5)));
+        let measured = MeasuredEmbedder::new(Arc::clone(&inner), clock);
+        assert_eq!(measured.model_info(), inner.model_info());
+        let input = |id: &str| TextInput {
+            id: id.parse().expect("id"),
+            text: "dois tokens".into(),
+        };
+        measured
+            .embed_documents(&[input("a"), input("b")])
+            .await
+            .expect("docs");
+        measured.embed_queries(&[input("q")]).await.expect("query");
+        let docs = measured.calls().summary(InputKind::Document);
+        assert_eq!((docs.calls, docs.items), (1, 2));
+        assert_abs_diff_eq!(docs.total_ms, 5.0, epsilon = 1e-9);
+        assert_abs_diff_eq!(docs.items_per_second, 400.0, epsilon = 1e-9);
+        assert_eq!(
+            docs.usage_tokens,
+            Some(4),
+            "whitespace tokens of both inputs"
+        );
+        assert_eq!(measured.calls().summary(InputKind::Query).calls, 1);
+    }
+
+    #[test]
+    fn peak_rss_is_observable_here() {
+        let peak = RusageProbe.peak_rss_bytes().expect("getrusage");
+        assert!(
+            peak > 1024 * 1024,
+            "a test process uses more than 1 MiB: {peak}"
+        );
+    }
+}

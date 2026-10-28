@@ -76,6 +76,13 @@ pub struct IngestSettings {
     pub extraction: ExtractionConfig,
     /// Chunking settings.
     pub chunking: ChunkingConfig,
+    /// Modality this run embeds (PLAN §0.1: one modality per run).
+    #[serde(default = "text_modality")]
+    pub modality: Modality,
+}
+
+const fn text_modality() -> Modality {
+    Modality::Text
 }
 
 impl IngestSettings {
@@ -90,6 +97,7 @@ impl IngestSettings {
             language: "pt-BR".to_owned(),
             extraction: ExtractionConfig::default(),
             chunking: ChunkingConfig::default(),
+            modality: Modality::Text,
         }
     }
 }
@@ -116,6 +124,10 @@ pub enum ValidationError {
     /// unreadable, or checksum mismatch). The run is refused before any processing.
     #[error("ineligible sources: {}", .0.iter().map(|(s, r)| format!("{s} ({r})")).collect::<Vec<_>>().join("; "))]
     Ineligible(Vec<(SourceId, String)>),
+    /// The adapter supports the modality, but this build cannot run it yet (image
+    /// ingestion arrives with Milestone 3).
+    #[error("{0} runs are not implemented in this build")]
+    ModalityNotImplemented(&'static str),
     /// The experiment id was already used; snapshots are append-only.
     #[error("experiment {0} already exists")]
     ExperimentExists(ExperimentId),
@@ -141,6 +153,7 @@ impl ValidationError {
             Self::MissingCapability(_)
             | Self::RemoteNotPermitted { .. }
             | Self::ExperimentExists(_)
+            | Self::ModalityNotImplemented(_)
             | Self::Ineligible(_)
             | Self::Chunking(_) => EXIT_VALIDATION,
             Self::Fingerprint(_) | Self::Store(_) | Self::Task(_) => 1,
@@ -368,7 +381,18 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
     ) -> Result<RunReport, ValidationError> {
         let info = self.embedder.model_info();
         let caps = self.embedder.capabilities();
-        caps.require(Capability::TextDocuments, info)?;
+        // Capabilities are checked before anything else, so an unsupported run touches
+        // no source, extractor, adapter call, or store write.
+        match settings.modality {
+            Modality::Text => caps.require(Capability::TextDocuments, info)?,
+            Modality::Image => {
+                caps.require(Capability::TextToImage, info)?;
+                caps.require(Capability::Images, info)?;
+                return Err(ValidationError::ModalityNotImplemented(
+                    Modality::Image.as_str(),
+                ));
+            }
+        }
         check_remote_permission(
             manifest,
             caps.execution,
