@@ -702,6 +702,33 @@ impl FsRecordStore {
         }
     }
 
+    /// Removes the active pointer of `source` in `space`, so search no longer sees any
+    /// revision of it; returns whether a pointer existed. Revisions are kept (PRD §8) and
+    /// stay readable through the experiment snapshots that pin them. Used when a
+    /// reprocessed source no longer yields any record for the run's modality.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ReadOnly`] on a reader, and [`StoreError`] when the pointer
+    /// cannot be removed or its directory cannot be synced.
+    pub fn deactivate(
+        &self,
+        space: &EmbeddingSpaceId,
+        source: &SourceId,
+    ) -> Result<bool, StoreError> {
+        self.require_writer()?;
+        let path = self.pointer_path(space, source);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(io(&path)(e)),
+        }
+        if let Some(dir) = path.parent() {
+            fsync_dir(dir)?;
+        }
+        Ok(true)
+    }
+
     /// Whether the active pointer of `source` names an intact revision: the records file
     /// exists and its checksum equals the one recorded in the pointer.
     ///

@@ -1002,10 +1002,25 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
             Err((stage, reason)) => return report.fail(stage, reason),
         };
         if images.is_empty() {
+            // Nothing to publish. A previously active revision of this source (other
+            // bytes, filter, or preparation) must stop answering searches, so its pointer
+            // is removed; no new revision exists.
+            let space = self.embedder.model_info().embedding_space_id.clone();
+            let source = entry.source_id.clone();
+            let deactivated = match self.on_store(move |s| s.deactivate(&space, &source)).await {
+                Ok(deactivated) => deactivated,
+                Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+            };
+            report.revision_id = None;
             report.status = SourceStatus::NotApplicable;
             report.reason = Some(format!(
-                "no image qualifies for an image run (type image, both sides at least {} px, on a page with a usable text layer)",
-                ctx.settings.images.min_side_px
+                "no image qualifies for an image run (type image, both sides at least {} px, on a page with a usable text layer){}",
+                ctx.settings.images.min_side_px,
+                if deactivated {
+                    "; the previously active revision was deactivated"
+                } else {
+                    ""
+                }
             ));
             return report;
         }
