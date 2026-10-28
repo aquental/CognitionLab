@@ -202,6 +202,14 @@ string_id!(
 );
 
 string_id!(
+    /// Identifier of a frozen evaluation query.
+    QueryId,
+    "query",
+    is_slug,
+    "expected 1-128 ASCII letters, digits, '-', '_' or '.'"
+);
+
+string_id!(
     /// SHA-256 checksum of a source file, formatted as `sha256:<64 hex>`.
     Checksum,
     "checksum",

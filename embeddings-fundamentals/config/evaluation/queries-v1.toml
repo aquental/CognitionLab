@@ -1,0 +1,55 @@
+# Frozen Portuguese query set (PRD §9.1). The text is fixed for every configuration;
+# its SHA-256 is recorded in every evaluation report. Changing anything here creates
+# a new version.
+version = "queries-v1"
+language = "pt-BR"
+
+[[query]]
+id = "q01"
+text = "Onde está o resultado da hemoglobina?"
+target = "laboratory row"
+
+[[query]]
+id = "q02"
+text = "Qual é o valor da glicemia e sua unidade?"
+target = "value and unit"
+
+[[query]]
+id = "q03"
+text = "Qual intervalo de referência aparece para a creatinina?"
+target = "reference range"
+
+[[query]]
+id = "q04"
+text = "Onde estão os resultados de colesterol e triglicerídeos?"
+target = "related laboratory rows"
+
+[[query]]
+id = "q05"
+text = "Qual página contém a conclusão do laudo?"
+target = "report section"
+
+[[query]]
+id = "q06"
+text = "Onde o laudo descreve os achados do exame?"
+target = "findings section"
+
+[[query]]
+id = "q07"
+text = "Mostre a radiografia de tórax presente no conjunto de exames."
+target = "medical image"
+
+[[query]]
+id = "q08"
+text = "Encontre as imagens de ultrassonografia abdominal."
+target = "medical images"
+
+[[query]]
+id = "q09"
+text = "Mostre a imagem associada a este laudo de ultrassonografia."
+target = "linked report and image"
+
+[[query]]
+id = "q10"
+text = "Onde o documento informa a técnica utilizada no exame?"
+target = "technique section"

@@ -94,28 +94,25 @@ fn dot(a: &[f32], b: &[f32]) -> f64 {
         .sum()
 }
 
-/// Searches `index_space` with a text query embedded by `embedder`.
-///
-/// # Errors
-///
-/// Returns [`SearchError::SpaceMismatch`] before embedding when the query model does
-/// not belong to `index_space`, and other [`SearchError`]s for embedding or store
-/// failures. An empty index yields an empty result list.
-pub async fn search_text(
+/// Refuses a query from another embedding space; runs before any store read, query
+/// embedding, or similarity computation.
+fn guard_space(index: &EmbeddingSpaceId, query: &EmbeddingSpaceId) -> Result<(), SearchError> {
+    if query == index {
+        Ok(())
+    } else {
+        Err(SearchError::SpaceMismatch {
+            index: index.clone(),
+            query: query.clone(),
+        })
+    }
+}
+
+/// Reads the records of `index_space` in `scope` on the blocking pool.
+async fn read_records(
     store: &Arc<FsRecordStore>,
     index_space: &EmbeddingSpaceId,
-    embedder: &dyn EmbeddingStrategy,
-    query: &str,
-    limit: usize,
     scope: Scope<'_>,
-) -> Result<Vec<SearchHit>, SearchError> {
-    let query_space = &embedder.model_info().embedding_space_id;
-    if query_space != index_space {
-        return Err(SearchError::SpaceMismatch {
-            index: index_space.clone(),
-            query: query_space.clone(),
-        });
-    }
+) -> Result<Vec<crate::record::Record>, SearchError> {
     let pinned: Option<Vec<_>> = match scope {
         Scope::Active => None,
         Scope::Experiment(snapshot) => Some(
@@ -129,7 +126,7 @@ pub async fn search_text(
     };
     // Reading and parsing records.jsonl is blocking file I/O.
     let (store, space) = (Arc::clone(store), index_space.clone());
-    let records = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let revisions = match pinned {
             Some(revisions) => revisions,
             None => store.active(&space)?,
@@ -137,27 +134,17 @@ pub async fn search_text(
         store.records(&revisions)
     })
     .await
-    .map_err(|e| SearchError::Task(e.to_string()))??;
-    if records.is_empty() || limit == 0 {
-        return Ok(Vec::new());
-    }
-    let id: ItemId = "query"
-        .parse()
-        .map_err(|e: crate::ids::IdError| SearchError::InvalidQueryVector(e.to_string()))?;
-    let batch = embedder
-        .embed_queries(&[TextInput {
-            id: id.clone(),
-            text: query.to_owned(),
-        }])
-        .await?;
-    validate_batch(&batch, std::slice::from_ref(&id), embedder.model_info())
-        .map_err(|d| SearchError::InvalidQueryVector(d.to_string()))?;
-    let Some(query_vector) = batch.embeddings.first().map(|e| e.vector.as_slice()) else {
-        return Err(SearchError::InvalidQueryVector(
-            "no vector returned".to_owned(),
-        ));
-    };
+    .map_err(|e| SearchError::Task(e.to_string()))?
+    .map_err(SearchError::Store)
+}
 
+/// Scores every record against `query_vector` and returns the top `limit` hits.
+fn rank(
+    records: Vec<crate::record::Record>,
+    index_space: &EmbeddingSpaceId,
+    query_vector: &[f32],
+    limit: usize,
+) -> Result<Vec<SearchHit>, SearchError> {
     let mut scored = Vec::with_capacity(records.len());
     for record in records {
         if &record.embedding.embedding_space_id != index_space {
@@ -166,6 +153,13 @@ pub async fn search_text(
                 expected: index_space.clone(),
                 actual: record.embedding.embedding_space_id,
             });
+        }
+        if record.embedding.vector.len() != query_vector.len() {
+            return Err(SearchError::InvalidQueryVector(format!(
+                "query has {} dimensions, index records have {}",
+                query_vector.len(),
+                record.embedding.vector.len()
+            )));
         }
         let score = dot(query_vector, &record.embedding.vector);
         scored.push((score, record));
@@ -199,4 +193,66 @@ pub async fn search_text(
             }
         })
         .collect())
+}
+
+/// Searches `index_space` with a text query embedded by `embedder`.
+///
+/// # Errors
+///
+/// Returns [`SearchError::SpaceMismatch`] before embedding when the query model does
+/// not belong to `index_space`, and other [`SearchError`]s for embedding or store
+/// failures. An empty index yields an empty result list.
+pub async fn search_text(
+    store: &Arc<FsRecordStore>,
+    index_space: &EmbeddingSpaceId,
+    embedder: &dyn EmbeddingStrategy,
+    query: &str,
+    limit: usize,
+    scope: Scope<'_>,
+) -> Result<Vec<SearchHit>, SearchError> {
+    guard_space(index_space, &embedder.model_info().embedding_space_id)?;
+    let records = read_records(store, index_space, scope).await?;
+    if records.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let id: ItemId = "query"
+        .parse()
+        .map_err(|e: crate::ids::IdError| SearchError::InvalidQueryVector(e.to_string()))?;
+    let batch = embedder
+        .embed_queries(&[TextInput {
+            id: id.clone(),
+            text: query.to_owned(),
+        }])
+        .await?;
+    validate_batch(&batch, std::slice::from_ref(&id), embedder.model_info())
+        .map_err(|d| SearchError::InvalidQueryVector(d.to_string()))?;
+    let Some(query_vector) = batch.embeddings.first().map(|e| e.vector.as_slice()) else {
+        return Err(SearchError::InvalidQueryVector(
+            "no vector returned".to_owned(),
+        ));
+    };
+    rank(records, index_space, query_vector, limit)
+}
+
+/// Searches `index_space` with a query vector already embedded in `query_space`.
+///
+/// # Errors
+///
+/// Returns [`SearchError::SpaceMismatch`] before reading the index when the spaces
+/// differ, even if the dimensions match (PRD §6.5), and other [`SearchError`]s for
+/// store failures or a vector of the wrong size.
+pub async fn search_vector(
+    store: &Arc<FsRecordStore>,
+    index_space: &EmbeddingSpaceId,
+    query_space: &EmbeddingSpaceId,
+    query_vector: &[f32],
+    limit: usize,
+    scope: Scope<'_>,
+) -> Result<Vec<SearchHit>, SearchError> {
+    guard_space(index_space, query_space)?;
+    let records = read_records(store, index_space, scope).await?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    rank(records, index_space, query_vector, limit)
 }
