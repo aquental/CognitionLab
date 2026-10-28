@@ -129,6 +129,12 @@ label = 1
 note = "Title of the abdominal ultrasound report, not an image"
 
 [[label]]
+query = "q08"
+item = "us-mixed-003-p2-text-0"
+label = 1
+note = "Title of the abdominal ultrasound report repeated on page 2, not an image"
+
+[[label]]
 query = "q09"
 item = "us-mixed-003-p1-image-0"
 label = 2

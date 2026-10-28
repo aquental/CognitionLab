@@ -32,6 +32,7 @@ struct State {
     pages: BTreeMap<(String, u32), FixturePage>,
     page_counts: BTreeMap<String, u32>,
     ocr_calls: Vec<(String, u32)>,
+    text_calls: usize,
     failing: BTreeMap<String, String>,
 }
 
@@ -129,6 +130,13 @@ impl FixtureExtractor {
         self.state().ocr_calls.clone()
     }
 
+    /// Every extraction operation received: page counts, text pages, and OCR pages.
+    #[must_use]
+    pub fn extraction_calls(&self) -> usize {
+        let state = self.state();
+        state.text_calls + state.ocr_calls.len()
+    }
+
     fn check_failing(&self, file: &str) -> Result<(), ExtractionError> {
         match self.state().failing.get(file) {
             Some(reason) => Err(ExtractionError::Tool {
@@ -147,6 +155,7 @@ impl TextExtractor for FixtureExtractor {
 
     async fn page_count(&self, pdf: &Path) -> Result<NonZeroU32, ExtractionError> {
         let file = stem(pdf);
+        self.state().text_calls += 1;
         self.check_failing(&file)?;
         self.state()
             .page_counts
@@ -162,6 +171,7 @@ impl TextExtractor for FixtureExtractor {
         page: NonZeroU32,
     ) -> Result<PageText, ExtractionError> {
         let file = stem(pdf);
+        self.state().text_calls += 1;
         self.check_failing(&file)?;
         let native = self
             .state()
