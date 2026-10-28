@@ -1,5 +1,6 @@
 //! Experiment-level properties (always runs): extraction fidelity must not depend on
-//! chunking (review finding C2-6).
+//! chunking (review finding C2-6), and an incomplete ingestion whose labels cannot
+//! apply is reported, not aborted (C2-10).
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -8,15 +9,18 @@ use std::time::Duration;
 
 use embeddings_fundamentals::adapters::BuildError;
 use embeddings_fundamentals::corpus::LoadedManifest;
+use embeddings_fundamentals::domain::{FailureStage, RunStatus, SourceStatus};
 use embeddings_fundamentals::embedding::EmbeddingStrategy;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
 use embeddings_fundamentals::evaluation::Dataset;
-use embeddings_fundamentals::experiment::{self, ExperimentInputs, Instruments, Tools};
+use embeddings_fundamentals::experiment::{
+    self, ExperimentError, ExperimentInputs, Instruments, Tools,
+};
 use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
 use embeddings_fundamentals::fidelity::LoadedSample;
 use embeddings_fundamentals::measurement::{FixedMemory, Hardware, ManualClock};
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep};
-use embeddings_fundamentals::report::ConfigurationResult;
+use embeddings_fundamentals::report::{ConfigurationResult, EvaluationNotRunStatus};
 use embeddings_fundamentals::storage::FsRecordStore;
 
 fn repo(path: &str) -> std::path::PathBuf {
@@ -28,19 +32,39 @@ fn repo(path: &str) -> std::path::PathBuf {
     reason = "test helper: a setup failure must abort the test"
 )]
 async fn run_with_budget(max_input_tokens: usize, id: &str) -> ConfigurationResult {
+    // Image-only labels: text labels do not apply to truncated chunks (C2-1), and this
+    // test is about extraction fidelity, not retrieval quality.
+    run_experiment(
+        max_input_tokens,
+        id,
+        "tests/fixtures/evaluation/labels-images-only.toml",
+        None,
+    )
+    .await
+    .expect("experiment")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a setup failure must abort the test"
+)]
+async fn run_experiment(
+    max_input_tokens: usize,
+    id: &str,
+    labels: &str,
+    failing_stem: Option<&str>,
+) -> Result<ConfigurationResult, ExperimentError> {
     let manifest =
         LoadedManifest::load(&repo("tests/fixtures/corpus/manifest.toml")).expect("manifest");
     let extractor =
         FixtureExtractor::from_dir(&repo("tests/fixtures/extraction")).expect("fixtures");
+    if let Some(stem) = failing_stem {
+        extractor.fail_file(stem, "injected extraction failure");
+    }
     let store_dir = tempfile::tempdir().expect("tmp");
     let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
-    let dataset = Dataset::load(
-        &repo("config/evaluation/queries-v1.toml"),
-        // Image-only labels: text labels do not apply to truncated chunks (C2-1), and
-        // this test is about extraction fidelity, not retrieval quality.
-        &repo("tests/fixtures/evaluation/labels-images-only.toml"),
-    )
-    .expect("dataset");
+    let dataset =
+        Dataset::load(&repo("config/evaluation/queries-v1.toml"), &repo(labels)).expect("dataset");
     let sample =
         LoadedSample::load(&repo("config/fidelity/sample-synthetic-v1.toml")).expect("sample");
     let mut settings = IngestSettings::new(id.parse().expect("id"));
@@ -59,7 +83,7 @@ async fn run_with_budget(max_input_tokens: usize, id: &str) -> ConfigurationResu
     let instruments = Instruments {
         clock: Arc::new(ManualClock::new(Duration::from_millis(1))),
         memory: FixedMemory(Some(1)),
-        hardware: Hardware::detect(),
+        hardware: Hardware::detect().await,
     };
     experiment::run(
         Tools {
@@ -80,7 +104,6 @@ async fn run_with_budget(max_input_tokens: usize, id: &str) -> ConfigurationResu
         },
     )
     .await
-    .expect("experiment")
 }
 
 #[tokio::test]
@@ -107,4 +130,58 @@ async fn extraction_fidelity_is_independent_of_the_chunking_budget() {
     assert_eq!(wide.by_field, narrow.by_field);
     assert_eq!(wide.by_method, narrow.by_method);
     assert!(wide.overall.correct > 0, "the sample must match something");
+}
+
+#[tokio::test]
+async fn a_failed_labeled_source_is_reported_as_incomplete_without_an_evaluation() {
+    let outcome = run_experiment(
+        512,
+        "labeled-source-fails",
+        "config/evaluation/labels-synthetic-v2.toml",
+        Some("lab-searchable-001"),
+    )
+    .await;
+    let Err(ExperimentError::EvaluationNotRun(incomplete)) = outcome else {
+        panic!("expected EvaluationNotRun, got {outcome:?}");
+    };
+    assert_eq!(incomplete.run_status, RunStatus::Incomplete);
+    assert_eq!(incomplete.evaluation.status, EvaluationNotRunStatus::NotRun);
+    assert!(
+        incomplete
+            .evaluation
+            .reason
+            .contains("lab-searchable-001-p1-text-"),
+        "the reason names the inapplicable label: {}",
+        incomplete.evaluation.reason
+    );
+    assert_eq!(incomplete.reliability.failed_sources, 1);
+    let failed: Vec<_> = incomplete
+        .ingestion
+        .sources
+        .iter()
+        .filter(|s| s.status == SourceStatus::Failed)
+        .collect();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].source_id.as_str(), "lab-searchable-001");
+    assert_eq!(failed[0].stage, Some(FailureStage::Extraction));
+    // The persisted form round-trips and says the evaluation did not run.
+    let json = serde_json::to_value(&*incomplete).expect("json");
+    assert_eq!(json["evaluation"]["status"], "not_run");
+    assert_eq!(json["run_status"], "incomplete");
+}
+
+#[tokio::test]
+async fn a_failed_unlabeled_source_still_completes_the_evaluation() {
+    // The image-only labels never point into the searchable PDF, so its failure leaves
+    // the evaluation applicable; the result still says the ingestion was incomplete.
+    let result = run_experiment(
+        512,
+        "unlabeled-source-fails",
+        "tests/fixtures/evaluation/labels-images-only.toml",
+        Some("lab-searchable-001"),
+    )
+    .await
+    .expect("experiment");
+    assert_eq!(result.run_status, RunStatus::Incomplete);
+    assert_eq!(result.reliability.failed_sources, 1);
 }

@@ -358,13 +358,30 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(code));
         }
     };
-    let json = serde_json::to_string_pretty(&report)?;
-    match &args.report {
+    write_json(args.report.as_deref(), &report)?;
+    print_sources(&report);
+    eprintln!(
+        "run {}: {}",
+        report.experiment_id,
+        report.run_status.as_str()
+    );
+    Ok(ExitCode::from(report.exit_code()))
+}
+
+/// Writes `value` as pretty JSON to `path`, or to stdout when no path is given.
+fn write_json<T: serde::Serialize>(path: Option<&std::path::Path>, value: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(value)?;
+    match path {
         Some(path) => {
-            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?
+            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
         }
         None => println!("{json}"),
     }
+    Ok(())
+}
+
+/// Prints one status line per source (ids, stages, and counts only).
+fn print_sources(report: &crate::pipeline::RunReport) {
     for source in &report.sources {
         eprintln!(
             "{:<20} {:<15} stage={:<11} attempts={} records={}{}",
@@ -380,12 +397,6 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
                 .unwrap_or_default()
         );
     }
-    eprintln!(
-        "run {}: {}",
-        report.experiment_id,
-        report.run_status.as_str()
-    );
-    Ok(ExitCode::from(report.exit_code()))
 }
 
 async fn search(args: &SearchArgs) -> Result<ExitCode> {
@@ -466,7 +477,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let instruments = Instruments {
         clock: Arc::new(crate::measurement::SystemClock::new()),
         memory: crate::measurement::RusageProbe,
-        hardware: crate::measurement::Hardware::detect(),
+        hardware: crate::measurement::Hardware::detect().await,
     };
     let outcome = crate::experiment::run(
         Tools {
@@ -490,6 +501,17 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let result = match outcome {
         Ok(result) => result,
         Err(ExperimentError::Build(e)) => return Ok(build_failure(&e)),
+        Err(ExperimentError::EvaluationNotRun(incomplete)) => {
+            write_json(args.ingest.report.as_deref(), &incomplete)?;
+            eprintln!(
+                "experiment {}: {} | evaluation not run: {}",
+                incomplete.experiment_id,
+                incomplete.run_status.as_str(),
+                incomplete.evaluation.reason
+            );
+            print_sources(&incomplete.ingestion);
+            return Ok(ExitCode::from(EXIT_INCOMPLETE));
+        }
         Err(ExperimentError::Validation(e)) => {
             let code = e.exit_code();
             let kind = if code == EXIT_VALIDATION {
@@ -502,13 +524,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
         }
         Err(e) => return Err(e.into()),
     };
-    let json = serde_json::to_string_pretty(&result)?;
-    match &args.ingest.report {
-        Some(path) => {
-            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
-        }
-        None => println!("{json}"),
-    }
+    write_json(args.ingest.report.as_deref(), &result)?;
     let m = &result.evaluation.metrics;
     eprintln!(
         "experiment {}: {} | P@3 {:.4} Hit@3 {:.4} nDCG@3 {:.4} | ingestion {:.0} ms | warm median {:.2} ms",

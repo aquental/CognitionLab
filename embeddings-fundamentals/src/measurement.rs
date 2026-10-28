@@ -429,22 +429,34 @@ pub struct Hardware {
     pub accelerator: String,
 }
 
+/// Upper bound on one hardware probe subprocess (`sysctl`).
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `program args` without blocking a runtime worker and returns its trimmed
+/// stdout, or `None` when it fails, prints nothing, or exceeds `limit` (the child is
+/// killed when the timeout drops it).
+async fn probe_output(program: &str, args: &[&str], limit: std::time::Duration) -> Option<String> {
+    let child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(limit, child).await.ok()?.ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 impl Hardware {
     /// Detects the current machine (best effort; unknown fields stay `None`). Engines
-    /// in this build run on the CPU.
-    #[must_use]
-    pub fn detect() -> Self {
-        let sysctl = |key: &str| {
-            std::process::Command::new("sysctl")
-                .args(["-n", key])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-                .filter(|s| !s.is_empty())
-        };
-        let proc_field = |file: &str, key: &str| {
-            std::fs::read_to_string(file).ok().and_then(|t| {
+    /// in this build run on the CPU. Probes run as async subprocesses with a timeout,
+    /// and `/proc` is read through `tokio::fs`.
+    pub async fn detect() -> Self {
+        let sysctl = async |key: &str| probe_output("sysctl", &["-n", key], PROBE_TIMEOUT).await;
+        let proc_field = async |file: &str, key: &str| {
+            tokio::fs::read_to_string(file).await.ok().and_then(|t| {
                 t.lines()
                     .find(|l| l.starts_with(key))
                     .and_then(|l| l.split_once(':'))
@@ -453,13 +465,14 @@ impl Hardware {
         };
         let (cpu, memory_bytes) = if cfg!(target_os = "macos") {
             (
-                sysctl("machdep.cpu.brand_string"),
-                sysctl("hw.memsize").and_then(|m| m.parse().ok()),
+                sysctl("machdep.cpu.brand_string").await,
+                sysctl("hw.memsize").await.and_then(|m| m.parse().ok()),
             )
         } else {
             (
-                proc_field("/proc/cpuinfo", "model name"),
+                proc_field("/proc/cpuinfo", "model name").await,
                 proc_field("/proc/meminfo", "MemTotal")
+                    .await
                     .and_then(|m| m.trim_end_matches("kB").trim().parse::<u64>().ok())
                     .and_then(|kib| kib.checked_mul(1024)),
             )
@@ -481,6 +494,40 @@ impl Hardware {
 mod tests {
     use super::*;
     use crate::embedding::deterministic::DeterministicEmbedder;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_stalled_hardware_probe_times_out_without_blocking_the_runtime() {
+        // Regression (C2-12): a probe that never answers must not stall the single
+        // runtime worker, and detection gives up at its timeout.
+        let limit = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let ticks = async {
+            let mut n = 0_u32;
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(20));
+            loop {
+                interval.tick().await;
+                n += 1;
+                if n == 5 {
+                    break n;
+                }
+            }
+        };
+        let (output, n) = tokio::join!(probe_output("sleep", &["30"], limit), ticks);
+        assert_eq!(output, None, "a timed-out probe reports nothing");
+        assert_eq!(n, 5, "the concurrent timer kept running");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "detection must stop at its timeout, took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            probe_output("sh", &["-c", "echo ' x '"], limit)
+                .await
+                .as_deref(),
+            Some("x")
+        );
+        assert_eq!(probe_output("sh", &["-c", "exit 1"], limit).await, None);
+    }
     use approx::assert_abs_diff_eq;
 
     #[test]

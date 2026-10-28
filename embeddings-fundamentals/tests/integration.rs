@@ -43,6 +43,76 @@ async fn required_external_tools_are_installed() {
     assert!(missing.is_empty(), "missing external tools: {missing:?}");
 }
 
+#[test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+fn the_experiment_command_reports_a_failed_labeled_source_with_exit_2() {
+    // Regression (C2-10): a required, labeled PDF that poppler cannot read makes the
+    // ingestion incomplete; the command still writes its report, says the evaluation
+    // did not run, and exits 2.
+    require_integration();
+    let dir = tempfile::tempdir().expect("tmp");
+    let corpus_dir = dir.path().join("corpus");
+    std::fs::create_dir(&corpus_dir).expect("corpus dir");
+    for entry in std::fs::read_dir(corpus("")).expect("fixtures") {
+        let path = entry.expect("entry").path();
+        std::fs::copy(&path, corpus_dir.join(path.file_name().expect("name"))).expect("copy");
+    }
+    let broken = b"not a pdf\n";
+    std::fs::write(corpus_dir.join("lab-searchable-001.pdf"), broken).expect("write");
+    let manifest = std::fs::read_to_string(corpus("manifest.toml")).expect("manifest");
+    let (head, tail) = manifest
+        .split_once("file = \"lab-searchable-001.pdf\"\nchecksum = \"")
+        .expect("searchable source entry");
+    let (_, rest) = tail.split_once('"').expect("checksum");
+    let checksum = embeddings_fundamentals::ids::Checksum::of_bytes(broken);
+    std::fs::write(
+        corpus_dir.join("manifest.toml"),
+        format!(
+            "{head}file = \"lab-searchable-001.pdf\"\nchecksum = \"{}\"{rest}",
+            checksum.as_str()
+        ),
+    )
+    .expect("manifest");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let report = dir.path().join("report.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"))
+        .current_dir(root)
+        .args(["experiment", "--manifest"])
+        .arg(corpus_dir.join("manifest.toml"))
+        .args([
+            "--config",
+            "config/experiments/deterministic.toml",
+            "--store",
+        ])
+        .arg(dir.path().join("store"))
+        .args([
+            "--experiment",
+            "labeled-source-fails",
+            "--latency-repeats",
+            "1",
+        ])
+        .arg("--report")
+        .arg(&report)
+        .output()
+        .expect("run the experiment command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("evaluation not run"), "stderr: {stderr}");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).expect("report")).expect("json");
+    assert_eq!(json["run_status"], "incomplete");
+    assert_eq!(json["evaluation"]["status"], "not_run");
+    assert_eq!(json["reliability"]["failed_sources"], 1);
+    let failed = json["ingestion"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|s| s["source_id"] == "lab-searchable-001")
+        .expect("source");
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["stage"], "extraction");
+}
+
 #[tokio::test]
 #[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
 async fn real_tools_select_native_then_ocr_on_the_mixed_pdf() {
