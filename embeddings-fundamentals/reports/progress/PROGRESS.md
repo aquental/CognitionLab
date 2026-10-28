@@ -77,7 +77,7 @@ None for Phase 0.
 
 ## Phase 1 — Milestone 1: Text baseline (`@m1`)
 
-**Status:** implemented and validated. Grok approved after 7 rounds (G1-1..G1-15, last round NO FINDINGS). Codex rounds 1–2 found C1-1..C1-10, all fixed and confirmed by Grok. **Blocker (2026-10-28 06:13):** Codex round 3 failed with the ChatGPT plan usage limit ("try again at 8:38 AM"). A retry is scheduled for 08:40. Per the execute prompt, an unavailable reviewer blocks phase approval, so Phase 2 does not start until Codex round 3 completes.
+**Status:** ✅ APPROVED (2026-10-28, with owner waiver). Grok approved after 7 rounds (G1-1..G1-15, last round NO FINDINGS). Codex rounds 1–2 found C1-1..C1-10, all fixed; Codex round 2 closed C1-1..C1-7 and Grok round 6 confirmed C1-8..C1-10. Codex round 3 could not run (ChatGPT plan usage limit, 06:13). The owner waived it at 07:52 ("quando a quota do Codex acabar (caso atual), pode pular ele"); no Codex report was simulated, and C1-8..C1-10 carry Grok-only confirmation. See `reports/reviews/phase-1/FINDINGS.md` § Owner waiver.
 
 ### Decisions and PLAN changes, with justification
 | Change | Justification |
