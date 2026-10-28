@@ -176,7 +176,7 @@ pub struct ConfigurationResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationNotRunStatus {
-    /// The ingestion was incomplete and a frozen label points into what is missing.
+    /// The ingestion was incomplete and the query side failed.
     NotRun,
 }
 
@@ -185,12 +185,13 @@ pub enum EvaluationNotRunStatus {
 pub struct EvaluationNotRun {
     /// Always [`EvaluationNotRunStatus::NotRun`].
     pub status: EvaluationNotRunStatus,
-    /// Why (label and chunk ids only, no document content).
+    /// Why (ids and error messages only, no document content).
     pub reason: String,
 }
 
-/// An experiment whose ingestion was incomplete and whose evaluation could not run
-/// because a frozen label points into a failed source (PLAN §4.3: the run still
+/// An experiment whose ingestion was incomplete and whose evaluation could not run,
+/// for example because a frozen label points into a failed source or the query-side
+/// adapter failed (PLAN §4.3: the run still
 /// reports its status and reliability counters, and exits with code 2). It is not a
 /// [`ConfigurationResult`] and cannot enter a comparison.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -253,15 +253,30 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
         })
         .collect();
     // Lines claimed per page, so no extracted line counts for two sample rows. Exact
-    // name matches are reserved for the whole page first. The value is only a fallback
-    // for the remaining rows, over the lines no name claimed: a row binds when it is the
-    // only unmatched row on its page with that value and exactly one unclaimed line
-    // carries it. Ambiguity leaves every row involved unbound, so the result does not
-    // depend on the order of the sample rows.
+    // matches of a name that is unique among the page's sample rows are reserved for
+    // the whole page first. The value is only a fallback for the remaining rows, over
+    // the lines no name claimed: a row binds when it is the only unmatched row on its
+    // page with that value and exactly one unclaimed line carries it. Ambiguity leaves
+    // every row involved unbound, so the result does not depend on the order of the
+    // sample rows.
     let mut claimed: BTreeMap<(SourceId, u32), std::collections::BTreeSet<usize>> = BTreeMap::new();
     let mut assigned: Vec<Option<usize>> = vec![None; rows.len()];
+    // Sample rows that share a test name on one page (a repeated test) cannot be told
+    // apart by name; they are left to the unique-value fallback.
+    let mut names: BTreeMap<(SourceId, u32, String), usize> = BTreeMap::new();
+    for row in rows {
+        let key = (
+            row.source_id.clone(),
+            row.page,
+            norm(&row.test_name).to_lowercase(),
+        );
+        *names.entry(key).or_default() += 1;
+    }
     for (slot, (row, (_, lines))) in assigned.iter_mut().zip(rows.iter().zip(&prepared)) {
         let name = norm(&row.test_name).to_lowercase();
+        if names.get(&(row.source_id.clone(), row.page, name.clone())) != Some(&1) {
+            continue;
+        }
         let taken = claimed
             .entry((row.source_id.clone(), row.page))
             .or_default();
@@ -419,7 +434,19 @@ mod tests {
         let records = [page(
             "Xxx | 92 | mg/dL | 70–99\nCreatinina | 0,9 | mg/dL | 0,6–1,2",
         )];
-        // Row 1 binds by its unique value; row 2 by name; row 3 names row 2's line again.
+        // Row 1 binds by its unique value; row 2 by name.
+        let report = evaluate(
+            &sample(&[
+                ("Glicemia", "92", "mg/dL", "70–99"),
+                ("Creatinina", "0,9", "mg/dL", "0,6–1,2"),
+            ]),
+            &records,
+        );
+        assert_eq!(report.rows_not_found, 0, "{report:?}");
+        // Row 1: name wrong, value/unit/range right (3); row 2: all 4 right.
+        assert_eq!(report.overall.correct, 7);
+        // A third row repeating row 2's name and value cannot be told apart from it, so
+        // neither takes the line.
         let report = evaluate(
             &sample(&[
                 ("Glicemia", "92", "mg/dL", "70–99"),
@@ -428,9 +455,8 @@ mod tests {
             ]),
             &records,
         );
-        assert_eq!(report.rows_not_found, 1, "{report:?}");
-        // Row 1: name wrong, value/unit/range right (3); row 2: all 4 right.
-        assert_eq!(report.overall.correct, 7);
+        assert_eq!(report.rows_not_found, 2, "{report:?}");
+        assert_eq!(report.overall.correct, 3);
     }
 
     #[test]
@@ -477,6 +503,30 @@ mod tests {
             // Glucose 4 fields; Other 3 (its name is unreadable).
             assert_eq!(report.overall.correct, 7, "{rows:?}: {report:?}");
         }
+    }
+
+    #[test]
+    fn repeated_test_names_resolve_by_value_in_any_sample_order() {
+        // Regression (C2-16): two sample rows named A on one page, only `A | 2` extracted.
+        // The name is ambiguous, so the unique value decides: `A | 2` scores four fields
+        // and `A | 1` is not found, whichever row comes first.
+        let records = [page("A | 2 | u | r")];
+        let one = ("A", "1", "u", "r");
+        let two = ("A", "2", "u", "r");
+        for rows in [[one, two], [two, one]] {
+            let report = evaluate(&sample(&rows), &records);
+            assert_eq!(report.rows_not_found, 1, "{rows:?}: {report:?}");
+            assert_eq!(report.overall.correct, 4, "{rows:?}: {report:?}");
+            assert!(
+                report.mismatches.iter().all(|m| m.expected != "2"),
+                "{rows:?}: the extracted row must not be charged to `A | 1`: {report:?}"
+            );
+        }
+        // Both repeated rows extracted: each binds to its own value.
+        let both = [page("A | 1 | u | r\nA | 2 | u | r")];
+        let report = evaluate(&sample(&[one, two]), &both);
+        assert_eq!(report.rows_not_found, 0, "{report:?}");
+        assert_eq!(report.overall.correct, 8, "{report:?}");
     }
 
     #[test]
