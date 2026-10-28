@@ -127,7 +127,7 @@ Exact versions of `kamadak-exif`, `tokenizers`, `tiktoken-rs`, `nix` are checked
 | `chunking_fingerprint` | sha256(strategy id + params + tokenizer id + truncation policy) |
 | `revision_id` | `rev-` + sha256(source checksum ‖ extraction_fingerprint ‖ chunking_fingerprint)[..16] |
 | `chunk_id` | `{source_id}-p{page}-{modality}-{index}` (e.g. `src-001-p2-text-3`, `src-001-p2-image-0`); unique within a revision |
-| `embedding_space_id` | sha256(engine, engine_version, model_id, model_revision, dims, normalized, metric, prefix policy, preprocessing) |
+| `embedding_space_id` | `space-` + sha256(canonical JSON of `SpaceDescriptor`: engine, engine_version, model_id, model_revision, weight_format, dims, normalized, metric, prefix policy, preprocessing)[..32]. 128 bits is ample for the handful of spaces in this lab, and the weight format is included because the same model in safetensors and ONNX form is not guaranteed to produce identical vectors |
 | `record_id` | sha256(canonical JSON `{revision_id, chunk_id, embedding_space_id}`)[..16] |
 
 Equal dimensions never imply equal spaces (US-04).
@@ -427,11 +427,12 @@ CI runs clippy with `-D warnings`, so every `warn` above blocks a merge.
 
 1. `cargo fmt --check`
 2. `cargo clippy --all-targets -- -D warnings` (lints from §5.4) **for each feature set**: none, each engine alone, `--all-features`. This compiles every `#[cfg]` adapter.
-3. `cargo test` (unit + doc + `bdd` + `bdd_selftest`) with no engine features. This step gates the merge.
+3. `cargo test` (unit + doc + `fixtures` + `bdd` + `bdd_selftest`) with no engine features. This step gates the merge.
+   - The fixture corpus is regenerated into a temporary directory from the checked-in rasters and diffed against `tests/fixtures/corpus/` (no poppler needed).
    - Measurements reported as evidence are produced with `--release`, and the report records the build profile.
 4. Upload `reports/bdd/cucumber.json` + corpus/config fingerprints.
 5. **Required job (local engines, no secrets):** cache the HF models pinned in `config/experiments/*.toml`, then run `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`. Phase 2 cannot exit on the deterministic adapter alone.
-6. Optional job (OpenAI secret): `RUN_INTEGRATION=1 cargo test --features engine-openai --test integration -- --include-ignored`, then upload `reports/integration/`. If it is not run, OpenAI stays an **outstanding** acceptance item.
+6. OpenAI job, added in Phase 2 together with the first OpenAI integration test. It is gated by the repository variable `RUN_OPENAI_INTEGRATION == 'true'` at job level, so without credentials GitHub shows it as **skipped**, never as a green pass. It runs only the OpenAI tests (`--features engine-openai ... openai`). If it does not run, OpenAI stays an **outstanding** acceptance item.
 
 ---
 
