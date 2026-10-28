@@ -52,35 +52,35 @@ impl Clock for SystemClock {
     }
 }
 
-/// A test clock that advances by a fixed tick on every reading, so an interval read
-/// with no other readings in between always measures exactly one tick.
-#[derive(Debug)]
+/// A test clock that moves only when advanced. Controlled components advance it while
+/// they do their work (an adapter call, a model load), so an interval measures exactly
+/// the work done inside it, and nothing when the work happened outside it. Reading the
+/// clock never moves it.
+#[derive(Debug, Default)]
 pub struct ManualClock {
-    tick_micros: u64,
-    readings: AtomicU64,
+    now_micros: AtomicU64,
 }
 
 impl ManualClock {
-    /// A clock advancing `tick` per reading; the first reading returns `tick`.
+    /// A clock at time zero.
     #[must_use]
-    pub fn new(tick: Duration) -> Self {
-        Self {
-            tick_micros: u64::try_from(tick.as_micros()).unwrap_or(u64::MAX),
-            readings: AtomicU64::new(0),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Number of readings so far.
-    #[must_use]
-    pub fn readings(&self) -> u64 {
-        self.readings.load(Ordering::SeqCst)
+    /// Moves the clock forward by `by` (saturating at `u64::MAX` microseconds).
+    pub fn advance(&self, by: Duration) {
+        let micros = u64::try_from(by.as_micros()).unwrap_or(u64::MAX);
+        self.now_micros
+            .update(Ordering::SeqCst, Ordering::SeqCst, |now| {
+                now.saturating_add(micros)
+            });
     }
 }
 
 impl Clock for ManualClock {
     fn now(&self) -> Duration {
-        let n = self.readings.fetch_add(1, Ordering::SeqCst) + 1;
-        Duration::from_micros(n.saturating_mul(self.tick_micros))
+        Duration::from_micros(self.now_micros.load(Ordering::SeqCst))
     }
 }
 
@@ -249,7 +249,8 @@ pub struct EmbeddingSummary {
     pub mean_batch_latency_ms: f64,
     /// Inputs per second inside the adapter.
     pub items_per_second: f64,
-    /// Provider usage summed over successful calls; `None` when no call reported it.
+    /// Provider usage summed over successful calls; `None` unless every successful call
+    /// that embedded something reported it (a partial sum is never an estimate).
     pub usage_tokens: Option<u64>,
 }
 
@@ -291,6 +292,9 @@ impl EmbeddingCalls {
         let items: usize = ok.iter().map(|r| r.items).sum();
         let calls = records.len();
         let total_ms = millis(total);
+        // Usage is known only when every successful call that embedded something reported
+        // it; a partial sum would present an invented total as an estimate.
+        let usage_complete = ok.iter().all(|r| r.items == 0 || r.usage_tokens.is_some());
         let reported: Vec<u64> = ok.iter().filter_map(|r| r.usage_tokens).collect();
         EmbeddingSummary {
             calls,
@@ -307,23 +311,26 @@ impl EmbeddingCalls {
             } else {
                 u64_f64(u64::try_from(items).unwrap_or(u64::MAX)) / total.as_secs_f64()
             },
-            usage_tokens: (!reported.is_empty()).then(|| reported.iter().sum()),
+            usage_tokens: (usage_complete && !reported.is_empty()).then(|| reported.iter().sum()),
         }
     }
 }
 
 /// Decorator that times every adapter call. It reports the wrapped adapter's model
 /// information unchanged, so records and spaces are identical with or without it.
-pub struct MeasuredEmbedder {
+///
+/// Generic over the clock (static dispatch, PLAN §2.2); it is itself an
+/// [`EmbeddingStrategy`] so it can stand in for the selected `dyn` adapter.
+pub struct MeasuredEmbedder<C> {
     inner: Arc<dyn EmbeddingStrategy>,
-    clock: Arc<dyn Clock>,
+    clock: Arc<C>,
     calls: EmbeddingCalls,
 }
 
-impl MeasuredEmbedder {
+impl<C: Clock> MeasuredEmbedder<C> {
     /// Wraps `inner`, reading `clock` around each call.
     #[must_use]
-    pub fn new(inner: Arc<dyn EmbeddingStrategy>, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(inner: Arc<dyn EmbeddingStrategy>, clock: Arc<C>) -> Self {
         Self {
             inner,
             clock,
@@ -359,7 +366,7 @@ impl MeasuredEmbedder {
     }
 }
 
-impl std::fmt::Debug for MeasuredEmbedder {
+impl<C> std::fmt::Debug for MeasuredEmbedder<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MeasuredEmbedder")
             .field("model", self.inner.model_info())
@@ -368,7 +375,7 @@ impl std::fmt::Debug for MeasuredEmbedder {
 }
 
 #[async_trait::async_trait]
-impl EmbeddingStrategy for MeasuredEmbedder {
+impl<C: Clock + 'static> EmbeddingStrategy for MeasuredEmbedder<C> {
     fn capabilities(&self) -> &Capabilities {
         self.inner.capabilities()
     }
@@ -422,22 +429,59 @@ pub struct Hardware {
     pub accelerator: String,
 }
 
+/// Upper bound on one hardware probe subprocess (`sysctl`).
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `program args` without blocking a runtime worker and returns its trimmed
+/// stdout, or `None` when it fails, prints nothing, or exceeds `limit` (the child is
+/// killed when the timeout drops it).
+async fn probe_output(program: &str, args: &[&str], limit: std::time::Duration) -> Option<String> {
+    let child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(limit, child).await.ok()?.ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 impl Hardware {
-    /// Detects the current machine (best effort; unknown fields stay `None`). Engines
-    /// in this build run on the CPU.
+    /// Combines two descriptions of the machine a measurement ran on. The stable
+    /// identity (OS, architecture, logical CPUs, accelerator) must be equal; a probed
+    /// field (`cpu`, `memory_bytes`) that one side could not read is unknown, not
+    /// different, and is taken from the other side. Returns `None` when the two
+    /// describe different machines.
     #[must_use]
-    pub fn detect() -> Self {
-        let sysctl = |key: &str| {
-            std::process::Command::new("sysctl")
-                .args(["-n", key])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-                .filter(|s| !s.is_empty())
-        };
-        let proc_field = |file: &str, key: &str| {
-            std::fs::read_to_string(file).ok().and_then(|t| {
+    pub fn merge(&self, other: &Self) -> Option<Self> {
+        fn probed<T: Clone + PartialEq>(a: Option<&T>, b: Option<&T>) -> Option<Option<T>> {
+            match (a, b) {
+                (Some(a), Some(b)) if a != b => None,
+                (a, b) => Some(a.or(b).cloned()),
+            }
+        }
+        let same = self.os == other.os
+            && self.arch == other.arch
+            && self.logical_cpus == other.logical_cpus
+            && self.accelerator == other.accelerator;
+        same.then_some(())?;
+        Some(Self {
+            cpu: probed(self.cpu.as_ref(), other.cpu.as_ref())?,
+            memory_bytes: probed(self.memory_bytes.as_ref(), other.memory_bytes.as_ref())?,
+            ..self.clone()
+        })
+    }
+
+    /// Detects the current machine (best effort; unknown fields stay `None`). Engines
+    /// in this build run on the CPU. Probes run as async subprocesses with a timeout,
+    /// and `/proc` is read through `tokio::fs`.
+    pub async fn detect() -> Self {
+        let sysctl = async |key: &str| probe_output("sysctl", &["-n", key], PROBE_TIMEOUT).await;
+        let proc_field = async |file: &str, key: &str| {
+            tokio::fs::read_to_string(file).await.ok().and_then(|t| {
                 t.lines()
                     .find(|l| l.starts_with(key))
                     .and_then(|l| l.split_once(':'))
@@ -446,13 +490,14 @@ impl Hardware {
         };
         let (cpu, memory_bytes) = if cfg!(target_os = "macos") {
             (
-                sysctl("machdep.cpu.brand_string"),
-                sysctl("hw.memsize").and_then(|m| m.parse().ok()),
+                sysctl("machdep.cpu.brand_string").await,
+                sysctl("hw.memsize").await.and_then(|m| m.parse().ok()),
             )
         } else {
             (
-                proc_field("/proc/cpuinfo", "model name"),
+                proc_field("/proc/cpuinfo", "model name").await,
                 proc_field("/proc/meminfo", "MemTotal")
+                    .await
                     .and_then(|m| m.trim_end_matches("kB").trim().parse::<u64>().ok())
                     .and_then(|kib| kib.checked_mul(1024)),
             )
@@ -474,6 +519,76 @@ impl Hardware {
 mod tests {
     use super::*;
     use crate::embedding::deterministic::DeterministicEmbedder;
+
+    #[test]
+    fn a_probe_field_that_could_not_be_read_is_unknown_not_different() {
+        // Regression (G2-8): a timed-out `sysctl` leaves `cpu`/`memory_bytes` unset;
+        // that must not make two runs on the same machine incomparable.
+        let full = Hardware {
+            os: "macos".into(),
+            arch: "aarch64".into(),
+            cpu: Some("Apple M3".into()),
+            logical_cpus: Some(8),
+            memory_bytes: Some(16),
+            accelerator: "cpu".into(),
+        };
+        let probe_timed_out = Hardware {
+            cpu: None,
+            memory_bytes: None,
+            ..full.clone()
+        };
+        assert_eq!(probe_timed_out.merge(&full), Some(full.clone()));
+        assert_eq!(full.merge(&probe_timed_out), Some(full.clone()));
+        let other_cpu = Hardware {
+            cpu: Some("Apple M3 Pro".into()),
+            ..full.clone()
+        };
+        assert_eq!(full.merge(&other_cpu), None);
+        let other_cores = Hardware {
+            logical_cpus: Some(12),
+            ..probe_timed_out.clone()
+        };
+        assert_eq!(full.merge(&other_cores), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_stalled_hardware_probe_times_out_without_blocking_the_runtime() {
+        // Regression (C2-12): a probe that never answers must not stall the single
+        // runtime worker, and detection gives up at its timeout.
+        let limit = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let ticks = async {
+            let mut n = 0_u32;
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(20));
+            loop {
+                interval.tick().await;
+                n += 1;
+                if n == 5 {
+                    break n;
+                }
+            }
+        };
+        let (output, n) = tokio::join!(probe_output("sleep", &["30"], limit), ticks);
+        assert_eq!(output, None, "a timed-out probe reports nothing");
+        assert_eq!(n, 5, "the concurrent timer kept running");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "detection must stop at its timeout, took {:?}",
+            started.elapsed()
+        );
+        // Answering probes get the production limit, so a loaded test machine cannot
+        // turn a slow process start into a false timeout.
+        assert_eq!(
+            probe_output("sh", &["-c", "echo ' x '"], PROBE_TIMEOUT)
+                .await
+                .as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            probe_output("sh", &["-c", "exit 1"], PROBE_TIMEOUT).await,
+            None
+        );
+    }
     use approx::assert_abs_diff_eq;
 
     #[test]
@@ -489,20 +604,64 @@ mod tests {
         assert_eq!(nearest_rank(&odd, 0.0), None);
     }
 
+    fn call(items: usize, ok: bool, usage: Option<u64>) -> CallRecord {
+        CallRecord {
+            kind: InputKind::Document,
+            items,
+            duration: Duration::from_millis(1),
+            ok,
+            usage_tokens: usage,
+        }
+    }
+
     #[test]
-    fn manual_clock_ticks_once_per_reading() {
-        let clock = ManualClock::new(Duration::from_millis(10));
+    fn usage_is_unknown_when_any_successful_call_omits_it() {
+        // Regression (G2-1): one billed batch without usage next to one with usage.
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, Some(100)));
+        calls.push(call(5, true, None));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, None);
+
+        // Failed calls and empty calls do not make usage unknown.
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, Some(100)));
+        calls.push(call(5, false, None));
+        calls.push(call(0, true, None));
+        calls.push(call(3, true, Some(20)));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, Some(120));
+
+        // No call reported usage at all (local engines).
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, None));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, None);
+    }
+
+    #[test]
+    fn manual_clock_moves_only_when_advanced() {
+        let clock = ManualClock::new();
         let start = clock.now();
-        let end = clock.now();
-        assert_eq!(end - start, Duration::from_millis(10));
-        assert_eq!(clock.readings(), 2);
+        assert_eq!(clock.now(), start, "reading never moves the clock");
+        clock.advance(Duration::from_millis(10));
+        assert_eq!(clock.now() - start, Duration::from_millis(10));
     }
 
     #[tokio::test]
     async fn the_decorator_times_calls_and_keeps_the_space() {
-        let inner: Arc<dyn EmbeddingStrategy> =
-            Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
-        let clock = Arc::new(ManualClock::new(Duration::from_millis(5)));
+        // The adapter's work advances the clock (5 ms per call); a decorator that read
+        // its start after the inner call returned would measure 0 ms (C2-18).
+        let clock = Arc::new(ManualClock::new());
+        let inner: Arc<dyn EmbeddingStrategy> = Arc::new(
+            DeterministicEmbedder::builder()
+                .work(
+                    Arc::clone(&clock),
+                    crate::embedding::deterministic::WorkCost {
+                        per_call: Duration::from_millis(5),
+                        per_item: Duration::ZERO,
+                    },
+                )
+                .build()
+                .expect("adapter"),
+        );
         let measured = MeasuredEmbedder::new(Arc::clone(&inner), clock);
         assert_eq!(measured.model_info(), inner.model_info());
         let input = |id: &str| TextInput {

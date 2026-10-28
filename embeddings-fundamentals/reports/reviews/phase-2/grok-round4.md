@@ -1,0 +1,1 @@
+The review needs the rest of the phase diff. I'll read it in sections and check only defects that are real.The remaining open leads are the published MiniLM ranking claim, snapshot write order, and the integration and feature steps. I will check those before deciding whether anything is a real defect.NO FINDINGS

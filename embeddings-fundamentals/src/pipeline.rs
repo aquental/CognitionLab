@@ -27,7 +27,9 @@ use crate::ids::{
     RevisionId, SourceId,
 };
 use crate::record::{Record, RecordEmbedding, RecordMetadata};
-use crate::storage::{ExperimentSnapshot, FsRecordStore, PublishOutcome, StoreError};
+use crate::storage::{
+    EvaluationProvenance, ExperimentSnapshot, FsRecordStore, PublishOutcome, StoreError,
+};
 
 /// Process exit code for a run with a failed required source.
 pub const EXIT_INCOMPLETE: u8 = 2;
@@ -379,6 +381,21 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         manifest: &LoadedManifest,
         settings: &IngestSettings,
     ) -> Result<RunReport, ValidationError> {
+        self.ingest_for_evaluation(manifest, settings, None).await
+    }
+
+    /// [`Self::ingest`] for an experiment: the create-only snapshot also records the
+    /// frozen query set and labels the experiment evaluates (PLAN §4.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::ingest`].
+    pub async fn ingest_for_evaluation(
+        &self,
+        manifest: &LoadedManifest,
+        settings: &IngestSettings,
+        evaluation: Option<EvaluationProvenance>,
+    ) -> Result<RunReport, ValidationError> {
         let info = self.embedder.model_info();
         let caps = self.embedder.capabilities();
         // Capabilities are checked before anything else, so an unsupported run touches
@@ -464,6 +481,7 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             .into_iter()
             .collect(),
             corpus_checksum: manifest.manifest_checksum.clone(),
+            evaluation,
         };
         self.on_store(move |s| s.save_experiment(&snapshot)).await?;
         let report = RunReport {
@@ -483,6 +501,33 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         };
         info!(experiment_id = %report.experiment_id, status = report.run_status.as_str(), "ingestion finished");
         Ok(report)
+    }
+
+    /// Extracts every page of one manifest source exactly as ingestion does (native text
+    /// or OCR per page), without chunking, embedding, or storing anything. Extraction
+    /// fidelity reads this output, so chunking budgets cannot change it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason when the source is not in the manifest or extraction fails.
+    pub async fn extract_source(
+        &self,
+        manifest: &LoadedManifest,
+        source: &crate::ids::SourceId,
+        config: &ExtractionConfig,
+    ) -> Result<Vec<PageText>, String> {
+        let entry = manifest
+            .manifest
+            .sources
+            .iter()
+            .find(|e| &e.source_id == source)
+            .ok_or_else(|| format!("source {source} is not in the manifest"))?;
+        if !entry.input_type.is_pdf() {
+            return Ok(Vec::new());
+        }
+        let mut report = SourceReport::new(entry);
+        self.extract_pages(&manifest.path_of(entry), config, &mut report)
+            .await
     }
 
     async fn extract_pages(

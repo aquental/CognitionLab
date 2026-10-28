@@ -27,7 +27,7 @@ pub const ENGINE_VERSION: &str = "7.5.0";
 pub const DEFAULT_WEIGHTS: &str = "onnx/model.onnx";
 
 /// The FastEmbed adapter: the shared local contract over an ONNX session.
-pub type FastEmbedAdapter = LocalTextAdapter<FastEmbedBackend>;
+pub type FastEmbedAdapter = LocalTextAdapter<FastEmbedBackend, super::hf::HfTokenCounter>;
 
 /// Errors raised while loading the model.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +37,14 @@ pub enum LoadError {
     MissingRevision {
         /// Model identifier.
         model: String,
+    },
+    /// The revision is a branch or tag, not an immutable commit id (PRD §6.4).
+    #[error("model {model}: revision {revision:?} is not an immutable commit id")]
+    MutableRevision {
+        /// Model identifier.
+        model: String,
+        /// The given revision.
+        revision: String,
     },
     /// A file could not be downloaded at the pinned revision.
     #[error("cannot fetch {file} of {model}: {reason}")]
@@ -175,6 +183,12 @@ pub async fn load(
             model: model_id.to_owned(),
         })?
         .to_owned();
+    if !super::is_immutable_hub_revision(&revision) {
+        return Err(LoadError::MutableRevision {
+            model: model_id.to_owned(),
+            revision,
+        });
+    }
     let weights = weights.unwrap_or(DEFAULT_WEIGHTS).to_owned();
     let model_error = |reason: String| LoadError::Model {
         model: model_id.to_owned(),
@@ -184,8 +198,19 @@ pub async fn load(
     let files = tokio::task::spawn_blocking(move || fetch(&model, &rev, &file))
         .await
         .map_err(|e| model_error(e.to_string()))??;
-    let tokens = HfTokenCounter::load(&files.tokenizer)?;
-    let limit = hf::effective_limit(model_id, &files.config, max_input_tokens)?;
+    // Tokenizer deserialization and config reads are blocking file work (C2-8).
+    let (model, tokenizer, config) = (
+        model_id.to_owned(),
+        files.tokenizer.clone(),
+        files.config.clone(),
+    );
+    let (tokens, limit) = tokio::task::spawn_blocking(move || {
+        let tokens = HfTokenCounter::load(&tokenizer)?;
+        let limit = hf::effective_limit(&model, &config, max_input_tokens)?;
+        Ok::<_, LoadError>((tokens, limit))
+    })
+    .await
+    .map_err(|e| model_error(e.to_string()))??;
     let model = model_id.to_owned();
     let session = tokio::task::spawn_blocking(move || {
         let user_model = UserDefinedEmbeddingModel::new(
@@ -226,7 +251,7 @@ pub async fn load(
         FastEmbedBackend {
             model: Mutex::new(session),
         },
-        Box::new(tokens),
+        tokens,
         info,
         Capabilities {
             text_documents: true,

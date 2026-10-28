@@ -1,4 +1,12 @@
 {
+  "hardware": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpu": "Apple M3",
+    "logical_cpus": 8,
+    "memory_bytes": 17179869184,
+    "accelerator": "cpu"
+  },
   "experiment_id": "p2-fastembed-e5-base",
   "run_status": "succeeded",
   "engine": "fastembed",
@@ -15,7 +23,7 @@
   "fingerprints": {
     "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
     "chunking": "27662ad9577180a704321769c9de39f62f813fc3f8cb2da8d25f44326b07a91f",
-    "evaluation": "40b5de69a70f8eea2831b7cea33926888f47d89f79ec6fb5927a57dd28c2b7ca"
+    "evaluation": "7fafa53198f8a2590d2d2ab40ba1aca21fb95b3d2adb8bbc9bd77fad8e3bc2bf"
   },
   "evaluation": {
     "mode": "text-only",
@@ -25,11 +33,11 @@
       "checksum": "sha256:0ca4735dc8b960715916fc29ac76d8de577465e6ef232e69116d6053638ebbed"
     },
     "labels": {
-      "version": "labels-synthetic-v1",
-      "checksum": "sha256:c2f637cbaf5fbb1814f15c37c3251e543609b4e93da7639d388345c80c3f4b6a"
+      "version": "labels-synthetic-v2",
+      "checksum": "sha256:e77ca08cc9672fbc4c2925ac7e714782a90413cc86900cc55ba6914662f4ea3b"
     },
     "labels_corpus": "synthetic",
-    "evaluation_fingerprint": "40b5de69a70f8eea2831b7cea33926888f47d89f79ec6fb5927a57dd28c2b7ca",
+    "evaluation_fingerprint": "7fafa53198f8a2590d2d2ab40ba1aca21fb95b3d2adb8bbc9bd77fad8e3bc2bf",
     "spaces": [
       "space-20e1f35a45635362d2a1a1be05b34b34"
     ],
@@ -584,42 +592,48 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 3297.468333,
+      "duration_ms": 3507.0555830000003,
       "pages": 6,
       "chunks": 28,
-      "ms_per_page": 549.5780555,
-      "chunks_per_second": 8.491362819101257
+      "ms_per_page": 584.5092638333334,
+      "chunks_per_second": 7.9839053979430465
     },
-    "ingestion_model_load_ms": 6907.754542000001,
+    "ingestion_model_load_ms": 10140.625208,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 28,
-      "total_ms": 744.1591669999999,
-      "mean_batch_latency_ms": 248.05305566666664,
-      "items_per_second": 37.626359039396206,
+      "total_ms": 1022.4962500000001,
+      "mean_batch_latency_ms": 340.8320833333334,
+      "items_per_second": 27.383963510868618,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 5400.658,
-      "first_query_ms": 52.746874999999996,
-      "total_ms": 5453.404875
+      "model_load_ms": 10140.625208,
+      "first_operation_ms": 337.220042,
+      "first_operation_items": 10,
+      "total_ms": 10477.84525
+    },
+    "query_side_start": {
+      "model_load_ms": 10880.427125,
+      "first_query_ms": 91.823167,
+      "total_ms": 10972.250292
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 48.605416,
-      "p95_ms": 51.608708
+      "median_ms": 58.239292,
+      "p95_ms": 64.91924999999999
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 7925219328.0,
+      "value": 5865521152.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },
     "gpu_memory": {
       "status": "unavailable",
-      "reason": "inference runs on the CPU; no GPU is used"
+      "reason": "inference runs on the local CPU; no GPU is used"
     },
     "provider_inference_memory": null,
     "index_size": {

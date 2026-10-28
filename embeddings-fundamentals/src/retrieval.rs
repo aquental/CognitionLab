@@ -108,7 +108,7 @@ fn guard_space(index: &EmbeddingSpaceId, query: &EmbeddingSpaceId) -> Result<(),
 }
 
 /// Reads the records of `index_space` in `scope` on the blocking pool.
-async fn read_records(
+pub(crate) async fn read_records(
     store: &Arc<FsRecordStore>,
     index_space: &EmbeddingSpaceId,
     scope: Scope<'_>,
@@ -250,6 +250,17 @@ pub async fn search_vector(
     scope: Scope<'_>,
 ) -> Result<Vec<SearchHit>, SearchError> {
     guard_space(index_space, query_space)?;
+    // The same finiteness rule as embedded queries (PRD §4): a NaN or infinite component
+    // would make every score meaningless, so it is refused before any index read.
+    if let Some((index, value)) = query_vector
+        .iter()
+        .enumerate()
+        .find(|(_, v)| !v.is_finite())
+    {
+        return Err(SearchError::InvalidQueryVector(format!(
+            "query vector component {index} is not finite ({value})"
+        )));
+    }
     let records = read_records(store, index_space, scope).await?;
     if limit == 0 {
         return Ok(Vec::new());
