@@ -264,6 +264,10 @@ async fn embed_anything_always_enforces_a_finite_limit_within_the_model() {
 }
 
 #[cfg(any(feature = "engine-fastembed", feature = "engine-openai"))]
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a broken fixture must fail the calling test"
+)]
 fn experiment(file: &str) -> embeddings_fundamentals::config::EngineConfig {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config/experiments")
@@ -274,6 +278,10 @@ fn experiment(file: &str) -> embeddings_fundamentals::config::EngineConfig {
 }
 
 #[cfg(any(feature = "engine-fastembed", feature = "engine-openai"))]
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a broken fixture must fail the calling test"
+)]
 async fn hemoglobin_scores(
     adapter: &dyn embeddings_fundamentals::embedding::EmbeddingStrategy,
 ) -> (Vec<Vec<f32>>, f32, f32) {
