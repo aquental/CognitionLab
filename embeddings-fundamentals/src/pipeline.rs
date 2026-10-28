@@ -27,7 +27,7 @@ use crate::ids::{
     RevisionId, SourceId,
 };
 use crate::record::{Record, RecordEmbedding, RecordMetadata};
-use crate::storage::{ExperimentSnapshot, FsRecordStore, StoreError};
+use crate::storage::{ExperimentSnapshot, FsRecordStore, PublishOutcome, StoreError};
 
 /// Process exit code for a run with a failed required source.
 pub const EXIT_INCOMPLETE: u8 = 2;
@@ -121,9 +121,26 @@ pub enum ValidationError {
     /// A fingerprint could not be computed.
     #[error(transparent)]
     Fingerprint(#[from] IdError),
-    /// The store could not be read.
+    /// The store could not be read or written (an internal error, not a refusal).
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// A blocking store task panicked or was cancelled.
+    #[error("store task failed: {0}")]
+    Task(String),
+}
+
+impl ValidationError {
+    /// CLI exit code: [`EXIT_VALIDATION`] for refusals, 1 for internal errors.
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        match self {
+            Self::MissingCapability(_)
+            | Self::RemoteNotPermitted { .. }
+            | Self::ExperimentExists(_)
+            | Self::Chunking(_) => EXIT_VALIDATION,
+            Self::Fingerprint(_) | Self::Store(_) | Self::Task(_) => 1,
+        }
+    }
 }
 
 /// Remote-permission check, used both by `ingest` and by the CLI before an adapter
@@ -179,8 +196,10 @@ pub struct SourceReport {
     pub attempts: u32,
     /// Retries after transient failures.
     pub retries: u32,
-    /// Records committed by this run.
+    /// Records written by this run (0 when an intact revision was re-activated).
     pub records_committed: usize,
+    /// An intact revision with the same id already existed and was re-activated.
+    pub reused_revision: bool,
     /// Revision that is active after this run, or that was attempted.
     pub revision_id: Option<RevisionId>,
     /// The active revision was already current; nothing was re-embedded.
@@ -202,6 +221,7 @@ impl SourceReport {
             attempts: 0,
             retries: 0,
             records_committed: 0,
+            reused_revision: false,
             revision_id: None,
             unchanged: false,
             pages: Vec::new(),
@@ -291,6 +311,19 @@ struct ChunkingFingerprintInput<'a> {
 }
 
 impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
+    /// Runs a store operation on the blocking pool (directory fsync and renames block).
+    async fn on_store<R, F>(&self, op: F) -> Result<R, ValidationError>
+    where
+        R: Send + 'static,
+        F: FnOnce(&FsRecordStore) -> Result<R, StoreError> + Send + 'static,
+    {
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || op(&store))
+            .await
+            .map_err(|e| ValidationError::Task(e.to_string()))?
+            .map_err(ValidationError::Store)
+    }
+
     /// Validates the run, processes every source, saves the experiment snapshot, and
     /// returns the run report.
     ///
@@ -312,7 +345,13 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             info.engine.as_str(),
             &info.model_id,
         )?;
-        if self.store.load_experiment(&settings.experiment_id).is_ok() {
+        let experiment = settings.experiment_id.clone();
+        // Any existing file, even an unreadable one, makes the id unusable: snapshots are
+        // create-only, so the run is refused before any source is processed.
+        if self
+            .on_store(move |s| s.experiment_exists(&experiment))
+            .await?
+        {
             return Err(ValidationError::ExperimentExists(
                 settings.experiment_id.clone(),
             ));
@@ -355,9 +394,11 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         } else {
             RunStatus::Succeeded
         };
+        let active_space = space.clone();
+        let revisions = self.on_store(move |s| s.active(&active_space)).await?;
         let snapshot = ExperimentSnapshot {
             experiment_id: settings.experiment_id.clone(),
-            revisions: self.store.active(&space)?,
+            revisions,
             fingerprints: [
                 ("extraction".to_owned(), extraction_fingerprint.clone()),
                 ("chunking".to_owned(), chunking_fingerprint.clone()),
@@ -367,7 +408,7 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             .collect(),
             corpus_checksum: manifest.manifest_checksum.clone(),
         };
-        self.store.save_experiment(&snapshot)?;
+        self.on_store(move |s| s.save_experiment(&snapshot)).await?;
         let report = RunReport {
             experiment_id: settings.experiment_id.clone(),
             run_status,
@@ -437,6 +478,32 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             Ok(checksum) => checksum,
             Err(e) => return report.fail(FailureStage::Manifest, e.to_string()),
         };
+        // The revision depends only on the file checksum and the extraction and chunking
+        // fingerprints, so an unchanged source is recognised before any extraction work.
+        let revision = match RevisionId::derive(
+            &checksum,
+            ctx.extraction_fingerprint,
+            ctx.chunking_fingerprint,
+        ) {
+            Ok(revision) => revision,
+            Err(e) => return report.fail(FailureStage::Manifest, e.to_string()),
+        };
+        report.revision_id = Some(revision.clone());
+        let space = self.embedder.model_info().embedding_space_id.clone();
+        let (pointer_space, pointer_source) = (space.clone(), entry.source_id.clone());
+        match self
+            .on_store(move |s| s.active_pointer(&pointer_space, &pointer_source))
+            .await
+        {
+            Ok(Some(pointer)) if pointer.revision_id == revision => {
+                report.status = SourceStatus::Succeeded;
+                report.unchanged = true;
+                return report;
+            }
+            Ok(_) => {}
+            Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+        }
+
         let path = ctx.manifest.path_of(entry);
         let pages = match self
             .extract_pages(&path, &ctx.settings.extraction, &mut report)
@@ -456,25 +523,6 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
                 FailureStage::Extraction,
                 format!("unreadable pages {unreadable:?}: OCR produced no text"),
             );
-        }
-        let revision = match RevisionId::derive(
-            &checksum,
-            ctx.extraction_fingerprint,
-            ctx.chunking_fingerprint,
-        ) {
-            Ok(revision) => revision,
-            Err(e) => return report.fail(FailureStage::Manifest, e.to_string()),
-        };
-        report.revision_id = Some(revision.clone());
-        let space = self.embedder.model_info().embedding_space_id.clone();
-        match self.store.active_pointer(&space, &entry.source_id) {
-            Ok(Some(pointer)) if pointer.revision_id == revision => {
-                report.status = SourceStatus::Succeeded;
-                report.unchanged = true;
-                return report;
-            }
-            Ok(_) => {}
-            Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
         }
 
         let mut chunks: Vec<Chunk> = Vec::new();
@@ -549,17 +597,22 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
 
         let store = Arc::clone(&self.store);
         let source_id = entry.source_id.clone();
-        let count = records.len();
         let stored = tokio::task::spawn_blocking(move || {
             let staged = store.stage(&space, &source_id, &revision, &records)?;
             store.publish(staged)
         })
         .await;
         match stored {
-            Ok(Ok(())) => {
+            Ok(Ok(outcome)) => {
                 report.status = SourceStatus::Succeeded;
-                report.records_committed = count;
-                info!(source_id = %entry.source_id, records = count, "source committed");
+                match outcome {
+                    PublishOutcome::Installed { records } => report.records_committed = records,
+                    PublishOutcome::Reused { records } => {
+                        report.reused_revision = true;
+                        info!(source_id = %entry.source_id, records, "intact revision re-activated");
+                    }
+                }
+                info!(source_id = %entry.source_id, records = report.records_committed, "source committed");
                 report
             }
             Ok(Err(e)) => report.fail(FailureStage::Storage, e.to_string()),

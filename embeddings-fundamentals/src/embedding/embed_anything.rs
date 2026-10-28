@@ -159,6 +159,7 @@ impl EmbedAnythingAdapter {
         model_revision: Option<&str>,
         dimensions: NonZeroUsize,
         max_input_tokens: Option<NonZeroUsize>,
+        prefix_policy: super::PrefixPolicy,
     ) -> Result<Self, LoadError> {
         let revision = model_revision
             .ok_or_else(|| LoadError::MissingRevision {
@@ -188,7 +189,7 @@ impl EmbedAnythingAdapter {
             dimensions,
             normalized: true,
             metric: DistanceMetric::Cosine,
-            prefix_policy: super::PrefixPolicy::None,
+            prefix_policy,
             preprocessing: format!(
                 "mean-pooling;max_input_tokens={}",
                 max_input_tokens.map_or(0, NonZeroUsize::get)
@@ -266,8 +267,8 @@ impl EmbedAnythingAdapter {
         };
         self.capabilities.require(capability, &self.info)?;
         self.capabilities.check_batch(raw.len())?;
-        if let Some(limit) = self.capabilities.max_input_tokens {
-            let budget = limit.get().saturating_sub(self.tokens.special_tokens);
+        // Same budget the pipeline chunks against: limit minus special and prefix tokens.
+        if let Some(budget) = self.input_budget(kind) {
             for input in raw {
                 let tokens = self.tokens.count(&input.text);
                 if tokens > budget {

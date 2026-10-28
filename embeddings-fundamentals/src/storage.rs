@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint, RevisionId, SourceId};
 use crate::record::Record;
@@ -116,6 +117,23 @@ pub struct StagedRevision {
     revision_id: RevisionId,
     dir: PathBuf,
     records_checksum: Checksum,
+    records: usize,
+}
+
+/// What publishing did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishOutcome {
+    /// The staged records were installed as the revision.
+    Installed {
+        /// Records written.
+        records: usize,
+    },
+    /// An intact revision with the same id already existed and was re-activated; the
+    /// staged records were discarded.
+    Reused {
+        /// Records in the existing revision.
+        records: usize,
+    },
 }
 
 /// Append-only record of what an experiment run used (PRD §8).
@@ -281,6 +299,7 @@ impl FsRecordStore {
             revision_id: revision_id.clone(),
             dir,
             records_checksum: Checksum::of_bytes(&bytes),
+            records: records.len(),
         })
     }
 
@@ -290,27 +309,46 @@ impl FsRecordStore {
     /// # Errors
     ///
     /// Returns [`StoreError`] on I/O failure or an injected fault.
-    pub fn publish(&self, staged: StagedRevision) -> Result<(), StoreError> {
+    pub fn publish(&self, staged: StagedRevision) -> Result<PublishOutcome, StoreError> {
         let target = self.revision_dir(&staged.space, &staged.source_id, &staged.revision_id);
         let parent = target
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.root.clone());
         fs::create_dir_all(&parent).map_err(io(&parent))?;
-        let records_checksum = if target.exists() {
-            // A revision directory only ever appears through an atomic rename of a fully
-            // written, fsync'd staging directory, so an existing one is complete. It may
-            // be referenced by an earlier experiment snapshot (a source reverted to an
-            // earlier revision), so it is reused as-is and never replaced: its records
-            // keep the experiment id of the run that produced them.
-            fs::remove_dir_all(&staged.dir).map_err(io(&staged.dir))?;
-            let path = target.join(RECORDS_FILE);
-            Checksum::of_bytes(&fs::read(&path).map_err(io(&path))?)
-        } else {
-            self.check_fault(FaultPoint::BeforeRevisionRename)?;
-            fs::rename(&staged.dir, &target).map_err(io(&target))?;
-            fsync_dir(&parent)?;
-            staged.records_checksum.clone()
+        let (records_checksum, outcome) = match self.verified_records(&target) {
+            Some(Ok((checksum, records))) => {
+                // An intact revision directory only appears through an atomic rename of a
+                // fully written, fsync'd staging directory, and it may be pinned by an
+                // earlier experiment snapshot (a source reverted to an earlier revision).
+                // It is reused as-is: its records keep the experiment id of the run that
+                // produced them, and the new staging is discarded.
+                fs::remove_dir_all(&staged.dir).map_err(io(&staged.dir))?;
+                (checksum, PublishOutcome::Reused { records })
+            }
+            Some(Err(reason)) => {
+                // A damaged directory (missing or unreadable records) is quarantined under
+                // tmp/ and replaced, so a retry can heal it.
+                warn!(path = %target.display(), reason = %reason, "quarantining damaged revision");
+                let stale = staged.dir.with_extension("stale");
+                fs::rename(&target, &stale).map_err(io(&target))?;
+                self.install(&staged, &target, &parent)?;
+                (
+                    staged.records_checksum.clone(),
+                    PublishOutcome::Installed {
+                        records: staged.records,
+                    },
+                )
+            }
+            None => {
+                self.install(&staged, &target, &parent)?;
+                (
+                    staged.records_checksum.clone(),
+                    PublishOutcome::Installed {
+                        records: staged.records,
+                    },
+                )
+            }
         };
 
         self.check_fault(FaultPoint::BeforePointerRename)?;
@@ -340,7 +378,43 @@ impl FsRecordStore {
             file.sync_all().map_err(io(&tmp_path))?;
         }
         fs::rename(&tmp_path, &final_path).map_err(io(&final_path))?;
-        fsync_dir(&active)
+        fsync_dir(&active)?;
+        Ok(outcome)
+    }
+
+    fn install(
+        &self,
+        staged: &StagedRevision,
+        target: &Path,
+        parent: &Path,
+    ) -> Result<(), StoreError> {
+        self.check_fault(FaultPoint::BeforeRevisionRename)?;
+        fs::rename(&staged.dir, target).map_err(io(target))?;
+        fsync_dir(parent)
+    }
+
+    /// Checksum and record count of an existing revision directory: `None` when it does
+    /// not exist, `Some(Err)` when it exists but its records are missing or unreadable.
+    fn verified_records(&self, target: &Path) -> Option<Result<(Checksum, usize), String>> {
+        if !target.exists() {
+            return None;
+        }
+        let path = target.join(RECORDS_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) => return Some(Err(format!("cannot read records: {e}"))),
+        };
+        let mut count = 0usize;
+        for line in String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+        {
+            if let Err(e) = serde_json::from_str::<Record>(line) {
+                return Some(Err(format!("corrupt record line: {e}")));
+            }
+            count += 1;
+        }
+        Some(Ok((Checksum::of_bytes(&bytes), count)))
     }
 
     /// Active pointer of `source` in `space`, if any.
@@ -462,6 +536,16 @@ impl FsRecordStore {
         fsync_dir(&dir)
     }
 
+    /// Whether a snapshot file exists for `id` (readable or not).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] when existence cannot be determined.
+    pub fn experiment_exists(&self, id: &ExperimentId) -> Result<bool, StoreError> {
+        let path = self.root.join("experiments").join(format!("{id}.json"));
+        path.try_exists().map_err(io(&path))
+    }
+
     /// Loads an experiment snapshot.
     ///
     /// # Errors
@@ -548,7 +632,7 @@ mod tests {
             record(source, revision, 1, experiment),
         ];
         let staged = store.stage(&space(), source, revision, &records)?;
-        store.publish(staged)
+        store.publish(staged).map(|_| ())
     }
 
     #[test]
@@ -619,6 +703,49 @@ mod tests {
             "original records are kept"
         );
         assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn reuse_reports_the_existing_records_and_damaged_revisions_heal() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = FsRecordStore::open(dir.path()).expect("open");
+        let s1: SourceId = "S1".parse().expect("id");
+        let stage = |experiment: &str| {
+            let records = vec![
+                record(&s1, &rev(1), 0, experiment),
+                record(&s1, &rev(1), 1, experiment),
+            ];
+            store
+                .stage(&space(), &s1, &rev(1), &records)
+                .expect("stage")
+        };
+        assert_eq!(
+            store.publish(stage("exp-1")).expect("first"),
+            PublishOutcome::Installed { records: 2 }
+        );
+        assert_eq!(
+            store.publish(stage("exp-2")).expect("again"),
+            PublishOutcome::Reused { records: 2 }
+        );
+        // Damage the revision: the next publish quarantines it and installs the new records.
+        let target = dir
+            .path()
+            .join(space().as_str())
+            .join("revisions/S1")
+            .join(rev(1).as_str());
+        fs::remove_file(target.join(RECORDS_FILE)).expect("damage");
+        assert_eq!(
+            store.publish(stage("exp-3")).expect("heal"),
+            PublishOutcome::Installed { records: 2 }
+        );
+        let records = store.active_records(&space()).expect("records");
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.experiment_id.as_str() == "exp-3"));
+        fs::write(target.join(RECORDS_FILE), b"not json\n").expect("corrupt");
+        assert_eq!(
+            store.publish(stage("exp-4")).expect("heal corrupt"),
+            PublishOutcome::Installed { records: 2 }
+        );
     }
 
     #[test]

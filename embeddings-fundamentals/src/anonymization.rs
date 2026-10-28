@@ -1,9 +1,13 @@
 //! Helper for the anonymization review (PRD §11, PLAN §4.4).
 //!
 //! It reports what a reviewer must inspect: identifier-like filenames, PDF information
-//! dictionary and XMP metadata, and image EXIF tags. It never decides that a source is
-//! anonymized. Only the reviewer's checks in the manifest make a source eligible.
+//! dictionary keys and XMP element names, image EXIF tags, image XMP element names,
+//! JPEG IPTC (APP13) blocks, and PNG text-chunk keywords. A file that cannot be parsed
+//! produces a finding asking for a manual review, never a silent "clean". It only lists
+//! keys, never values, and it never decides that a source is anonymized: only the
+//! reviewer's checks in the manifest make a source eligible.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use regex::Regex;
@@ -12,7 +16,8 @@ use serde::Serialize;
 /// Something a reviewer has to look at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
-    /// Where the finding is: `filename`, `pdf-info`, `pdf-xmp`, or `exif`.
+    /// Where the finding is: `filename`, `pdf-info`, `pdf-xmp`, `exif`, `xmp`, `iptc`,
+    /// `png-text`, or `parse`.
     pub area: &'static str,
     /// Human-readable description (keys or patterns, never the values).
     pub detail: String,
@@ -20,6 +25,13 @@ pub struct Finding {
 
 /// PDF information-dictionary keys that commonly carry identifying text.
 const RISKY_PDF_KEYS: &[&str] = &["Author", "Title", "Subject", "Keywords", "Creator"];
+
+fn finding(area: &'static str, detail: impl Into<String>) -> Finding {
+    Finding {
+        area,
+        detail: detail.into(),
+    }
+}
 
 /// Flags filename patterns that look like identifiers (CPF, dates, two capitalized
 /// words). The match itself is not reported.
@@ -43,21 +55,57 @@ pub fn filename_findings(file: &Path) -> Vec<Finding> {
     patterns
         .iter()
         .filter(|(pattern, _)| Regex::new(pattern).is_ok_and(|re| re.is_match(&name)))
-        .map(|(_, label)| Finding {
-            area: "filename",
-            detail: format!("filename contains a {label}"),
-        })
+        .map(|(_, label)| finding("filename", format!("filename contains a {label}")))
         .collect()
 }
 
-/// Lists risky PDF information keys and the presence of XMP metadata.
+/// Element names (`prefix:name`) inside an XMP packet, excluding the packet scaffolding.
+fn xmp_keys(packet: &str) -> BTreeSet<String> {
+    let scaffolding = [
+        "x:xmpmeta",
+        "rdf:RDF",
+        "rdf:Description",
+        "rdf:Seq",
+        "rdf:Bag",
+        "rdf:Alt",
+        "rdf:li",
+    ];
+    Regex::new(r"<([A-Za-z][\w.-]*:[A-Za-z][\w.-]*)")
+        .map(|re| {
+            re.captures_iter(packet)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().to_owned()))
+                .filter(|k| !scaffolding.contains(&k.as_str()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn xmp_finding(area: &'static str, packet: &str) -> Finding {
+    let keys = xmp_keys(packet);
+    if keys.is_empty() {
+        finding(area, "XMP packet present (no element names found)")
+    } else {
+        finding(
+            area,
+            format!(
+                "XMP keys present: {}",
+                keys.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        )
+    }
+}
+
+/// Lists risky PDF information keys and the element names of the catalog's XMP stream.
 #[must_use]
 pub fn pdf_findings(path: &Path) -> Vec<Finding> {
-    let Ok(doc) = lopdf::Document::load(path) else {
-        return vec![Finding {
-            area: "pdf-info",
-            detail: "PDF cannot be parsed; review manually".to_owned(),
-        }];
+    let doc = match lopdf::Document::load(path) {
+        Ok(doc) => doc,
+        Err(e) => {
+            return vec![finding(
+                "parse",
+                format!("PDF cannot be parsed ({e}); review manually"),
+            )];
+        }
     };
     let mut findings = Vec::new();
     if let Ok(info) = doc
@@ -68,52 +116,129 @@ pub fn pdf_findings(path: &Path) -> Vec<Finding> {
     {
         for key in RISKY_PDF_KEYS {
             if info.has(key.as_bytes()) {
-                findings.push(Finding {
-                    area: "pdf-info",
-                    detail: format!("information dictionary has /{key}"),
-                });
+                findings.push(finding(
+                    "pdf-info",
+                    format!("information dictionary has /{key}"),
+                ));
             }
         }
     }
-    let has_xmp = doc.catalog().is_ok_and(|catalog| catalog.has(b"Metadata"));
-    if has_xmp {
-        findings.push(Finding {
-            area: "pdf-xmp",
-            detail: "catalog has an XMP /Metadata stream".to_owned(),
-        });
+    if let Ok(catalog) = doc.catalog()
+        && let Ok(metadata) = catalog.get(b"Metadata")
+    {
+        let packet = doc
+            .dereference(metadata)
+            .ok()
+            .and_then(|(_, o)| o.as_stream().ok())
+            .and_then(|stream| {
+                stream
+                    .decompressed_content()
+                    .ok()
+                    .or_else(|| Some(stream.content.clone()))
+            });
+        match packet {
+            Some(bytes) => findings.push(xmp_finding("pdf-xmp", &String::from_utf8_lossy(&bytes))),
+            None => findings.push(finding(
+                "parse",
+                "XMP /Metadata stream cannot be read; review manually",
+            )),
+        }
     }
     findings
 }
 
-/// Lists EXIF tags present in an image (tag names only).
+/// Byte offset of `needle` in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// PNG `tEXt`/`zTXt`/`iTXt` keywords.
+fn png_text_keywords(bytes: &[u8]) -> Vec<String> {
+    let mut keywords = Vec::new();
+    let mut pos = 8; // PNG signature
+    while pos + 8 <= bytes.len() {
+        let len = u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+        let Ok(len) = usize::try_from(len) else { break };
+        let kind = &bytes[pos + 4..pos + 8];
+        let data_start = pos + 8;
+        let Some(data_end) = data_start
+            .checked_add(len)
+            .filter(|end| *end <= bytes.len())
+        else {
+            break;
+        };
+        if matches!(kind, b"tEXt" | b"zTXt" | b"iTXt") {
+            let data = &bytes[data_start..data_end];
+            let keyword_end = data.iter().position(|b| *b == 0).unwrap_or(data.len());
+            keywords.push(String::from_utf8_lossy(&data[..keyword_end]).into_owned());
+        }
+        pos = data_end + 4; // skip CRC
+    }
+    keywords
+}
+
+/// Lists image metadata: EXIF tags, XMP element names, IPTC blocks, PNG text keywords.
 #[must_use]
 pub fn image_findings(path: &Path) -> Vec<Finding> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return vec![Finding {
-            area: "exif",
-            detail: "image cannot be opened; review manually".to_owned(),
-        }];
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return vec![finding(
+                "parse",
+                format!("image cannot be read ({e}); review manually"),
+            )];
+        }
     };
-    let mut reader = std::io::BufReader::new(file);
-    match exif::Reader::new().read_from_container(&mut reader) {
+    let mut findings = Vec::new();
+    match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&bytes)) {
         Ok(exif) => {
             let tags: Vec<String> = exif.fields().map(|f| f.tag.to_string()).collect();
-            if tags.is_empty() {
-                Vec::new()
-            } else {
-                vec![Finding {
-                    area: "exif",
-                    detail: format!("EXIF tags present: {}", tags.join(", ")),
-                }]
+            if !tags.is_empty() {
+                findings.push(finding(
+                    "exif",
+                    format!("EXIF tags present: {}", tags.join(", ")),
+                ));
             }
         }
-        Err(_) => Vec::new(),
+        Err(exif::Error::NotFound(_)) => {}
+        Err(e) => findings.push(finding(
+            "parse",
+            format!("EXIF cannot be parsed ({e}); review manually"),
+        )),
     }
+    if let Some(start) =
+        find(&bytes, b"<x:xmpmeta").or_else(|| find(&bytes, b"http://ns.adobe.com/xap/1.0/"))
+    {
+        let end = find(&bytes[start..], b"</x:xmpmeta>").map_or(bytes.len(), |e| start + e);
+        findings.push(xmp_finding(
+            "xmp",
+            &String::from_utf8_lossy(&bytes[start..end]),
+        ));
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) && find(&bytes, b"Photoshop 3.0\0").is_some() {
+        findings.push(finding("iptc", "JPEG APP13 (IPTC/Photoshop) block present"));
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let keywords = png_text_keywords(&bytes);
+        if !keywords.is_empty() {
+            findings.push(finding(
+                "png-text",
+                format!("PNG text keywords: {}", keywords.join(", ")),
+            ));
+        }
+    }
+    findings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn corpus(file: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/corpus")
+            .join(file)
+    }
 
     #[test]
     fn identifier_like_filenames_are_flagged() {
@@ -128,9 +253,121 @@ mod tests {
 
     #[test]
     fn synthetic_fixtures_have_no_risky_metadata() {
-        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/corpus");
-        assert!(pdf_findings(&corpus.join("lab-searchable-001.pdf")).is_empty());
-        assert!(image_findings(&corpus.join("chest-001.png")).is_empty());
-        assert!(image_findings(&corpus.join("abd-us-001.jpg")).is_empty());
+        assert_eq!(pdf_findings(&corpus("lab-searchable-001.pdf")), vec![]);
+        assert_eq!(image_findings(&corpus("chest-001.png")), vec![]);
+        assert_eq!(image_findings(&corpus("abd-us-001.jpg")), vec![]);
+    }
+
+    #[test]
+    fn jpeg_xmp_and_iptc_are_reported_by_key() {
+        let original = std::fs::read(corpus("abd-us-001.jpg")).expect("jpeg");
+        let segment = |marker: u8, payload: &[u8]| -> Vec<u8> {
+            let len = u16::try_from(payload.len() + 2).expect("len").to_be_bytes();
+            [&[0xFF, marker][..], &len, payload].concat()
+        };
+        let xmp = segment(
+            0xE1,
+            b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta><rdf:RDF><rdf:Description><dc:creator>X</dc:creator></rdf:Description></rdf:RDF></x:xmpmeta>",
+        );
+        let iptc = segment(0xED, b"Photoshop 3.0\08BIM\x04\x04\0\0\0\0\0\0");
+        let tagged = [&original[..2], &xmp, &iptc, &original[2..]].concat();
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("tagged.jpg");
+        std::fs::write(&path, tagged).expect("write");
+        let findings = image_findings(&path);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.area == "xmp" && f.detail.contains("dc:creator")),
+            "{findings:?}"
+        );
+        assert!(findings.iter().any(|f| f.area == "iptc"), "{findings:?}");
+        assert!(
+            findings.iter().all(|f| !f.detail.contains(">X<")),
+            "values are never reported"
+        );
+    }
+
+    #[test]
+    fn png_text_chunks_are_reported_by_keyword() {
+        let original = std::fs::read(corpus("chest-001.png")).expect("png");
+        let data = b"Author\0Fulano";
+        let mut chunk = u32::try_from(data.len())
+            .expect("len")
+            .to_be_bytes()
+            .to_vec();
+        chunk.extend_from_slice(b"tEXt");
+        chunk.extend_from_slice(data);
+        chunk.extend_from_slice(&[0, 0, 0, 0]); // CRC is not checked by the scanner
+        let tagged = [&original[..33], &chunk, &original[33..]].concat(); // after IHDR
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("tagged.png");
+        std::fs::write(&path, tagged).expect("write");
+        let findings = image_findings(&path);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.area == "png-text" && f.detail.contains("Author")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().all(|f| !f.detail.contains("Fulano")),
+            "values are never reported"
+        );
+    }
+
+    #[test]
+    fn unparsable_files_ask_for_manual_review() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("broken.pdf");
+        std::fs::write(&path, b"%PDF-1.5 garbage").expect("write");
+        assert!(pdf_findings(&path).iter().any(|f| f.area == "parse"));
+        let jpg = dir.path().join("broken.jpg");
+        std::fs::write(
+            &jpg,
+            [
+                0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x10, b'E', b'x', b'i', b'f', 0, 0, 1, 2, 3,
+            ],
+        )
+        .expect("write");
+        assert!(
+            image_findings(&jpg).iter().any(|f| f.area == "parse"),
+            "{:?}",
+            image_findings(&jpg)
+        );
+    }
+
+    #[test]
+    fn pdf_xmp_keys_and_info_keys_are_listed() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let mut doc = Document::with_version("1.5");
+        let xmp = doc.add_object(Stream::new(
+            dictionary! { "Type" => "Metadata", "Subtype" => "XML" },
+            b"<x:xmpmeta><rdf:RDF><rdf:Description><dc:creator>Y</dc:creator><pdf:Producer>p</pdf:Producer></rdf:Description></rdf:RDF></x:xmpmeta>".to_vec(),
+        ));
+        let pages = doc.add_object(
+            dictionary! { "Type" => "Pages", "Kids" => Vec::<Object>::new(), "Count" => 0 },
+        );
+        let catalog = doc
+            .add_object(dictionary! { "Type" => "Catalog", "Pages" => pages, "Metadata" => xmp });
+        doc.trailer.set("Root", catalog);
+        let info = doc.add_object(dictionary! { "Author" => Object::string_literal("Y") });
+        doc.trailer.set("Info", info);
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("meta.pdf");
+        doc.save(&path).expect("save");
+        let findings = pdf_findings(&path);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.area == "pdf-info" && f.detail.contains("/Author")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.area == "pdf-xmp"
+                && f.detail.contains("dc:creator")
+                && f.detail.contains("pdf:Producer")),
+            "{findings:?}"
+        );
     }
 }

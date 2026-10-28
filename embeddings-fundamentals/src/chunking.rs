@@ -96,7 +96,7 @@ impl Default for ChunkingConfig {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ChunkError {
     /// An indivisible unit exceeds the token budget and truncation is disabled.
-    #[error("page {page}: table row has {tokens} tokens, above the input limit of {limit}")]
+    #[error("page {page}: indivisible unit has {tokens} tokens, above the input limit of {limit}")]
     InputTooLong {
         /// Page of the unit.
         page: NonZeroU32,
@@ -190,19 +190,21 @@ fn with_section(section: Option<&str>, body: &str) -> String {
     }
 }
 
-/// Longest word prefix of `text` that fits `budget` tokens.
+/// Longest prefix of `text`, cut at a whitespace boundary (any whitespace, keeping the
+/// original separators), that fits `budget` tokens.
 fn truncate_to_budget(text: &str, budget: usize, counter: &dyn TokenCounter) -> String {
-    let words: Vec<&str> = text.split(' ').collect();
-    let (mut lo, mut hi) = (0usize, words.len());
+    let pieces: Vec<&str> = text.split_inclusive(char::is_whitespace).collect();
+    let prefix = |n: usize| pieces[..n].concat().trim_end().to_owned();
+    let (mut lo, mut hi) = (0usize, pieces.len());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if counter.count(&words[..mid].join(" ")) <= budget {
+        if counter.count(&prefix(mid)) <= budget {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    words[..lo].join(" ")
+    prefix(lo)
 }
 
 /// Splits paragraph lines into pieces that each fit `budget` with the section prefix.
@@ -362,12 +364,34 @@ impl StructureAwareV1 {
                         for piece in
                             split_paragraph(unit.section.as_deref(), &unit.lines, limit, counter)
                         {
+                            // A piece can still exceed the budget when a single word plus
+                            // its section prefix is too long: it is indivisible.
+                            let piece_tokens = counter.count(&piece);
+                            let (text, truncation) = if piece_tokens <= limit {
+                                (piece, None)
+                            } else if self.config.truncation_enabled {
+                                let cut = truncate_to_budget(&piece, limit, counter);
+                                let submitted = counter.count(&cut);
+                                (
+                                    cut,
+                                    Some(Truncation {
+                                        original_tokens: piece_tokens,
+                                        submitted_tokens: submitted,
+                                    }),
+                                )
+                            } else {
+                                return Err(ChunkError::InputTooLong {
+                                    page: page.page,
+                                    tokens: piece_tokens,
+                                    limit,
+                                });
+                            };
                             texts.push(Piece {
                                 kind: unit.kind,
                                 section: unit.section.clone(),
-                                text: piece,
+                                text,
                                 bbox: unit.bbox.clone(),
-                                truncation: None,
+                                truncation,
                             });
                         }
                     }
@@ -560,6 +584,37 @@ mod tests {
             WhitespaceTokenCounter.count(&LAB[..3].join("\n"))
         );
         assert_eq!(first.submitted_tokens, 12);
+    }
+
+    #[test]
+    fn an_indivisible_paragraph_fails_or_is_truncated_like_a_row() {
+        let lines = ["Achados", "texto"];
+        let err = chunker(false)
+            .chunk(&page(&lines), &WhitespaceTokenCounter, Some(1))
+            .expect_err("too long");
+        assert!(
+            matches!(
+                err,
+                ChunkError::InputTooLong {
+                    tokens: 2,
+                    limit: 1,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let chunks = chunker(true)
+            .chunk(&page(&lines), &WhitespaceTokenCounter, Some(1))
+            .expect("chunk");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].truncation,
+            Some(Truncation {
+                original_tokens: 2,
+                submitted_tokens: 1
+            })
+        );
+        assert!(WhitespaceTokenCounter.count(&chunks[0].text) <= 1);
     }
 
     #[test]

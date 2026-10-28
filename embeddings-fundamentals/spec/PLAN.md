@@ -304,7 +304,7 @@ store/<space>/
 ```
 
 1. Write `tmp/<uuid>/records.jsonl` → `fsync(file)` → `fsync(tmp/<uuid>)`.
-2. If `revisions/<source>/<revision_id>/` already exists **and** its `records.jsonl` checksum matches, reuse it (idempotent retry). If it exists but is incomplete or mismatched (a crash between steps 3 and 4), move it to `tmp/<uuid>-stale/` first. Directory `rename` onto a non-empty directory fails on both platforms, so a leftover is never overwritten in place.
+2. If `revisions/<source>/<revision_id>/` already exists and every line of its `records.jsonl` parses, it is **reused as-is**. The new staging is discarded, the report says `reused_revision` with 0 records written, and the existing records keep the experiment id of the run that produced them. The directory only appears through an atomic rename of fsync'd staging, so it is complete. It may also be pinned by an older snapshot (a source reverted to an earlier revision), so it is never replaced. A damaged directory (missing or corrupt `records.jsonl`) is moved to `tmp/<stage>.stale/` and the staging is installed in its place, so a retry heals it. *Phase 1 change from the checksum-match rule:* records embed the producing `experiment_id`, so a re-run never has an identical checksum.
 3. `rename(tmp/<uuid>, revisions/<source>/<revision_id>)` → `fsync(revisions/<source>)`.
 4. Write `active/<source>.json.tmp-<uuid>` → `fsync` → `rename` to `active/<source>.json` → `fsync(active/)`. **This rename is the commit point.**
 5. Search reads only revisions named by `active/` or by an experiment snapshot. A revision directory without a pointer is never visible.
