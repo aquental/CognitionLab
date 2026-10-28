@@ -144,22 +144,42 @@ fn cells(line: &str) -> Vec<&str> {
     parts.into_iter().filter(|c| !c.is_empty()).collect()
 }
 
-/// Column names that mark a digit-free table line as a header even inside a table.
-const HEADER_WORDS: &[&str] = &[
+/// Whole-cell column labels of lab tables (lowercase).
+const HEADER_LABELS: &[&str] = &[
     "exame",
-    "resultado",
-    "unidade",
-    "referência",
-    "referencia",
-    "valor",
+    "exames",
+    "analito",
     "parâmetro",
     "parametro",
+    "resultado",
+    "resultados",
+    "valor",
+    "valores",
+    "unidade",
+    "unidades",
+    "referência",
+    "referencia",
+    "intervalo de referência",
+    "intervalo de referencia",
+    "valor de referência",
+    "valor de referencia",
+    "valores de referência",
+    "valores de referencia",
     "método",
+    "metodo",
+    "material",
 ];
 
+/// A digit-free table line opens a new header inside a table only when more than half of
+/// its cells are, as whole cells, known column labels. Data rows that merely contain a
+/// label word ("Exame parasitológico", "Imunidade") stay rows.
 fn looks_like_header(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    HEADER_WORDS.iter().any(|w| lower.contains(w))
+    let cells = cells(line);
+    let labels = cells
+        .iter()
+        .filter(|c| HEADER_LABELS.contains(&c.to_lowercase().as_str()))
+        .count();
+    cells.len() >= 2 && labels * 2 > cells.len()
 }
 
 fn classify(line: &str) -> LineKind {
@@ -786,6 +806,34 @@ mod tests {
             "{:?}",
             chunks[1].text
         );
+    }
+
+    #[test]
+    fn data_rows_containing_label_words_are_not_headers() {
+        for row in [
+            "Exame parasitológico | Negativo | Negativo",
+            "Método | Colorimétrico | —",
+            "Imunidade | Reagente | Não reagente",
+        ] {
+            for lines in [
+                vec!["Exame | Resultado | Referência", row],
+                vec!["Exame | Resultado | Referência", "", row],
+            ] {
+                let chunks = chunker(false)
+                    .chunk(&page(&lines), &WhitespaceTokenCounter, None)
+                    .expect("chunk");
+                assert_eq!(chunks.len(), 1, "{row}: {chunks:?}");
+                assert_eq!(chunks[0].kind, ChunkKind::TableRow);
+                assert_eq!(
+                    chunks[0].text,
+                    format!("Exame | Resultado | Referência\n{row}")
+                );
+            }
+        }
+        assert!(looks_like_header(
+            "Exame | Resultado | Unidade | Intervalo de referência"
+        ));
+        assert!(looks_like_header("Exame | Valor | Unidade"));
     }
 
     #[test]
