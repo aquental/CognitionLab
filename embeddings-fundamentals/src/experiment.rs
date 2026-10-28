@@ -4,8 +4,12 @@
 //! Sequence (every interval is read from the injected [`Clock`]):
 //! 1. load the adapter (ingestion model-load time) and ingest the corpus through the
 //!    measuring decorator (ingestion duration, per-batch embedding latency, usage);
-//! 2. load a fresh adapter for the query side and run the first frozen query: the cold
-//!    start is that load plus that first query (the discarded warm-up query);
+//!    The process is fresh, so its cold start (PRD §9.4) is that first load plus the
+//!    first embedding call (the first ingestion batch, which also opens the first
+//!    connection of a remote engine);
+//! 2. load a second adapter for the query side and run the first frozen query (the
+//!    discarded warm-up query). This runs in the already warm process and is reported
+//!    as `query_side_start`, never as a cold start;
 //! 3. evaluate every frozen query once in the experiment's pinned snapshot (top 3; its
 //!    provider usage is the query-set cost);
 //! 4. repeat every frozen query `latency_repeats` times for warm latency (nearest-rank
@@ -27,7 +31,7 @@ use crate::measurement::{Clock, LatencyStats, MeasuredEmbedder, MemoryProbe, Obs
 use crate::pipeline::{IngestSettings, Pipeline, Sleeper, ValidationError};
 use crate::report::{
     ColdStart, ConfigurationResult, Costs, Fingerprints, IngestionMeasurement, Measurements,
-    Reliability,
+    QuerySideStart, Reliability,
 };
 use crate::retrieval::{Scope, SearchError, search_text};
 use crate::storage::{FsRecordStore, StoreError};
@@ -141,6 +145,7 @@ where
     let report = pipeline.ingest(inputs.manifest, inputs.settings).await?;
     let ingestion = clock.now().saturating_sub(started);
     let embedding = calls.summary(InputKind::Document);
+    let first_call = calls.records().into_iter().next();
     let info = measured.model_info().clone();
     let execution = measured.capabilities().execution;
     drop(pipeline);
@@ -158,7 +163,7 @@ where
             .then(|| count_f64(chunks) / ingestion.as_secs_f64()),
     };
 
-    // 2. Query side: a fresh adapter; its load plus the first query is the cold start.
+    // 2. Query side: a second adapter in the same process (not a cold start).
     let experiment_id = inputs.settings.experiment_id.clone();
     let snapshot = {
         let (store, id) = (Arc::clone(store), experiment_id.clone());
@@ -217,7 +222,16 @@ where
         ingestion: ingestion_measurement,
         ingestion_model_load_ms,
         embedding: embedding.clone(),
-        cold_start: ColdStart {
+        cold_start: {
+            let first_operation_ms = first_call.as_ref().map(|c| millis(c.duration));
+            ColdStart {
+                model_load_ms: ingestion_model_load_ms,
+                first_operation_ms,
+                first_operation_items: first_call.as_ref().map(|c| c.items),
+                total_ms: first_operation_ms.map(|ms| ingestion_model_load_ms + ms),
+            }
+        },
+        query_side_start: QuerySideStart {
             model_load_ms,
             first_query_ms,
             total_ms: model_load_ms + first_query_ms,
@@ -225,7 +239,10 @@ where
         warm_query_latency,
         latency_repeats: inputs.latency_repeats.get(),
         peak_local_ram,
-        gpu_memory: Observation::unavailable("inference runs on the CPU; no GPU is used"),
+        gpu_memory: Observation::unavailable(match execution {
+            Execution::Local => "inference runs on the local CPU; no GPU is used",
+            Execution::Remote => "remote provider: GPU memory is not observable",
+        }),
         provider_inference_memory,
         index_size: Observation::bytes(index_bytes, "active revisions on disk"),
     };

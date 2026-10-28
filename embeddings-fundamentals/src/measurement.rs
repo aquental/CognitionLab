@@ -249,7 +249,8 @@ pub struct EmbeddingSummary {
     pub mean_batch_latency_ms: f64,
     /// Inputs per second inside the adapter.
     pub items_per_second: f64,
-    /// Provider usage summed over successful calls; `None` when no call reported it.
+    /// Provider usage summed over successful calls; `None` unless every successful call
+    /// that embedded something reported it (a partial sum is never an estimate).
     pub usage_tokens: Option<u64>,
 }
 
@@ -291,6 +292,9 @@ impl EmbeddingCalls {
         let items: usize = ok.iter().map(|r| r.items).sum();
         let calls = records.len();
         let total_ms = millis(total);
+        // Usage is known only when every successful call that embedded something reported
+        // it; a partial sum would present an invented total as an estimate.
+        let usage_complete = ok.iter().all(|r| r.items == 0 || r.usage_tokens.is_some());
         let reported: Vec<u64> = ok.iter().filter_map(|r| r.usage_tokens).collect();
         EmbeddingSummary {
             calls,
@@ -307,7 +311,7 @@ impl EmbeddingCalls {
             } else {
                 u64_f64(u64::try_from(items).unwrap_or(u64::MAX)) / total.as_secs_f64()
             },
-            usage_tokens: (!reported.is_empty()).then(|| reported.iter().sum()),
+            usage_tokens: (usage_complete && !reported.is_empty()).then(|| reported.iter().sum()),
         }
     }
 }
@@ -487,6 +491,38 @@ mod tests {
         assert_eq!(nearest_rank(&odd, 95.0), Some(5.0));
         assert_eq!(nearest_rank(&[], 50.0), None);
         assert_eq!(nearest_rank(&odd, 0.0), None);
+    }
+
+    fn call(items: usize, ok: bool, usage: Option<u64>) -> CallRecord {
+        CallRecord {
+            kind: InputKind::Document,
+            items,
+            duration: Duration::from_millis(1),
+            ok,
+            usage_tokens: usage,
+        }
+    }
+
+    #[test]
+    fn usage_is_unknown_when_any_successful_call_omits_it() {
+        // Regression (G2-1): one billed batch without usage next to one with usage.
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, Some(100)));
+        calls.push(call(5, true, None));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, None);
+
+        // Failed calls and empty calls do not make usage unknown.
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, Some(100)));
+        calls.push(call(5, false, None));
+        calls.push(call(0, true, None));
+        calls.push(call(3, true, Some(20)));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, Some(120));
+
+        // No call reported usage at all (local engines).
+        let calls = EmbeddingCalls::default();
+        calls.push(call(5, true, None));
+        assert_eq!(calls.summary(InputKind::Document).usage_tokens, None);
     }
 
     #[test]

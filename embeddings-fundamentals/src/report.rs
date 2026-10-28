@@ -46,12 +46,30 @@ pub struct IngestionMeasurement {
     pub chunks_per_second: Option<f64>,
 }
 
-/// Cold-start measurement: the first operation in a fresh adapter instance.
+/// Cold start (PRD §9.4): the first operation in a fresh process. The experiment process
+/// starts fresh, so this is its first model load (local) or client construction (remote)
+/// plus its first embedding call, which also opens the first connection of a remote engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColdStart {
-    /// Model load (local) or client construction (remote), in milliseconds.
+    /// First model load or client construction of the process, in milliseconds.
     pub model_load_ms: f64,
-    /// The first query, including the first connection for remote engines.
+    /// First embedding call of the process (the first ingestion batch); `None` when
+    /// ingestion made no call, for example because every source was unchanged.
+    pub first_operation_ms: Option<f64>,
+    /// Inputs in that first call.
+    pub first_operation_items: Option<usize>,
+    /// `model_load_ms + first_operation_ms`; `None` without a first call.
+    pub total_ms: Option<f64>,
+}
+
+/// The query side's adapter load and first query. It runs after ingestion inside the
+/// same, already warm process, so it is **not** a cold start; it is reported to show the
+/// query-side load cost separately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuerySideStart {
+    /// Second model load or client construction, in milliseconds.
+    pub model_load_ms: f64,
+    /// First query on that adapter (the discarded warm-up query).
     pub first_query_ms: f64,
     /// Sum of both.
     pub total_ms: f64,
@@ -66,8 +84,10 @@ pub struct Measurements {
     pub ingestion_model_load_ms: f64,
     /// Document embedding calls during ingestion.
     pub embedding: EmbeddingSummary,
-    /// Cold start of the query side.
+    /// Cold start of the process (PRD §9.4).
     pub cold_start: ColdStart,
+    /// Query-side load and first query within the same process (not a cold start).
+    pub query_side_start: QuerySideStart,
     /// Warm query latency over `latency_repeats` repetitions of every frozen query.
     pub warm_query_latency: LatencyStats,
     /// Repetitions per query.
@@ -317,7 +337,7 @@ impl ComparisonReport {
             let m = &c.measurements;
             let _ = writeln!(
                 md,
-                "| {} | {:.1} | {} | {} | {:.2} | {:.1} | {:.1} | {:.1} | {:.2} | {:.2} | {} | {} | {} |",
+                "| {} | {:.1} | {} | {} | {:.2} | {:.1} | {:.1} | {} | {:.2} | {:.2} | {} | {} | {} |",
                 c.experiment_id,
                 m.ingestion.duration_ms,
                 opt(m.ingestion.ms_per_page, 1),
@@ -325,7 +345,7 @@ impl ComparisonReport {
                 m.embedding.mean_batch_latency_ms,
                 m.embedding.items_per_second,
                 m.ingestion_model_load_ms,
-                m.cold_start.total_ms,
+                opt(m.cold_start.total_ms, 1),
                 m.warm_query_latency.median_ms,
                 m.warm_query_latency.p95_ms,
                 observation(&m.peak_local_ram),

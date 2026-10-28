@@ -11,8 +11,11 @@
 #   chunks per second     = 28 / 0.070 s            = 400
 #   embedding total       = 3 calls x 1 tick        = 30 ms; mean batch latency 10 ms
 #   embedding throughput  = 28 / 0.030 s            = 933.333...
-#   query-side model load = 1 tick                  = 10 ms
-#   first query           = 1 + 2 (one query call)  = 30 ms; cold start total 40 ms
+#   cold start (PRD §9.4: first operation of the fresh process)
+#                         = first model load 10 ms + first adapter call (1 tick) 10 ms = 20 ms
+#   query-side start (second load in the same, warm process; not a cold start)
+#     model load          = 1 tick                  = 10 ms
+#     first query         = 1 + 2 (one query call)  = 30 ms; total 40 ms
 #   warm query            = 30 ms per sample; median 30 ms, p95 30 ms
 #   warm samples          = latency_repeats x 10 queries = 20
 # Usage (whitespace tokens of all chunk texts) and index size (bytes of the active
@@ -41,8 +44,13 @@ embedding_total_ms = 30.0
 mean_batch_latency_ms = 10.0
 items_per_second = 933.3333333333334
 cold_model_load_ms = 10.0
-cold_first_query_ms = 30.0
-cold_total_ms = 40.0
+cold_first_operation_ms = 10.0
+# first adapter call = first manifest source, lab-searchable-001: 5 + 5 text chunks
+cold_first_operation_items = 10
+cold_total_ms = 20.0
+query_side_model_load_ms = 10.0
+query_side_first_query_ms = 30.0
+query_side_total_ms = 40.0
 warm_samples = 20
 warm_median_ms = 30.0
 warm_p95_ms = 30.0

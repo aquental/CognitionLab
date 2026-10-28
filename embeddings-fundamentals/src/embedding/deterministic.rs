@@ -99,6 +99,7 @@ impl TokenCounter for WhitespaceTokenCounter {
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct DeterministicBuilder {
+    usage_reporting: UsageReporting,
     model_id: String,
     dimensions: NonZeroUsize,
     prefix_policy: PrefixPolicy,
@@ -108,9 +109,23 @@ pub struct DeterministicBuilder {
     keywords: Vec<(String, Vec<(usize, f32)>)>,
 }
 
+/// Which successful text calls report provider usage (simulates providers whose
+/// responses may omit the `usage` object).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageReporting {
+    /// Every successful call reports usage.
+    #[default]
+    Always,
+    /// No call reports usage.
+    Never,
+    /// Only the 1st, 3rd, 5th, ... successful text call reports usage.
+    OddCallsOnly,
+}
+
 impl Default for DeterministicBuilder {
     fn default() -> Self {
         Self {
+            usage_reporting: UsageReporting::Always,
             model_id: "deterministic-v1".to_owned(),
             dimensions: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             prefix_policy: PrefixPolicy::None,
@@ -132,6 +147,12 @@ impl Default for DeterministicBuilder {
 }
 
 impl DeterministicBuilder {
+    /// Sets which successful text calls report provider usage.
+    pub fn usage_reporting(mut self, reporting: UsageReporting) -> Self {
+        self.usage_reporting = reporting;
+        self
+    }
+
     /// Sets the model identifier (part of the embedding space identity).
     pub fn model_id(mut self, model_id: impl Into<String>) -> Self {
         self.model_id = model_id.into();
@@ -206,6 +227,8 @@ impl DeterministicBuilder {
             keywords: self.keywords,
             faults: Mutex::new(FaultPlan::default()),
             calls: Mutex::new(Vec::new()),
+            usage_reporting: self.usage_reporting,
+            successful_text_calls: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 }
@@ -219,6 +242,8 @@ pub struct DeterministicEmbedder {
     keywords: Vec<(String, Vec<(usize, f32)>)>,
     faults: Mutex<FaultPlan>,
     calls: Mutex<Vec<Call>>,
+    usage_reporting: UsageReporting,
+    successful_text_calls: std::sync::atomic::AtomicUsize,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -472,9 +497,17 @@ impl DeterministicEmbedder {
             .iter()
             .map(|t| WhitespaceTokenCounter.count(t))
             .sum::<usize>();
+        let call = self
+            .successful_text_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let reports = match self.usage_reporting {
+            UsageReporting::Always => true,
+            UsageReporting::Never => false,
+            UsageReporting::OddCallsOnly => call.is_multiple_of(2),
+        };
         Ok(EmbeddingBatch {
             embeddings,
-            usage: Some(Usage {
+            usage: reports.then(|| Usage {
                 tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
             }),
         })
