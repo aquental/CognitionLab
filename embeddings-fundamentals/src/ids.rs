@@ -368,6 +368,11 @@ mod tests {
             canonical_json(&decomposed).expect("decomposed"),
             canonical_json(&composed).expect("composed")
         );
+        // NFD would also make the two equal; require the composed (NFC) bytes.
+        assert_eq!(
+            canonical_json(&decomposed).expect("decomposed"),
+            "\"Hemoglobina \u{e9}\""
+        );
     }
 
     #[test]

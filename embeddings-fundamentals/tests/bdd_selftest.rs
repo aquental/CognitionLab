@@ -277,8 +277,31 @@ async fn run_case(case: &Case, dir: &Path) -> Result<bool> {
         json_report: dir.join("cucumber.json"),
         console: false,
         cucumber_args: case.args.iter().map(|s| (*s).to_owned()).collect(),
+        fingerprinted: vec![("acceptance", acceptance.clone())],
     })
     .await?;
+    let fingerprints: std::collections::BTreeMap<String, String> = serde_json::from_str(
+        &fs::read_to_string(dir.join(support::runner::FINGERPRINTS_FILE))
+            .context("read fingerprints")?,
+    )
+    .context("parse fingerprints")?;
+    let expected_prd = embeddings_fundamentals::ids::Checksum::of_bytes(case.prd.as_bytes());
+    let expected_acceptance =
+        embeddings_fundamentals::ids::Checksum::of_bytes(&fs::read(&acceptance)?);
+    if fingerprints.get("prd").map(String::as_str) != Some(expected_prd.as_str())
+        || fingerprints.get("acceptance").map(String::as_str) != Some(expected_acceptance.as_str())
+        || fingerprints
+            .keys()
+            .filter(|k| k.starts_with("feature:"))
+            .count()
+            != case.features.len()
+    {
+        println!(
+            "       {}: fingerprints do not match the inputs: {fingerprints:?}",
+            case.name
+        );
+        return Ok(!case.expect_pass);
+    }
     if let Some(expected) = case.expect_execution_failed
         && report.execution_failed != expected
     {
@@ -333,6 +356,21 @@ fn check_inventory_rejects_empty_examples() -> Result<usize> {
     Ok(usize::from(!rejected))
 }
 
+fn check_inventory_rejects_unclosed_fence() -> Result<usize> {
+    let dir = tempfile::tempdir().context("temp dir")?;
+    let prd = dir.path().join("PRD.md");
+    let text = format!(
+        "{PRD_BASIC}\n```gherkin\n@m1\nFeature: Truncated\n  Scenario: Lost\n    Given a defined step\n"
+    );
+    fs::write(&prd, text).context("write PRD")?;
+    let rejected = support::inventory::from_prd(&prd, 1).is_err();
+    println!(
+        "{} inventory rejects an unclosed gherkin fence after a closed one",
+        if rejected { "ok  " } else { "FAIL" }
+    );
+    Ok(usize::from(!rejected))
+}
+
 fn check_split_args() -> usize {
     let cases: [(&str, Option<Vec<&str>>); 4] = [
         (
@@ -365,8 +403,10 @@ fn check_split_args() -> usize {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
-    let mut mismatches =
-        check_real_prd()? + check_inventory_rejects_empty_examples()? + check_split_args();
+    let mut mismatches = check_real_prd()?
+        + check_inventory_rejects_empty_examples()?
+        + check_inventory_rejects_unclosed_fence()?
+        + check_split_args();
     for case in CASES {
         let dir = tempfile::tempdir().context("create temp dir")?;
         let passed = run_case(case, dir.path()).await?;
