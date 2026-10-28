@@ -308,7 +308,8 @@ store/<space>/
 3. `rename(tmp/<uuid>, revisions/<source>/<revision_id>)` → `fsync(revisions/<source>)`.
 4. Write `active/<source>.json.tmp-<uuid>` → `fsync` → `rename` to `active/<source>.json` → `fsync(active/)`. **This rename is the commit point.**
 5. Search reads only revisions named by `active/` or by an experiment snapshot. A revision directory without a pointer is never visible.
-6. `tmp/` is garbage-collected at startup. Replaced revisions are **kept** (PRD §8).
+6. Writers take an exclusive OS lock on `<root>/.writer.lock` (`File::try_lock`; the OS releases it if the process dies) and only then garbage-collect `tmp/`. Readers (`open_reader`, used by search) take no lock, never clean, and cannot write, so opening a reader can never destroy another process's staging. A second writer is refused (`WriterBusy`). Replaced revisions are **kept** (PRD §8), and damaged ones are moved to `quarantine/`.
+7. Every read (`records`, active or snapshot-pinned) verifies the revision seal against the exact bytes it returns. A damaged revision is an `Integrity` error, never a silently partial or empty result.
 
 Fault-injection hooks (`FaultyStore`) can fail before steps 1, 3, and 4, which covers REL-01 scenario 1 and the retry-after-leftover path.
 

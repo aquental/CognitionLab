@@ -71,7 +71,7 @@ pub struct LabWorld {
 impl LabWorld {
     fn new() -> Result<Self> {
         let store_dir = tempfile::tempdir().context("create scenario store")?;
-        let store = Arc::new(FsRecordStore::open(store_dir.path())?);
+        let store = Arc::new(FsRecordStore::open_writer(store_dir.path())?);
         Ok(Self {
             store_dir,
             corpus_dir: tempfile::tempdir().context("create scenario corpus")?,

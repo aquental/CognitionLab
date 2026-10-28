@@ -112,6 +112,10 @@ pub enum ValidationError {
         /// Model identifier.
         model: String,
     },
+    /// Sources fail the eligibility gate (not eligible, anonymization review incomplete,
+    /// unreadable, or checksum mismatch). The run is refused before any processing.
+    #[error("ineligible sources: {}", .0.iter().map(|(s, r)| format!("{s} ({r})")).collect::<Vec<_>>().join("; "))]
+    Ineligible(Vec<(SourceId, String)>),
     /// The experiment id was already used; snapshots are append-only.
     #[error("experiment {0} already exists")]
     ExperimentExists(ExperimentId),
@@ -137,6 +141,7 @@ impl ValidationError {
             Self::MissingCapability(_)
             | Self::RemoteNotPermitted { .. }
             | Self::ExperimentExists(_)
+            | Self::Ineligible(_)
             | Self::Chunking(_) => EXIT_VALIDATION,
             Self::Fingerprint(_) | Self::Store(_) | Self::Task(_) => 1,
         }
@@ -164,6 +169,32 @@ pub fn check_remote_permission(
         });
     }
     Ok(())
+}
+
+/// Eligibility gate for every source in the manifest (PLAN §4.4): eligible, a complete
+/// anonymization review, a readable file, and a matching checksum. Reads and hashes
+/// files, so async callers run it on the blocking pool.
+///
+/// # Errors
+///
+/// Returns [`ValidationError::Ineligible`] listing every failing source.
+pub fn check_eligibility(manifest: &LoadedManifest) -> Result<(), ValidationError> {
+    let failures: Vec<(SourceId, String)> = manifest
+        .manifest
+        .sources
+        .iter()
+        .filter_map(|source| {
+            manifest
+                .verify(source)
+                .err()
+                .map(|e| (source.source_id.clone(), e.to_string()))
+        })
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationError::Ineligible(failures))
+    }
 }
 
 /// Per-page extraction outcome.
@@ -356,6 +387,10 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
                 settings.experiment_id.clone(),
             ));
         }
+        let gate = manifest.clone();
+        tokio::task::spawn_blocking(move || check_eligibility(&gate))
+            .await
+            .map_err(|e| ValidationError::Task(e.to_string()))??;
         let chunker = StructureAwareV1::new(settings.chunking.clone())?;
         let budget = self.embedder.input_budget(InputKind::Document);
         let extraction_fingerprint = Fingerprint::of(&ExtractionFingerprintInput {
@@ -474,9 +509,18 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             report.reason = Some("image input does not apply to a text run".to_owned());
             return report;
         }
-        let checksum = match ctx.manifest.verify(entry) {
-            Ok(checksum) => checksum,
-            Err(e) => return report.fail(FailureStage::Manifest, e.to_string()),
+        // Re-verified per source (the file may change after the gate); reading and
+        // hashing the file runs on the blocking pool.
+        let (gate, gate_entry) = (ctx.manifest.clone(), entry.clone());
+        let checksum = match tokio::task::spawn_blocking(move || gate.verify(&gate_entry)).await {
+            Ok(Ok(checksum)) => checksum,
+            Ok(Err(e)) => return report.fail(FailureStage::Manifest, e.to_string()),
+            Err(e) => {
+                return report.fail(
+                    FailureStage::Manifest,
+                    format!("verification task failed: {e}"),
+                );
+            }
         };
         // The revision depends only on the file checksum and the extraction and chunking
         // fingerprints, so an unchanged source is recognised before any extraction work.
@@ -534,16 +578,26 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             );
         }
 
-        let mut chunks: Vec<Chunk> = Vec::new();
-        for page in &pages {
-            match ctx
-                .chunker
-                .chunk(page, self.embedder.token_counter(), ctx.budget)
-            {
-                Ok(page_chunks) => chunks.extend(page_chunks),
-                Err(e) => return report.fail(FailureStage::Chunking, e.to_string()),
+        // Tokenizing every unit is CPU-bound: chunk on the blocking pool.
+        let (chunker, embedder, budget) =
+            (ctx.chunker.clone(), Arc::clone(&self.embedder), ctx.budget);
+        let chunked = tokio::task::spawn_blocking(
+            move || -> Result<Vec<Chunk>, crate::chunking::ChunkError> {
+                let mut chunks = Vec::new();
+                for page in &pages {
+                    chunks.extend(chunker.chunk(page, embedder.token_counter(), budget)?);
+                }
+                Ok(chunks)
+            },
+        )
+        .await;
+        let chunks: Vec<Chunk> = match chunked {
+            Ok(Ok(chunks)) => chunks,
+            Ok(Err(e)) => return report.fail(FailureStage::Chunking, e.to_string()),
+            Err(e) => {
+                return report.fail(FailureStage::Chunking, format!("chunking task failed: {e}"));
             }
-        }
+        };
         report.truncations = chunks.iter().filter(|c| c.truncation.is_some()).count();
         let mut chunk_ids = Vec::with_capacity(chunks.len());
         for chunk in &chunks {

@@ -106,6 +106,7 @@ pub fn parse(
         key: (u32, u32, u32),
         words: Vec<String>,
         bbox: BoundingBox,
+        last_right: f32,
     }
     let close = |line: OpenLine| TextLine {
         text: line.words.join(" "),
@@ -116,7 +117,14 @@ pub fn parse(
     for word in &words {
         match current.as_mut() {
             Some(line) if line.key == word.key => {
+                // A horizontal gap wider than the word height marks a column boundary;
+                // two spaces keep it visible to the whitespace-aligned table parser.
+                let gap = word.bbox.x - (line.last_right);
+                if gap > word.bbox.h {
+                    line.words.push(String::new());
+                }
                 line.words.push(word.text.clone());
+                line.last_right = word.bbox.x + word.bbox.w;
                 line.bbox = line.bbox.union(&word.bbox);
             }
             _ => {
@@ -127,6 +135,7 @@ pub fn parse(
                     key: word.key,
                     words: vec![word.text.clone()],
                     bbox: word.bbox.clone(),
+                    last_right: word.bbox.x + word.bbox.w,
                 });
             }
         }
@@ -186,6 +195,37 @@ mod tests {
         approx::assert_abs_diff_eq!(bbox.w, 360.0 * 72.0 / 300.0, epsilon = 1e-4);
         // Mean of 96, 90, 94 (the -1 word is excluded) = 93.33 → 0.9333.
         approx::assert_abs_diff_eq!(page.confidence.expect("conf"), 0.933_333, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn wide_column_gaps_become_double_spaces_for_aligned_tables() {
+        // Columns at x = 300, 900, 1200, 1500 px with 40 px tall words: gaps far wider
+        // than the word height. A normal inter-word gap (Glicemia de jejum) stays single.
+        let input = tsv(&[
+            "5\t1\t1\t1\t1\t1\t300\t600\t280\t40\t95\tHemoglobina",
+            "5\t1\t1\t1\t1\t2\t900\t600\t90\t40\t95\t13,5",
+            "5\t1\t1\t1\t1\t3\t1200\t600\t90\t40\t95\tg/dL",
+            "5\t1\t1\t1\t1\t4\t1500\t600\t200\t40\t95\t12,0–16,0",
+            "5\t1\t1\t1\t2\t1\t300\t700\t200\t40\t95\tGlicemia",
+            "5\t1\t1\t1\t2\t2\t515\t700\t40\t40\t95\tde",
+            "5\t1\t1\t1\t2\t3\t570\t700\t120\t40\t95\tjejum",
+        ]);
+        let page = parse(&input, NonZeroU32::MIN, 300, "t").expect("parse");
+        assert_eq!(page.lines[0].text, "Hemoglobina  13,5  g/dL  12,0–16,0");
+        assert_eq!(page.lines[1].text, "Glicemia de jejum");
+        let chunker = crate::chunking::StructureAwareV1::default();
+        let chunks = chunker
+            .chunk(
+                &page,
+                &crate::embedding::deterministic::WhitespaceTokenCounter,
+                None,
+            )
+            .expect("chunk");
+        assert_eq!(
+            chunks[0].kind,
+            crate::chunking::ChunkKind::TableRow,
+            "aligned OCR row is a table row"
+        );
     }
 
     #[test]

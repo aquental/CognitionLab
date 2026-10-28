@@ -248,6 +248,13 @@ async fn validate(args: &RunArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(EXIT_VALIDATION));
         }
     };
+    let gate = manifest.clone();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || crate::pipeline::check_eligibility(&gate)).await?
+    {
+        eprintln!("validation failed: {e}");
+        return Ok(ExitCode::from(e.exit_code()));
+    }
     let adapter = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
@@ -277,7 +284,7 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
     };
-    let store = Arc::new(FsRecordStore::open(&args.store)?);
+    let store = Arc::new(FsRecordStore::open_writer(&args.store)?);
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
     let pipeline = Pipeline {
@@ -345,7 +352,7 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
     };
     let (root, experiment) = (args.store.clone(), args.experiment.clone());
     let (store, snapshot) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let store = FsRecordStore::open(&root)?;
+        let store = FsRecordStore::open_reader(&root)?;
         let snapshot = experiment
             .as_ref()
             .map(|id| store.load_experiment(id))

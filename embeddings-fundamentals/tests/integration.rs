@@ -54,7 +54,7 @@ async fn real_tools_select_native_then_ocr_on_the_mixed_pdf() {
         .sources
         .retain(|s| s.source_id.as_str() == "us-mixed-003");
     let store_dir = tempfile::tempdir().expect("tmp");
-    let store = Arc::new(FsRecordStore::open(store_dir.path()).expect("store"));
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
@@ -182,6 +182,21 @@ async fn embed_anything_adapter_loads_the_pinned_model_and_ranks_sensibly() {
     );
     let budget = adapter.input_budget(embeddings_fundamentals::embedding::InputKind::Document);
     assert_eq!(budget, Some(126), "128-token limit minus [CLS] and [SEP]");
+    // The counter reports full lengths (tokenizer.json truncates at 128 by itself).
+    let long = format!("Hemoglobina | 13,5 | g/dL | {}", "palavra ".repeat(300));
+    let tokens = adapter.token_counter().count(&long);
+    assert!(
+        tokens > 300,
+        "counted {tokens} tokens: the tokenizer's own truncation leaked into counting"
+    );
+    let too_long = TextInput {
+        id: "long".parse().expect("id"),
+        text: long,
+    };
+    assert!(
+        adapter.embed_documents(&[too_long]).await.is_err(),
+        "over-budget input is rejected"
+    );
 }
 
 #[cfg(feature = "engine-embed-anything")]
