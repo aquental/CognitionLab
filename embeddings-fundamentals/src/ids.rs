@@ -32,6 +32,13 @@ pub enum IdError {
     /// The value could not be converted into canonical JSON.
     #[error("cannot canonicalize value for hashing")]
     Canonical(#[source] serde_json::Error),
+    /// Two object keys become identical after NFC normalization, so no single
+    /// canonical encoding exists.
+    #[error("object keys collide after NFC normalization: {key:?}")]
+    DuplicateKey {
+        /// The normalized key.
+        key: String,
+    },
 }
 
 /// Encodes `value` as canonical JSON: sorted keys, no whitespace, NFC strings.
@@ -66,6 +73,11 @@ fn write_canonical(value: &Value, out: &mut String) -> Result<(), IdError> {
             let mut entries: Vec<(String, &Value)> =
                 map.iter().map(|(k, v)| (k.nfc().collect(), v)).collect();
             entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+            if let Some(pair) = entries.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+                return Err(IdError::DuplicateKey {
+                    key: pair[0].0.clone(),
+                });
+            }
             out.push('{');
             for (i, (key, item)) in entries.iter().enumerate() {
                 if i > 0 {
@@ -522,6 +534,27 @@ mod tests {
             canonical_json(&Value::Object(map)).expect("canonical"),
             r#"{"a":2,"b":1}"#
         );
+    }
+
+    #[test]
+    fn keys_colliding_after_nfc_are_rejected_in_any_order_and_depth() {
+        let composed = "\u{e9}";
+        let decomposed = "e\u{301}";
+        for (first, second) in [(composed, decomposed), (decomposed, composed)] {
+            let mut map = serde_json::Map::new();
+            map.insert(first.to_owned(), json!(1));
+            map.insert(second.to_owned(), json!(2));
+            let flat = Value::Object(map.clone());
+            assert!(matches!(
+                canonical_json(&flat),
+                Err(IdError::DuplicateKey { .. })
+            ));
+            let nested = json!({ "outer": [ { "x": Value::Object(map) } ] });
+            assert!(matches!(
+                canonical_json(&nested),
+                Err(IdError::DuplicateKey { .. })
+            ));
+        }
     }
 
     #[test]
