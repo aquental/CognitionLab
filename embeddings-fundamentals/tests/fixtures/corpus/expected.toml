@@ -1,0 +1,33 @@
+# Expected extraction behaviour of the synthetic fixtures (PLAN §0.1 "Modalities per input").
+# Text chunk counts are added when the Phase 1 chunker is frozen.
+#
+# Page rules: a page whose text layer passes the native-text rule is "native"; otherwise
+# it is rendered and OCR'd ("ocr"). A full-page raster on a page without native text is an
+# OCR source, never an image record. Embedded images become image records only when
+# `pdfimages -list` type is "image" and both sides are at least 64 px.
+
+[[sources]]
+source_id = "lab-searchable-001"
+pages = ["native", "native"]
+image_records = []
+
+[[sources]]
+source_id = "lab-scanned-002"
+pages = ["ocr", "ocr"]
+image_records = []
+
+[[sources]]
+source_id = "us-mixed-003"
+pages = ["native", "ocr"]
+# Page 1 ultrasound (256x192). The 48 px logo and its soft mask are dropped.
+image_records = [{ page = 1, count = 1 }]
+
+[[sources]]
+source_id = "chest-001"
+pages = []
+image_records = [{ page = 1, count = 1 }]
+
+[[sources]]
+source_id = "abd-us-001"
+pages = []
+image_records = [{ page = 1, count = 1 }]

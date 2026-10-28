@@ -1,2 +1,17 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Build output
+/target/
+
+# Secrets and local environment
+.env
+
+# Runtime index and raw per-run outputs
+/store/
+/reports/tmp/
+/reports/bdd/
+
+# Owner-supplied corpus: content stays local, the manifest is tracked
+/corpus/*
+!/corpus/manifest.toml

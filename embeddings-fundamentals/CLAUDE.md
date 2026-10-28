@@ -20,24 +20,25 @@ Rust 2024 edition. Run all commands from this directory.
 
 ```bash
 cargo build
-cargo test                          # unit tests (+ bdd/bdd_selftest once they exist)
-cargo test <name>                   # a single unit test by name filter
+cargo test                          # unit + doc + bdd + bdd_selftest (+ ignored integration tests)
+cargo test --lib <name>             # a single unit test by name filter
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo run -- doctor                 # checks poppler + tesseract are installed
+cargo test --test bdd               # Cucumber acceptance suite (harness = false)
+cargo test --test bdd_selftest      # proves the runner fails on undefined/ambiguous/skipped/missing scenarios
+BDD_ARGS='--name "<regex>"' cargo test --test bdd    # filtered run (the inventory check then fails by design)
+RUN_INTEGRATION=1 cargo test --test integration -- --include-ignored    # real tools/engines
+cargo run --example gen_fixtures    # regenerate tests/fixtures/corpus (needs poppler; output is deterministic)
 ```
 
-Planned in Phase 0 (not present yet):
-
-```bash
-cargo test --test bdd                                   # Cucumber acceptance suite (harness = false)
-cargo test --test bdd -- --name "<scenario name>"       # single scenario (cucumber CLI filter)
-cargo test --test bdd -- --tags "@m1"                   # by tag; never filter in CI (inventory check fails)
-RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored
-```
+The harness-less targets (`bdd`, `bdd_selftest`) **never parse argv**, so `cargo test <filter>` cannot break them. Cucumber filters go through `BDD_ARGS`. The required inventory is derived from the Gherkin blocks in `spec/PRD.md`, filtered by the `@mN` tags up to `milestone` in `config/acceptance.toml`. A scenario counts as executed only if a scenario with the same feature name, scenario name and expanded step text ran and all of its steps passed (`tests/support/inventory.rs`).
 
 The engine adapters sit behind Cargo features (`engine-embed-anything`, `engine-fastembed`, `engine-openai`), all off by default. As a result, the BDD suite never compiles candle/ONNX or downloads models. Clippy must be run per feature set to compile the `#[cfg]` adapters.
 
-External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) is used, and installed here. `tesseract` with Portuguese data is also needed (`brew install tesseract tesseract-lang`); it is not installed yet.
+External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `tesseract` with `por` data (`brew install tesseract tesseract-lang`), both installed here.
+
+Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
 ## Architecture (planned, see PLAN §1–§4)
 

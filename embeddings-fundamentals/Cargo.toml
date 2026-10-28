@@ -2,14 +2,74 @@
 name = "embeddings-fundamentals"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
+publish = false
+description = "Medical Document Embedding Lab: reproducible extraction, embedding and retrieval experiments"
+
+[lib]
+name = "embeddings_fundamentals"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Engine adapters are strictly additive: each feature only adds an adapter and its dependencies.
+engine-embed-anything = []
+engine-fastembed = []
+engine-openai = ["dep:reqwest"]
 
 [dependencies]
 anyhow = "1.0.104"
+async-trait = "0.1.92"
+clap = { version = "4.6.7", features = ["derive"] }
 dotenvy = "0.15.7"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+hex = "0.4.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time"] }
+toml = "1.1.8"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unicode-normalization = "0.1.26"
 
 [dev-dependencies]
+approx = "0.5.1"
 cucumber = { version = "0.23", features = ["output-json"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+lopdf = "0.46.0"
+proptest = "1.12.0"
+regex = "1.13.1"
+tempfile = "3.27.0"
+
+[[test]]
+name = "bdd"
+path = "tests/bdd.rs"
+harness = false
+
+[[test]]
+name = "bdd_selftest"
+path = "tests/bdd_selftest.rs"
+harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+float_cmp = "deny"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
