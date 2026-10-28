@@ -442,13 +442,23 @@ pub enum VectorDefect {
         /// Component index.
         index: usize,
     },
-    /// The response does not contain exactly one vector per input, in order.
+    /// The response has a different number of vectors than inputs.
     #[error("response does not match inputs: expected {expected} items, got {actual}")]
-    ItemMismatch {
+    CountMismatch {
         /// Number of inputs.
         expected: usize,
         /// Number of vectors returned.
         actual: usize,
+    },
+    /// The vector at `index` belongs to a different item than the input at `index`.
+    #[error("vector {index} is for item {actual}, expected item {expected}")]
+    ItemOrder {
+        /// Position in the batch.
+        index: usize,
+        /// Item id of the input at that position.
+        expected: ItemId,
+        /// Item id found in the response at that position.
+        actual: ItemId,
     },
 }
 
@@ -463,17 +473,20 @@ pub fn validate_batch(
     expected_items: &[ItemId],
     info: &ModelInfo,
 ) -> Result<(), VectorDefect> {
-    let ids_match = batch.embeddings.len() == expected_items.len()
-        && batch
-            .embeddings
-            .iter()
-            .zip(expected_items)
-            .all(|(embedding, expected)| &embedding.id == expected);
-    if !ids_match {
-        return Err(VectorDefect::ItemMismatch {
+    if batch.embeddings.len() != expected_items.len() {
+        return Err(VectorDefect::CountMismatch {
             expected: expected_items.len(),
             actual: batch.embeddings.len(),
         });
+    }
+    for (index, (embedding, expected)) in batch.embeddings.iter().zip(expected_items).enumerate() {
+        if &embedding.id != expected {
+            return Err(VectorDefect::ItemOrder {
+                index,
+                expected: expected.clone(),
+                actual: embedding.id.clone(),
+            });
+        }
     }
     let expected = info.dimensions.get();
     for embedding in &batch.embeddings {
@@ -596,18 +609,21 @@ mod tests {
     fn missing_or_reordered_items_are_rejected() {
         let (b, mut ids) = batch(vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
         ids.reverse();
-        assert!(matches!(
-            validate_batch(&b, &ids, &info(2)),
-            Err(VectorDefect::ItemMismatch {
-                expected: 2,
-                actual: 2
-            })
-        ));
+        let err = validate_batch(&b, &ids, &info(2)).expect_err("reordered ids");
+        assert_eq!(
+            err,
+            VectorDefect::ItemOrder {
+                index: 0,
+                expected: item("i1"),
+                actual: item("i0")
+            }
+        );
+        assert_eq!(err.to_string(), "vector 0 is for item i0, expected item i1");
         let (b, _) = batch(vec![vec![1.0, 0.0]]);
         let two = vec![item("i0"), item("i1")];
         assert!(matches!(
             validate_batch(&b, &two, &info(2)),
-            Err(VectorDefect::ItemMismatch {
+            Err(VectorDefect::CountMismatch {
                 expected: 2,
                 actual: 1
             })

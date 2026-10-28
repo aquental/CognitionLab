@@ -46,8 +46,9 @@ pub fn acceptance_milestone(path: &Path) -> Result<u32> {
     Ok(acceptance.milestone)
 }
 
-/// Extracts every fenced ```gherkin block from a Markdown document.
-pub fn gherkin_blocks(markdown: &str) -> Vec<String> {
+/// Extracts every fenced ```gherkin block from a Markdown document. An unclosed fence
+/// is an error, so a truncated PRD cannot silently drop its last block.
+pub fn gherkin_blocks(markdown: &str) -> Result<Vec<String>> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&str>> = None;
     for line in markdown.lines() {
@@ -61,7 +62,10 @@ pub fn gherkin_blocks(markdown: &str) -> Vec<String> {
             (None, _) => {}
         }
     }
-    blocks
+    if current.is_some() {
+        bail!("unclosed ```gherkin fence");
+    }
+    Ok(blocks)
 }
 
 fn milestone_of(tags: &[String]) -> Result<Option<u32>> {
@@ -94,7 +98,7 @@ fn step_text(step: &gherkin::Step, row: Option<(&[String], &[String])>) -> Strin
 /// scenario, or `Examples` tags), otherwise the PRD itself is rejected.
 pub fn from_prd(prd: &Path, milestone: u32) -> Result<BTreeSet<ScenarioKey>> {
     let markdown = fs::read_to_string(prd).with_context(|| format!("read {}", prd.display()))?;
-    let blocks = gherkin_blocks(&markdown);
+    let blocks = gherkin_blocks(&markdown)?;
     if blocks.is_empty() {
         bail!("{} contains no gherkin blocks", prd.display());
     }

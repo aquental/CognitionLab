@@ -59,6 +59,13 @@ async fn main() -> Result<ExitCode> {
         json_report: root.join("reports/bdd/cucumber.json"),
         console: true,
         cucumber_args,
+        fingerprinted: vec![
+            ("acceptance", root.join("config/acceptance.toml")),
+            (
+                "corpus_manifest",
+                root.join("tests/fixtures/corpus/manifest.toml"),
+            ),
+        ],
     })
     .await?;
     println!(

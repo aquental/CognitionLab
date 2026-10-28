@@ -452,6 +452,26 @@ mod tests {
         assert_eq!(validate_batch(&a, &ids, embedder.model_info()), Ok(()));
     }
 
+    #[test]
+    fn vector_components_are_frozen_and_text_dependent() {
+        let embedder = DeterministicEmbedder::builder().build().expect("build");
+        assert_eq!(
+            embedder.model_info().embedding_space_id.as_str(),
+            "space-c2b47d9244e2a152c3f4053a1bc018ec"
+        );
+        let v = embedder.vector_for("Hemoglobina 13,5 g/dL");
+        // Golden components computed independently in Python: sha256(space_id || 0x00 ||
+        // text || counter_le_u32), little-endian u16 pairs mapped to [-1, 1], L2-normalized.
+        for (actual, expected) in v.iter().zip([0.179_264_f32, 0.571_513, 0.351_240]) {
+            approx::assert_abs_diff_eq!(*actual, expected, epsilon = 1e-5);
+        }
+        assert_ne!(
+            v,
+            embedder.vector_for("Glicemia 92 mg/dL"),
+            "different texts must differ"
+        );
+    }
+
     #[tokio::test]
     async fn prefix_policy_is_applied_once_and_raw_text_is_recorded() {
         let embedder = DeterministicEmbedder::builder()

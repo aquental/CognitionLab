@@ -59,7 +59,8 @@ pub async fn probe(tools: &[Tool]) -> Vec<ToolStatus> {
         )
         .await;
         let version = match output {
-            Ok(Ok(out)) => {
+            // A tool that exits non-zero is broken, whatever it prints.
+            Ok(Ok(out)) if out.status.success() => {
                 // poppler prints its version on stderr, tesseract on stdout.
                 let text = if out.stdout.is_empty() {
                     out.stderr
@@ -68,10 +69,11 @@ pub async fn probe(tools: &[Tool]) -> Vec<ToolStatus> {
                 };
                 String::from_utf8_lossy(&text)
                     .lines()
-                    .next()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
                     .map(str::to_owned)
             }
-            Ok(Err(_)) | Err(_) => None,
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
         };
         statuses.push(ToolStatus {
             name: tool.name,
@@ -79,4 +81,35 @@ pub async fn probe(tools: &[Tool]) -> Vec<ToolStatus> {
         });
     }
     statuses
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failing_or_missing_tools_are_reported_missing() {
+        let statuses = probe(&[
+            // `sh -c` exits 1 after printing to stderr: a broken install.
+            Tool {
+                name: "sh",
+                version_args: &["-c", "echo 'tool: error' >&2; exit 1"],
+            },
+            Tool {
+                name: "definitely-not-an-installed-tool",
+                version_args: &["--version"],
+            },
+            Tool {
+                name: "sh",
+                version_args: &["-c", "echo 'tool 1.2.3'"],
+            },
+        ])
+        .await;
+        assert_eq!(
+            statuses[0].version, None,
+            "non-zero exit must not count as installed"
+        );
+        assert_eq!(statuses[1].version, None);
+        assert_eq!(statuses[2].version.as_deref(), Some("tool 1.2.3"));
+    }
 }

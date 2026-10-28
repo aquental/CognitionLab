@@ -10,6 +10,8 @@ use clap::Parser;
 use cucumber::codegen::WorldInventory;
 use cucumber::{World, WriterExt, cli, writer};
 
+use embeddings_fundamentals::ids::Checksum;
+
 use super::inventory;
 
 /// Inputs of one suite run.
@@ -27,6 +29,43 @@ pub struct Suite<'a> {
     /// Cucumber CLI arguments (`--name`, `--tags`, ...); argv is never parsed, so
     /// `cargo test <filter>` cannot break the harness-less targets.
     pub cucumber_args: Vec<String>,
+    /// Inputs whose digests are published beside the JSON report (PRD §5.7), for
+    /// example the corpus manifest and the acceptance configuration.
+    pub fingerprinted: Vec<(&'static str, PathBuf)>,
+}
+
+/// File name of the fingerprint record written next to the cucumber JSON report.
+pub const FINGERPRINTS_FILE: &str = "fingerprints.json";
+
+/// Writes `fingerprints.json`: the SHA-256 of the PRD, every `.feature` file, and each
+/// fingerprinted input, so a published BDD result is tied to the exact inputs it ran on.
+fn write_fingerprints(suite: &Suite<'_>) -> Result<()> {
+    let mut digests = std::collections::BTreeMap::new();
+    let mut add = |name: String, path: &Path| -> Result<()> {
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        digests.insert(name, Checksum::of_bytes(&bytes).to_string());
+        Ok(())
+    };
+    add("prd".to_owned(), suite.prd)?;
+    for (name, path) in &suite.fingerprinted {
+        add((*name).to_owned(), path)?;
+    }
+    let mut features: Vec<PathBuf> = std::fs::read_dir(suite.features)
+        .with_context(|| format!("read {}", suite.features.display()))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    features.retain(|p| p.extension().is_some_and(|ext| ext == "feature"));
+    features.sort();
+    for path in &features {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        add(format!("feature:{name}"), path)?;
+    }
+    let target = suite.json_report.with_file_name(FINGERPRINTS_FILE);
+    let json = serde_json::to_string_pretty(&digests).context("serialize fingerprints")?;
+    std::fs::write(&target, json).with_context(|| format!("write {}", target.display()))
 }
 
 /// Outcome of a suite run.
@@ -84,6 +123,7 @@ where
     // Dropping the writer drops the JSON output file, which flushes it.
     drop(writer);
 
+    write_fingerprints(&suite)?;
     let required = inventory::from_prd(suite.prd, suite.milestone)?;
     let executed = inventory::executed(&suite.json_report)?;
     let mut problems = inventory::check(&required, &executed);
