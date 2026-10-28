@@ -505,14 +505,13 @@ async fn an_image_run_embeds_image_files_and_qualifying_pdf_images() {
         store.read_asset(uri).expect("intact asset");
         assert_eq!(image_findings(&path), vec![], "{uri} carries metadata");
         let original = record.metadata.original_asset.as_ref().expect("original");
-        let expected = if record.source_id.as_str() == "us-mixed-003" {
-            (ExtractionMethod::EmbeddedImage, Some(0), (256, 192))
-        } else {
-            (
-                ExtractionMethod::ImageFile,
-                None,
-                (original.width, original.height),
-            )
+        // Pixel sizes of the fixture files (`file` reports them), never read back from
+        // the record under test (G3-3).
+        let expected = match record.source_id.as_str() {
+            "us-mixed-003" => (ExtractionMethod::EmbeddedImage, Some(0), (256, 192)),
+            "chest-001" => (ExtractionMethod::ImageFile, None, (256, 256)),
+            "abd-us-001" => (ExtractionMethod::ImageFile, None, (256, 192)),
+            other => panic!("unexpected image source {other}"),
         };
         assert_eq!(
             (

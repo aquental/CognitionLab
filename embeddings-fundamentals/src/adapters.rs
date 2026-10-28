@@ -59,6 +59,14 @@ pub enum BuildError {
         /// Requested model kind.
         kind: ModelKind,
     },
+    /// The model takes no prefix, but the configuration sets one.
+    #[error("engine {engine} model {model} takes no prefix; set prefix_policy = \"none\"")]
+    PrefixNotSupported {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Model identifier.
+        model: String,
+    },
     /// The model could not be loaded.
     #[error("cannot load {engine} adapter: {reason}")]
     Load {
@@ -80,7 +88,8 @@ impl BuildError {
             | Self::MissingRevision { .. }
             | Self::MutableRevision { .. }
             | Self::MissingCredential { .. }
-            | Self::UnsupportedModelKind { .. } => crate::pipeline::EXIT_VALIDATION,
+            | Self::UnsupportedModelKind { .. }
+            | Self::PrefixNotSupported { .. } => crate::pipeline::EXIT_VALIDATION,
             Self::Load { .. } => 1,
         }
     }
@@ -110,6 +119,17 @@ pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, 
                 .build()
                 .map_err(load)?;
             Ok(Arc::new(adapter))
+        }
+        // Cross-modal and OpenAI models take no prefix; refused before any download or
+        // credential read.
+        EngineId::EmbedAnything | EngineId::OpenAi
+            if (config.engine == EngineId::OpenAi || !config.model_kind.is_text())
+                && config.prefix_policy != crate::embedding::PrefixPolicy::None =>
+        {
+            Err(BuildError::PrefixNotSupported {
+                engine: config.engine,
+                model: config.model_id.clone(),
+            })
         }
         EngineId::FastEmbed | EngineId::OpenAi if !config.model_kind.is_text() => {
             Err(BuildError::UnsupportedModelKind {
@@ -187,12 +207,6 @@ fn deterministic_capabilities(
 
 #[cfg(feature = "engine-embed-anything")]
 async fn build_vision(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
-    if config.prefix_policy != crate::embedding::PrefixPolicy::None {
-        return Err(BuildError::Load {
-            engine: EngineId::EmbedAnything,
-            reason: "cross-modal models take no prefix; set prefix_policy = \"none\"".to_owned(),
-        });
-    }
     let adapter = crate::embedding::vision::load(
         &config.model_id,
         config.model_revision.as_deref(),
@@ -270,12 +284,6 @@ async fn build_fastembed(_config: &EngineConfig) -> Result<Arc<dyn EmbeddingStra
 #[cfg(feature = "engine-openai")]
 fn build_openai(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
     use crate::embedding::openai::{LoadError, OpenAiAdapter};
-    if config.prefix_policy != crate::embedding::PrefixPolicy::None {
-        return Err(BuildError::Load {
-            engine: EngineId::OpenAi,
-            reason: "OpenAI models take no prefix; set prefix_policy = \"none\"".to_owned(),
-        });
-    }
     let adapter = OpenAiAdapter::load(
         &config.model_id,
         config.model_revision.as_deref(),
@@ -324,6 +332,28 @@ mod tests {
             weights: None,
             api_base: None,
             model_kind: ModelKind::Text,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_prefix_on_a_model_without_one_is_a_validation_refusal() {
+        // Regression (G3-2): a configuration mismatch, refused before any download or
+        // credential read, exits 3 like the other configuration refusals.
+        let pinned = Some("3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268".to_owned());
+        let mut cross = config(EngineId::EmbedAnything);
+        cross.model_revision.clone_from(&pinned);
+        cross.model_kind = ModelKind::TextToImage;
+        cross.prefix_policy = crate::embedding::PrefixPolicy::E5;
+        let mut openai = config(EngineId::OpenAi);
+        openai.model_revision = pinned;
+        openai.prefix_policy = crate::embedding::PrefixPolicy::E5;
+        for refused in [cross, openai] {
+            let err = build(&refused).await.err().expect("refused");
+            assert!(
+                matches!(err, BuildError::PrefixNotSupported { .. }),
+                "{err}"
+            );
+            assert_eq!(err.exit_code(), crate::pipeline::EXIT_VALIDATION);
         }
     }
 
