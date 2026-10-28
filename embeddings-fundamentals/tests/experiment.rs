@@ -5,7 +5,6 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use embeddings_fundamentals::adapters::BuildError;
 use embeddings_fundamentals::corpus::LoadedManifest;
@@ -91,7 +90,7 @@ async fn run_experiment(
         Ok(adapter)
     };
     let instruments = Instruments {
-        clock: Arc::new(ManualClock::new(Duration::from_millis(1))),
+        clock: Arc::new(ManualClock::new()),
         memory: FixedMemory(Some(1)),
         hardware: Hardware::detect().await,
     };
