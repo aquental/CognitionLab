@@ -12,7 +12,7 @@
 //! renamed into place. Replaced revisions are kept. All operations are synchronous
 //! (directory `fsync` has no async equivalent); async callers use `spawn_blocking`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -181,11 +181,93 @@ pub struct FsRecordStore {
     fault: Mutex<Option<FaultPoint>>,
     /// Held exclusive lock on `<root>/.writer.lock`; `None` for read-only handles.
     /// The OS releases it when the process exits, so a crashed writer never blocks.
-    writer_lock: Option<File>,
+    writer_lock: Option<WriterLock>,
 }
 
 /// Name of the lock file that serializes writers of one store root.
 const WRITER_LOCK: &str = ".writer.lock";
+
+/// Store roots whose writer lock this process holds.
+///
+/// POSIX record locks exclude other processes only, so writers inside this process
+/// are excluded here. The root is claimed *before* the lock file is opened: closing
+/// any descriptor of a file drops the process's record locks on it, so a second
+/// in-process opener must never open (and then close) the lock file.
+static HELD_ROOTS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+/// Exclusive writer lock on one store root.
+///
+/// Uses a POSIX record lock (`fcntl F_SETLK`) rather than `flock`. A `flock` belongs
+/// to the open file description, so a child process spawned concurrently by any
+/// thread holds a copy of the descriptor until its `exec` and keeps the lock alive
+/// after this writer drops it; reopening then fails spuriously with `WriterBusy`.
+/// Record locks belong to the process and are never inherited by children.
+#[derive(Debug)]
+struct WriterLock {
+    root: PathBuf,
+    file: Option<File>,
+}
+
+impl WriterLock {
+    fn acquire(root: &Path) -> Result<Self, StoreError> {
+        let key = fs::canonicalize(root).map_err(io(root))?;
+        {
+            let mut held = HELD_ROOTS.lock().unwrap_or_else(PoisonError::into_inner);
+            if !held.insert(key.clone()) {
+                return Err(StoreError::WriterBusy(root.to_owned()));
+            }
+        }
+        // From here on the claim is released by `Drop` on every path.
+        let mut lock = Self {
+            root: key,
+            file: None,
+        };
+        let lock_path = root.join(WRITER_LOCK);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(io(&lock_path))?;
+        // The constants are small (1 and 0) but their C types differ by platform.
+        fn short<T: TryInto<nix::libc::c_short>>(
+            value: T,
+            path: &Path,
+        ) -> Result<nix::libc::c_short, StoreError> {
+            value
+                .try_into()
+                .map_err(|_| io(path)(std::io::Error::other("lock constant does not fit c_short")))
+        }
+        let whole_file = nix::libc::flock {
+            l_start: 0,
+            l_len: 0, // 0 = to end of file, i.e. the whole file
+            l_pid: 0,
+            l_type: short(nix::libc::F_WRLCK, &lock_path)?,
+            l_whence: short(nix::libc::SEEK_SET, &lock_path)?,
+        };
+        match nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_SETLK(&whole_file)) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EACCES) => {
+                return Err(StoreError::WriterBusy(root.to_owned()));
+            }
+            Err(errno) => return Err(io(&lock_path)(std::io::Error::from(errno))),
+        }
+        lock.file = Some(file);
+        Ok(lock)
+    }
+}
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        // Close the descriptor (releasing the record lock) before another in-process
+        // writer may claim the root and open the lock file.
+        drop(self.file.take());
+        HELD_ROOTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.root);
+    }
+}
 
 impl FsRecordStore {
     /// Opens the store for writing: takes the exclusive writer lock and only then
@@ -198,20 +280,7 @@ impl FsRecordStore {
     /// [`StoreError::Io`] when the root cannot be created or cleaned.
     pub fn open_writer(root: &Path) -> Result<Self, StoreError> {
         fs::create_dir_all(root).map_err(io(root))?;
-        let lock_path = root.join(WRITER_LOCK);
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(io(&lock_path))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(StoreError::WriterBusy(root.to_owned()));
-            }
-            Err(std::fs::TryLockError::Error(e)) => return Err(io(&lock_path)(e)),
-        }
+        let lock = WriterLock::acquire(root)?;
         let store = Self {
             root: root.to_owned(),
             fault: Mutex::new(None),
@@ -1040,6 +1109,93 @@ mod tests {
         let store = FsRecordStore::open_writer(dir.path()).expect("reopen");
         assert!(!dir.path().join(space().as_str()).join("tmp").exists());
         assert!(store.active_records(&space()).expect("records").is_empty());
+    }
+
+    #[test]
+    fn writer_lock_is_released_on_drop_while_children_are_spawned() {
+        // Regression: with `flock`, a child spawned by another thread between fork
+        // and exec held the lock past drop, so reopening failed with `WriterBusy`.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawners: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = std::process::Command::new("/bin/sleep")
+                            .arg("0.05")
+                            .status();
+                    }
+                })
+            })
+            .collect();
+        let dir = tempfile::tempdir().expect("tmp");
+        let (mut busy, mut opens) = (0_u32, 0_u32);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while std::time::Instant::now() < deadline {
+            opens += 1;
+            match FsRecordStore::open_writer(dir.path()) {
+                Ok(store) => drop(store),
+                Err(StoreError::WriterBusy(_)) => busy += 1,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for s in spawners {
+            s.join().expect("spawner thread");
+        }
+        assert_eq!(
+            busy, 0,
+            "reopen after drop reported WriterBusy {busy}/{opens} times"
+        );
+    }
+
+    /// Child half of `writer_lock_excludes_another_process`: a no-op unless the
+    /// parent sets `EF_LOCK_HOLDER_ROOT`, then holds the writer lock until stdin closes.
+    #[test]
+    fn lock_holder_child() {
+        let Some(root) = std::env::var_os("EF_LOCK_HOLDER_ROOT") else {
+            return;
+        };
+        let _store = FsRecordStore::open_writer(Path::new(&root)).expect("child acquires lock");
+        println!("LOCKED");
+        std::io::Write::flush(&mut std::io::stdout()).expect("flush");
+        let mut sink = String::new();
+        while std::io::stdin().read_line(&mut sink).expect("stdin") > 0 {}
+    }
+
+    #[test]
+    fn writer_lock_excludes_another_process() {
+        use std::io::BufRead as _;
+        let dir = tempfile::tempdir().expect("tmp");
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "storage::tests::lock_holder_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("EF_LOCK_HOLDER_ROOT", dir.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn lock holder");
+        let stdout = child.stdout.take().expect("child stdout");
+        let mut lines = std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok);
+        let locked = lines.any(|line| line.contains("LOCKED"));
+        assert!(locked, "child never reported holding the lock");
+        assert!(
+            matches!(
+                FsRecordStore::open_writer(dir.path()),
+                Err(StoreError::WriterBusy(_))
+            ),
+            "a second process must not open the store for writing"
+        );
+        drop(child.stdin.take()); // EOF releases the child
+        lines.for_each(drop); // keep the pipe open until the child's harness finishes
+        assert!(child.wait().expect("wait child").success());
+        FsRecordStore::open_writer(dir.path()).expect("lock is free after the holder exits");
     }
 
     #[test]
