@@ -1,0 +1,10 @@
+LABORATORIO FICTICIO DE ANALISES - LAUDO SINTETICO
+Paciente: [ANONIMIZADO] Registro: [ANONIMIZADO]
+
+Hemograma
+Exame | Resultado | Unidade | Intervalo de referência
+Hemoglobina | 13,5 | g/dL | 12,0–16,0
+Hematócrito | 40,1 | % | 36,0–46,0
+Leucócitos | 6.800 | /mm³ | 4.000–10.000
+Plaquetas | 250.000 | /mm³ | 150.000–450.000
+

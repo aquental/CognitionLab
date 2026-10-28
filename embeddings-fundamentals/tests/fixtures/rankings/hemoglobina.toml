@@ -1,0 +1,40 @@
+# Frozen ranking for US-02 "Return ordered text results with original-page references".
+#
+# The deterministic adapter maps keywords to reserved axes (DeterministicBuilder::
+# with_keyword_vector). Texts without a keyword get vectors that are zero on those axes.
+# The query contains only "hemoglobina", so its vector is e0, and each score is the
+# e0-component of the normalized chunk vector. That component is derived by hand below,
+# not copied from a run:
+#   hemoglobina row  -> (1.0)               score 1.0
+#   hematócrito row  -> (0.8, 0.6)          score 0.8
+#   leucócitos row   -> (0.5, 0, 0.8660254) score 0.5
+#   every other chunk                        score 0.0
+# Chunk ids follow the hand-derived chunking of lab-searchable-001 page 1
+# (index 0 = title/patient paragraph, 1..4 = the four blood-count rows).
+
+query = "Onde está o resultado da hemoglobina?"
+source = "lab-searchable-001"
+
+[[keywords]]
+keyword = "hemoglobina"
+components = [[0, 1.0]]
+
+[[keywords]]
+keyword = "hematócrito"
+components = [[0, 0.8], [1, 0.6]]
+
+[[keywords]]
+keyword = "leucócitos"
+components = [[0, 0.5], [2, 0.8660254]]
+
+[[expected]]
+chunk_id = "lab-searchable-001-p1-text-1"
+score = 1.0
+
+[[expected]]
+chunk_id = "lab-searchable-001-p1-text-2"
+score = 0.8
+
+[[expected]]
+chunk_id = "lab-searchable-001-p1-text-3"
+score = 0.5

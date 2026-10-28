@@ -4,8 +4,18 @@
 //! embeds them through interchangeable engines, and evaluates retrieval quality for
 //! Portuguese queries. See `spec/PRD.md` and `spec/PLAN.md`.
 
+pub mod adapters;
+pub mod anonymization;
+pub mod chunking;
 pub mod cli;
+pub mod config;
+pub mod corpus;
 pub mod domain;
 pub mod embedding;
+pub mod extraction;
 pub mod ids;
+pub mod pipeline;
+pub mod record;
+pub mod retrieval;
+pub mod storage;
 pub mod tools;
