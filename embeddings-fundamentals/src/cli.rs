@@ -49,6 +49,50 @@ pub enum Command {
     Ingest(IngestArgs),
     /// Search an index with a text query.
     Search(SearchArgs),
+    /// Ingest, evaluate the frozen queries, and measure one configuration.
+    Experiment(ExperimentArgs),
+    /// Combine experiment results into a comparison report (JSON and Markdown).
+    Report(ReportArgs),
+}
+
+/// Arguments of `experiment`.
+#[derive(Debug, Args)]
+pub struct ExperimentArgs {
+    /// Corpus manifest, configuration, store, and experiment id.
+    #[command(flatten)]
+    pub ingest: IngestArgs,
+    /// Frozen query set.
+    #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
+    pub queries: PathBuf,
+    /// Frozen relevance labels.
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v1.toml")]
+    pub labels: PathBuf,
+    /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
+    #[arg(long, default_value_t = 20)]
+    pub latency_repeats: usize,
+    /// Provider price table (remote engines).
+    #[arg(long)]
+    pub price: Option<PathBuf>,
+    /// Extraction-fidelity sample.
+    #[arg(long)]
+    pub fidelity: Option<PathBuf>,
+}
+
+/// Arguments of `report`.
+#[derive(Debug, Args)]
+pub struct ReportArgs {
+    /// Experiment result files written by `experiment --report`, in report order.
+    #[arg(long = "result", required = true)]
+    pub results: Vec<PathBuf>,
+    /// Markdown output.
+    #[arg(long)]
+    pub markdown: PathBuf,
+    /// JSON output.
+    #[arg(long)]
+    pub json: PathBuf,
+    /// Limitation or outstanding item to list in the report (repeatable).
+    #[arg(long = "note")]
+    pub notes: Vec<String>,
 }
 
 /// Arguments naming a manifest.
@@ -108,6 +152,10 @@ pub struct SearchArgs {
     /// Index space to search; defaults to the query model's space.
     #[arg(long)]
     pub space: Option<EmbeddingSpaceId>,
+    /// Corpus manifest of the index; required for a remote engine, whose permission
+    /// is granted per corpus.
+    #[arg(long)]
+    pub manifest: Option<PathBuf>,
 }
 
 /// Runs the parsed command.
@@ -124,6 +172,8 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Validate(args) => validate(&args).await,
         Command::Ingest(args) => ingest(&args).await,
         Command::Search(args) => search(&args).await,
+        Command::Experiment(args) => experiment(&args).await,
+        Command::Report(args) => report(&args),
     }
 }
 
@@ -340,11 +390,26 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
 
 async fn search(args: &SearchArgs) -> Result<ExitCode> {
     let config = ExperimentConfig::load(&args.config)?;
-    if config.engine.engine.execution() == crate::domain::Execution::Remote {
-        // Queries are not corpus content, but the permission model is per corpus;
-        // remote query embedding arrives with the remote adapter in Phase 2.
-        eprintln!("validation failed: remote query embedding is not enabled");
-        return Ok(ExitCode::from(EXIT_VALIDATION));
+    let engine = &config.engine;
+    if engine.engine.execution() == crate::domain::Execution::Remote {
+        // The permission model is per corpus: a remote query model needs the manifest
+        // of the indexed corpus, checked before any client or credential exists.
+        let Some(path) = &args.manifest else {
+            eprintln!(
+                "validation failed: a remote engine needs --manifest for its permission check"
+            );
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        };
+        let manifest = LoadedManifest::load(path)?;
+        if let Err(e) = check_remote_permission(
+            &manifest,
+            engine.engine.execution(),
+            engine.engine.as_str(),
+            &engine.model_id,
+        ) {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
     }
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
@@ -367,5 +432,122 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
     let hits = search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await?;
     println!("{}", serde_json::to_string_pretty(&hits)?);
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
+    use crate::experiment::{ExperimentError, ExperimentInputs, Instruments, Tools};
+    let (manifest, config) = match preflight(&args.ingest.run)? {
+        Ok(inputs) => inputs,
+        Err(e) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    };
+    let Some(repeats) = std::num::NonZeroUsize::new(args.latency_repeats) else {
+        eprintln!("validation failed: --latency-repeats must be at least 1");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    };
+    let dataset = crate::evaluation::Dataset::load(&args.queries, &args.labels)?;
+    let price = args
+        .price
+        .as_deref()
+        .map(crate::cost::PriceTable::load)
+        .transpose()?;
+    let fidelity = args
+        .fidelity
+        .as_deref()
+        .map(crate::fidelity::LoadedSample::load)
+        .transpose()?;
+    let store = Arc::new(FsRecordStore::open_writer(&args.ingest.store)?);
+    let text = PopplerTextExtractor::detect().await;
+    let ocr = TesseractOcr::detect(config.extraction.clone()).await;
+    let settings = config.ingest_settings(args.ingest.experiment.clone());
+    let instruments = Instruments {
+        clock: Arc::new(crate::measurement::SystemClock::new()),
+        memory: Arc::new(crate::measurement::RusageProbe),
+    };
+    let outcome = crate::experiment::run(
+        Tools {
+            text: &text,
+            ocr: &ocr,
+            sleeper: &TokioSleeper,
+        },
+        &store,
+        async || adapters::build(&config.engine).await,
+        &instruments,
+        ExperimentInputs {
+            manifest: &manifest,
+            settings: &settings,
+            dataset: &dataset,
+            latency_repeats: repeats,
+            price: price.as_ref(),
+            fidelity: fidelity.as_ref(),
+        },
+    )
+    .await;
+    let result = match outcome {
+        Ok(result) => result,
+        Err(ExperimentError::Build(e)) => return Ok(build_failure(&e)),
+        Err(ExperimentError::Validation(e)) => {
+            let code = e.exit_code();
+            let kind = if code == EXIT_VALIDATION {
+                "validation failed"
+            } else {
+                "error"
+            };
+            eprintln!("{kind}: {e}");
+            return Ok(ExitCode::from(code));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let json = serde_json::to_string_pretty(&result)?;
+    match &args.ingest.report {
+        Some(path) => {
+            std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
+        }
+        None => println!("{json}"),
+    }
+    let m = &result.evaluation.metrics;
+    eprintln!(
+        "experiment {}: {} | P@3 {:.4} Hit@3 {:.4} nDCG@3 {:.4} | ingestion {:.0} ms | warm median {:.2} ms",
+        result.experiment_id,
+        result.run_status.as_str(),
+        m.precision_at_3,
+        m.hit_at_3,
+        m.ndcg_at_3,
+        result.measurements.ingestion.duration_ms,
+        result.measurements.warm_query_latency.median_ms
+    );
+    Ok(ExitCode::from(match result.run_status {
+        crate::domain::RunStatus::Succeeded => 0,
+        crate::domain::RunStatus::Incomplete => EXIT_INCOMPLETE,
+    }))
+}
+
+fn report(args: &ReportArgs) -> Result<ExitCode> {
+    let mut results = Vec::with_capacity(args.results.len());
+    for path in &args.results {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        results.push(
+            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
+        );
+    }
+    let report = match crate::report::ComparisonReport::new(
+        crate::measurement::Hardware::detect(),
+        results,
+        args.notes.clone(),
+    ) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    };
+    std::fs::write(&args.json, serde_json::to_string_pretty(&report)?)
+        .with_context(|| format!("write {}", args.json.display()))?;
+    std::fs::write(&args.markdown, report.to_markdown())
+        .with_context(|| format!("write {}", args.markdown.display()))?;
     Ok(ExitCode::SUCCESS)
 }
