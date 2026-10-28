@@ -336,8 +336,7 @@ struct ExtractionFingerprintInput<'a> {
 #[derive(Serialize)]
 struct ChunkingFingerprintInput<'a> {
     config: &'a ChunkingConfig,
-    tokenizer_model: &'a str,
-    tokenizer_revision: Option<&'a str>,
+    tokenizer: &'a str,
     budget: Option<usize>,
 }
 
@@ -400,8 +399,7 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         })?;
         let chunking_fingerprint = Fingerprint::of(&ChunkingFingerprintInput {
             config: &settings.chunking,
-            tokenizer_model: &info.model_id,
-            tokenizer_revision: info.model_revision.as_deref(),
+            tokenizer: self.embedder.token_counter().id(),
             budget,
         })?;
         let space = info.embedding_space_id.clone();

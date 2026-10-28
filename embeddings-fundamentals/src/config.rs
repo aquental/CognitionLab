@@ -40,6 +40,13 @@ pub struct EngineConfig {
     /// Prefix policy applied inside the adapter.
     #[serde(default = "default_prefix")]
     pub prefix_policy: PrefixPolicy,
+    /// Weight file inside the model repository (FastEmbed: defaults to
+    /// `onnx/model.onnx`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weights: Option<String>,
+    /// API base URL of a remote engine (OpenAI: defaults to the public endpoint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base: Option<String>,
 }
 
 const fn default_prefix() -> PrefixPolicy {

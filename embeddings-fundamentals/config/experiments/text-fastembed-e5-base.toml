@@ -1,0 +1,18 @@
+# Stage 2 model comparison (PRD §10): multilingual E5-base on FastEmbed (ONNX Runtime).
+# E5 expects "query: " / "passage: " prefixes; the adapter adds them once.
+
+[engine]
+engine = "fastembed"
+model_id = "intfloat/multilingual-e5-base"
+model_revision = "d128750597153bb5987e10b1c3493a34e5a4502a"
+weights = "onnx/model.onnx"
+dimensions = 768
+# XLM-RoBERTa: 514 positions minus the padding offset of 2.
+max_input_tokens = 512
+prefix_policy = "e5"
+
+[ingest]
+max_attempts = 3
+backoff_ms = 200
+batch_size = 32
+language = "pt-BR"
