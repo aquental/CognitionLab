@@ -108,6 +108,9 @@ pub enum ChunkError {
     /// The configured strategy is not implemented.
     #[error("unknown chunking strategy {0:?}")]
     UnknownStrategy(String),
+    /// This strategy does not implement overlap, so recording one would be false.
+    #[error("{STRATEGY_ID} does not support overlap_tokens = {0}; use 0")]
+    UnsupportedOverlap(usize),
 }
 
 /// A chunk before page-level numbering.
@@ -139,6 +142,24 @@ fn cells(line: &str) -> Vec<&str> {
             .collect()
     };
     parts.into_iter().filter(|c| !c.is_empty()).collect()
+}
+
+/// Column names that mark a digit-free table line as a header even inside a table.
+const HEADER_WORDS: &[&str] = &[
+    "exame",
+    "resultado",
+    "unidade",
+    "referência",
+    "referencia",
+    "valor",
+    "parâmetro",
+    "parametro",
+    "método",
+];
+
+fn looks_like_header(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    HEADER_WORDS.iter().any(|w| lower.contains(w))
 }
 
 fn classify(line: &str) -> LineKind {
@@ -277,6 +298,9 @@ impl StructureAwareV1 {
         if config.strategy != STRATEGY_ID {
             return Err(ChunkError::UnknownStrategy(config.strategy));
         }
+        if config.overlap_tokens != 0 {
+            return Err(ChunkError::UnsupportedOverlap(config.overlap_tokens));
+        }
         Ok(Self { config })
     }
 
@@ -320,18 +344,25 @@ impl StructureAwareV1 {
         for line in &page.lines {
             let text = line.text.trim();
             let kind = match classify(text) {
-                LineKind::TableHeader if in_table && header.is_some() => LineKind::TableRow,
+                LineKind::TableHeader
+                    if in_table && header.is_some() && !looks_like_header(text) =>
+                {
+                    LineKind::TableRow
+                }
                 other => other,
             };
             in_table = match kind {
                 LineKind::TableHeader | LineKind::TableRow => true,
+                // A blank line inside a table does not end it.
                 LineKind::Blank => in_table,
                 LineKind::Heading | LineKind::Text => false,
             };
             match kind {
                 LineKind::Blank => {
                     flush(&mut paragraph, &mut units);
-                    header = None;
+                    if !in_table {
+                        header = None;
+                    }
                 }
                 LineKind::Heading => {
                     flush(&mut paragraph, &mut units);
@@ -362,6 +393,7 @@ impl StructureAwareV1 {
                 }
                 LineKind::Text => {
                     heading_used = true;
+                    header = None;
                     let unit = paragraph.get_or_insert_with(|| Unit {
                         kind: ChunkKind::Paragraph,
                         section: section.clone(),
@@ -713,6 +745,59 @@ mod tests {
                 chunk.text
             );
         }
+    }
+
+    #[test]
+    fn blank_lines_inside_a_table_keep_its_header() {
+        let lines = [
+            "Exame | Resultado | Referência",
+            "",
+            "Proteína | Negativo | Negativo",
+            "pH | 6,0 | 5,0–7,0",
+            "",
+            "Glicose | Ausente | Ausente",
+        ];
+        let chunks = chunker(false)
+            .chunk(&page(&lines), &WhitespaceTokenCounter, None)
+            .expect("chunk");
+        assert_eq!(chunks.len(), 3, "{chunks:?}");
+        for chunk in &chunks {
+            assert_eq!(chunk.kind, ChunkKind::TableRow);
+            assert!(
+                chunk.text.starts_with("Exame | Resultado | Referência\n"),
+                "{:?}",
+                chunk.text
+            );
+        }
+        // A new table after a blank line keeps its own header.
+        let lines = [
+            "Exame | Resultado | Unidade",
+            "Hb | 13,5 | g/dL",
+            "",
+            "Exame | Valor | Unidade",
+            "Ureia | 30 | mg/dL",
+        ];
+        let chunks = chunker(false)
+            .chunk(&page(&lines), &WhitespaceTokenCounter, None)
+            .expect("chunk");
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks[1].text.starts_with("Exame | Valor | Unidade\n"),
+            "{:?}",
+            chunks[1].text
+        );
+    }
+
+    #[test]
+    fn overlap_is_rejected_because_it_is_not_implemented() {
+        let config = ChunkingConfig {
+            overlap_tokens: 5,
+            ..ChunkingConfig::default()
+        };
+        assert!(matches!(
+            StructureAwareV1::new(config),
+            Err(ChunkError::UnsupportedOverlap(5))
+        ));
     }
 
     #[test]

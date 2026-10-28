@@ -232,3 +232,33 @@ async fn embed_anything_honours_the_configured_prefix_policy() {
         "the passage prefix consumes budget: {budget_a:?} vs {budget_b:?}"
     );
 }
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned model"]
+async fn embed_anything_always_enforces_a_finite_limit_within_the_model() {
+    use embeddings_fundamentals::config::ExperimentConfig;
+    use std::num::NonZeroUsize;
+    require_integration();
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config/experiments/baseline-text-embed-anything.toml");
+    let base = ExperimentConfig::load(&config_path).expect("config").engine;
+    let mut unset = base.clone();
+    unset.max_input_tokens = None;
+    let adapter = embeddings_fundamentals::adapters::build(&unset)
+        .await
+        .expect("load");
+    // MiniLM's config.json: max_position_embeddings = 512.
+    assert_eq!(
+        adapter.capabilities().max_input_tokens,
+        NonZeroUsize::new(512),
+        "falls back to the model limit"
+    );
+    let mut oversized = base;
+    oversized.max_input_tokens = NonZeroUsize::new(1000);
+    let refused = embeddings_fundamentals::adapters::build(&oversized).await;
+    assert!(
+        refused.is_err(),
+        "a limit above the model's would allow silent engine truncation"
+    );
+}
