@@ -1,0 +1,22 @@
+GitHub Actions run https://github.com/aquental/CognitionLab/actions/runs/40642440205 (PR #3, commit 3edb02f): all jobs passed.
+
+fmt, clippy matrix, unit + BDD	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:12:34.7352245Z   1.99.1-x86_64-unknown-linux-gnu installed - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+fmt, clippy matrix, unit + BDD	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:12:34.8916117Z   1.99.1-x86_64-unknown-linux-gnu unchanged - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+fmt, clippy matrix, unit + BDD	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:12:35.4405338Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+fmt, clippy matrix, unit + BDD	Verify toolchain	﻿2026-10-28T06:12:35.4933957Z ##[group]Run rustc --version | grep -F "rustc 1.99.1"
+fmt, clippy matrix, unit + BDD	Verify toolchain	2026-10-28T06:12:35.4934591Z rustc --version | grep -F "rustc 1.99.1"
+fmt, clippy matrix, unit + BDD	Verify toolchain	2026-10-28T06:12:35.5457249Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.1430492Z test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.1449871Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.1695485Z bdd inventory: milestone 0, 0 required, 3 executed
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.2358897Z bdd selftest: 12 cases + real PRD inventory, 0 mismatches
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.2477118Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.2493095Z test required_external_tools_are_installed ... ignored, requires RUN_INTEGRATION=1 and installed poppler + tesseract
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.2502036Z test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+fmt, clippy matrix, unit + BDD	Tests (unit, doc, fixtures, bdd, bdd_selftest)	2026-10-28T06:14:19.3418719Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+integration (poppler, tesseract, local engines)	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:14:55.5776639Z   1.99.1-x86_64-unknown-linux-gnu installed - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+integration (poppler, tesseract, local engines)	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:14:55.6434193Z   1.99.1-x86_64-unknown-linux-gnu unchanged - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+integration (poppler, tesseract, local engines)	Install Rust 1.99.1 (matches rust-toolchain.toml)	2026-10-28T06:14:55.9599399Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+integration (poppler, tesseract, local engines)	Verify toolchain	﻿2026-10-28T06:14:56.0028819Z ##[group]Run rustc --version | grep -F "rustc 1.99.1"
+integration (poppler, tesseract, local engines)	Verify toolchain	2026-10-28T06:14:56.0029483Z rustc --version | grep -F "rustc 1.99.1"
+integration (poppler, tesseract, local engines)	Verify toolchain	2026-10-28T06:14:56.0533487Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
