@@ -38,6 +38,14 @@ pub enum LoadError {
         /// Model identifier.
         model: String,
     },
+    /// The revision is a branch or tag, not an immutable commit id (PRD §6.4).
+    #[error("model {model}: revision {revision:?} is not an immutable commit id")]
+    MutableRevision {
+        /// Model identifier.
+        model: String,
+        /// The given revision.
+        revision: String,
+    },
     /// A file could not be downloaded at the pinned revision.
     #[error("cannot fetch {file} of {model}: {reason}")]
     Fetch {
@@ -175,6 +183,12 @@ pub async fn load(
             model: model_id.to_owned(),
         })?
         .to_owned();
+    if !super::is_immutable_hub_revision(&revision) {
+        return Err(LoadError::MutableRevision {
+            model: model_id.to_owned(),
+            revision,
+        });
+    }
     let weights = weights.unwrap_or(DEFAULT_WEIGHTS).to_owned();
     let model_error = |reason: String| LoadError::Model {
         model: model_id.to_owned(),

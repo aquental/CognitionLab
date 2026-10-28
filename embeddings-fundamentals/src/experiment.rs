@@ -7,9 +7,7 @@
 //!    The process is fresh, so its cold start (PRD §9.4) is that first load plus the
 //!    first embedding call (the first ingestion batch, which also opens the first
 //!    connection of a remote engine);
-//! 2. check the text labels against the pinned snapshot (an incomplete ingestion whose
-//!    labels cannot apply ends here as [`ExperimentError::EvaluationNotRun`]), then
-//!    load a second adapter for the query side and run the first frozen query (the
+//! 2. check the text labels against the pinned snapshot, then load a second adapter for the query side and run the first frozen query (the
 //!    discarded warm-up query). This runs in the already warm process and is reported
 //!    as `query_side_start`, never as a cold start;
 //! 3. evaluate every frozen query once in the experiment's pinned snapshot (top 3; its
@@ -106,8 +104,9 @@ pub enum ExperimentError {
     /// A blocking task failed.
     #[error("store task failed: {0}")]
     Task(String),
-    /// The ingestion was incomplete and a frozen label points into a failed source, so
-    /// the evaluation could not run. Carries the ingestion outcome to report (exit 2).
+    /// The ingestion was incomplete and the query side failed (for example a frozen
+    /// label points into a failed source, or the query adapter did not load), so the
+    /// evaluation could not run. Carries the ingestion outcome to report (exit 2).
     #[error("ingestion is incomplete and the evaluation could not run: {}", .0.evaluation.reason)]
     EvaluationNotRun(Box<IncompleteExperiment>),
 }
@@ -119,9 +118,10 @@ pub enum ExperimentError {
 ///
 /// Returns [`ExperimentError`] when the adapter cannot be built, ingestion is refused,
 /// or evaluation fails. An incomplete ingestion still yields a result whose
-/// `run_status` says so; when a frozen label points into a failed source the
-/// evaluation cannot run and [`ExperimentError::EvaluationNotRun`] carries the
-/// ingestion outcome instead.
+/// `run_status` says so. When the ingestion is incomplete and any later step fails
+/// (labels that cannot apply, query adapter, evaluation, latency), the evaluation
+/// cannot run and [`ExperimentError::EvaluationNotRun`] carries the ingestion outcome
+/// instead.
 pub async fn run<T, O, S, C, M>(
     tools: Tools<'_, T, O, S>,
     store: &Arc<FsRecordStore>,
@@ -221,137 +221,141 @@ where
             .then(|| count_f64(chunks) / ingestion.as_secs_f64()),
     };
 
-    // 2. Query side: a second adapter in the same process (not a cold start).
-    let experiment_id = inputs.settings.experiment_id.clone();
-    let snapshot = {
-        let (store, id) = (Arc::clone(store), experiment_id.clone());
-        tokio::task::spawn_blocking(move || store.load_experiment(&id))
-            .await
-            .map_err(|e| ExperimentError::Task(e.to_string()))??
-    };
-    let scope = Scope::Experiment(&snapshot);
-    let space = info.embedding_space_id.clone();
-    // Labels are checked against the pinned snapshot before any query-side work, so an
-    // incomplete ingestion whose labels cannot apply is always reported (exit 2), even
-    // if the query-side adapter or the warm-up query would fail.
-    if let Err(e) = check_text_labels(inputs.dataset, &read_records(store, &space, scope).await?) {
-        return Err(match e {
-            EvalError::LabelNotApplicable { .. } if report.run_status == RunStatus::Incomplete => {
-                ExperimentError::EvaluationNotRun(Box::new(IncompleteExperiment {
-                    hardware: instruments.hardware.clone(),
-                    experiment_id,
-                    run_status: report.run_status,
-                    evaluation: EvaluationNotRun {
-                        status: EvaluationNotRunStatus::NotRun,
-                        reason: e.to_string(),
-                    },
-                    reliability: reliability(&report, embedding.failed_calls),
-                    ingestion: report,
-                }))
+    // 2.-5. Query side. Once the ingestion is incomplete, any failure from here on is
+    // reported together with the ingestion outcome (exit 2) instead of discarding it.
+    let failed_batches = embedding.failed_calls;
+    let outcome = async {
+        // 2. Query side: a second adapter in the same process (not a cold start).
+        let experiment_id = inputs.settings.experiment_id.clone();
+        let snapshot = {
+            let (store, id) = (Arc::clone(store), experiment_id.clone());
+            tokio::task::spawn_blocking(move || store.load_experiment(&id))
+                .await
+                .map_err(|e| ExperimentError::Task(e.to_string()))??
+        };
+        let scope = Scope::Experiment(&snapshot);
+        let space = info.embedding_space_id.clone();
+        // Labels are checked against the pinned snapshot before any query-side work.
+        check_text_labels(inputs.dataset, &read_records(store, &space, scope).await?)?;
+        let started = clock.now();
+        let adapter = build().await?;
+        let model_load_ms = millis(clock.now().saturating_sub(started));
+        let measured = MeasuredEmbedder::new(adapter, Arc::clone(clock));
+        let query_calls = measured.calls();
+        let started = clock.now();
+        search_text(store, &space, &measured, &first_query.text, 3, scope).await?;
+        let first_query_ms = millis(clock.now().saturating_sub(started));
+
+        // 3. One evaluation pass; its usage is the query-set cost.
+        query_calls.clear();
+        let evaluation = evaluate_text(store, &space, &measured, inputs.dataset, scope).await?;
+        let query_usage = query_calls.summary(InputKind::Query).usage_tokens;
+
+        // 4. Warm latency.
+        let mut samples = Vec::new();
+        for _ in 0..inputs.latency_repeats.get() {
+            for query in &inputs.dataset.queries.value.queries {
+                let started = clock.now();
+                search_text(store, &space, &measured, &query.text, 3, scope).await?;
+                samples.push(millis(clock.now().saturating_sub(started)));
             }
-            e => e.into(),
-        });
-    }
-    let started = clock.now();
-    let adapter = build().await?;
-    let model_load_ms = millis(clock.now().saturating_sub(started));
-    let measured = MeasuredEmbedder::new(adapter, Arc::clone(clock));
-    let query_calls = measured.calls();
-    let started = clock.now();
-    search_text(store, &space, &measured, &first_query.text, 3, scope).await?;
-    let first_query_ms = millis(clock.now().saturating_sub(started));
-
-    // 3. One evaluation pass; its usage is the query-set cost.
-    query_calls.clear();
-    let evaluation = evaluate_text(store, &space, &measured, inputs.dataset, scope).await?;
-    let query_usage = query_calls.summary(InputKind::Query).usage_tokens;
-
-    // 4. Warm latency.
-    let mut samples = Vec::new();
-    for _ in 0..inputs.latency_repeats.get() {
-        for query in &inputs.dataset.queries.value.queries {
-            let started = clock.now();
-            search_text(store, &space, &measured, &query.text, 3, scope).await?;
-            samples.push(millis(clock.now().saturating_sub(started)));
         }
-    }
-    let warm_query_latency =
-        LatencyStats::from_samples(&samples).ok_or(ExperimentError::NoQueries)?;
+        let warm_query_latency =
+            LatencyStats::from_samples(&samples).ok_or(ExperimentError::NoQueries)?;
 
-    // 5. Resources, cost, fidelity.
-    let peak_local_ram = instruments.memory.peak_rss_bytes().map_or_else(
-        || Observation::unavailable("getrusage is not available on this platform"),
-        |b| Observation::bytes(b, "local process memory (ru_maxrss high-water mark)"),
-    );
-    let index_bytes = {
-        let (store, space) = (Arc::clone(store), space.clone());
-        tokio::task::spawn_blocking(move || store.index_size_bytes(&space))
-            .await
-            .map_err(|e| ExperimentError::Task(e.to_string()))??
-    };
-    let provider_inference_memory = (execution == Execution::Remote)
-        .then(|| Observation::unavailable("remote provider: inference memory is not observable"));
-    let measurements = Measurements {
-        ingestion: ingestion_measurement,
-        ingestion_model_load_ms,
-        embedding: embedding.clone(),
-        cold_start: {
-            let first_operation_ms = first_call.as_ref().map(|c| millis(c.duration));
-            ColdStart {
-                model_load_ms: ingestion_model_load_ms,
-                first_operation_ms,
-                first_operation_items: first_call.as_ref().map(|c| c.items),
-                total_ms: first_operation_ms.map(|ms| ingestion_model_load_ms + ms),
-            }
-        },
-        query_side_start: QuerySideStart {
-            model_load_ms,
-            first_query_ms,
-            total_ms: model_load_ms + first_query_ms,
-        },
-        warm_query_latency,
-        latency_repeats: inputs.latency_repeats.get(),
-        peak_local_ram,
-        gpu_memory: Observation::unavailable(match execution {
-            Execution::Local => "inference runs on the local CPU; no GPU is used",
-            Execution::Remote => "remote provider: GPU memory is not observable",
-        }),
-        provider_inference_memory,
-        index_size: Observation::bytes(index_bytes, "active revisions on disk"),
-    };
-    let billed = Billed {
-        engine: info.engine,
-        model_id: &info.model_id,
-    };
-    Ok(ConfigurationResult {
-        hardware: instruments.hardware.clone(),
-        experiment_id,
-        run_status: report.run_status,
-        engine: info.engine,
-        engine_version: info.engine_version.clone(),
-        model_id: info.model_id.clone(),
-        model_revision: info.model_revision.clone(),
-        weight_format: info.weight_format.clone(),
-        dimensions: info.dimensions.get(),
-        prefix_policy: info.prefix_policy,
-        execution,
-        embedding_space_id: space,
-        batch_size: inputs.settings.batch_size.get(),
-        corpus_checksum: report.corpus_checksum.clone(),
-        fingerprints: Fingerprints {
-            extraction: report.extraction_fingerprint.clone(),
-            chunking: report.chunking_fingerprint.clone(),
-            evaluation: evaluation.evaluation_fingerprint.clone(),
-        },
-        cost: Costs {
-            ingestion: estimate(execution, billed, embedding.usage_tokens, inputs.price),
-            query_set: estimate(execution, billed, query_usage, inputs.price),
-        },
-        reliability: reliability(&report, embedding.failed_calls),
-        evaluation,
-        measurements,
-        fidelity,
-    })
+        // 5. Resources, cost, fidelity.
+        let peak_local_ram = instruments.memory.peak_rss_bytes().map_or_else(
+            || Observation::unavailable("getrusage is not available on this platform"),
+            |b| Observation::bytes(b, "local process memory (ru_maxrss high-water mark)"),
+        );
+        let index_bytes = {
+            let (store, space) = (Arc::clone(store), space.clone());
+            tokio::task::spawn_blocking(move || store.index_size_bytes(&space))
+                .await
+                .map_err(|e| ExperimentError::Task(e.to_string()))??
+        };
+        let provider_inference_memory = (execution == Execution::Remote).then(|| {
+            Observation::unavailable("remote provider: inference memory is not observable")
+        });
+        let measurements = Measurements {
+            ingestion: ingestion_measurement,
+            ingestion_model_load_ms,
+            embedding: embedding.clone(),
+            cold_start: {
+                let first_operation_ms = first_call.as_ref().map(|c| millis(c.duration));
+                ColdStart {
+                    model_load_ms: ingestion_model_load_ms,
+                    first_operation_ms,
+                    first_operation_items: first_call.as_ref().map(|c| c.items),
+                    total_ms: first_operation_ms.map(|ms| ingestion_model_load_ms + ms),
+                }
+            },
+            query_side_start: QuerySideStart {
+                model_load_ms,
+                first_query_ms,
+                total_ms: model_load_ms + first_query_ms,
+            },
+            warm_query_latency,
+            latency_repeats: inputs.latency_repeats.get(),
+            peak_local_ram,
+            gpu_memory: Observation::unavailable(match execution {
+                Execution::Local => "inference runs on the local CPU; no GPU is used",
+                Execution::Remote => "remote provider: GPU memory is not observable",
+            }),
+            provider_inference_memory,
+            index_size: Observation::bytes(index_bytes, "active revisions on disk"),
+        };
+        let billed = Billed {
+            engine: info.engine,
+            model_id: &info.model_id,
+        };
+        Ok::<_, ExperimentError>(ConfigurationResult {
+            hardware: instruments.hardware.clone(),
+            experiment_id,
+            run_status: report.run_status,
+            engine: info.engine,
+            engine_version: info.engine_version.clone(),
+            model_id: info.model_id.clone(),
+            model_revision: info.model_revision.clone(),
+            weight_format: info.weight_format.clone(),
+            dimensions: info.dimensions.get(),
+            prefix_policy: info.prefix_policy,
+            execution,
+            embedding_space_id: space,
+            batch_size: inputs.settings.batch_size.get(),
+            corpus_checksum: report.corpus_checksum.clone(),
+            fingerprints: Fingerprints {
+                extraction: report.extraction_fingerprint.clone(),
+                chunking: report.chunking_fingerprint.clone(),
+                evaluation: evaluation.evaluation_fingerprint.clone(),
+            },
+            cost: Costs {
+                ingestion: estimate(execution, billed, embedding.usage_tokens, inputs.price),
+                query_set: estimate(execution, billed, query_usage, inputs.price),
+            },
+            reliability: reliability(&report, embedding.failed_calls),
+            evaluation,
+            measurements,
+            fidelity,
+        })
+    }
+    .await;
+    match outcome {
+        Err(e) if report.run_status == RunStatus::Incomplete => Err(
+            ExperimentError::EvaluationNotRun(Box::new(IncompleteExperiment {
+                hardware: instruments.hardware.clone(),
+                experiment_id: report.experiment_id.clone(),
+                run_status: report.run_status,
+                evaluation: EvaluationNotRun {
+                    status: EvaluationNotRunStatus::NotRun,
+                    reason: e.to_string(),
+                },
+                reliability: reliability(&report, failed_batches),
+                ingestion: report,
+            })),
+        ),
+        outcome => outcome,
+    }
 }
 
 fn reliability(report: &RunReport, failed_batches: usize) -> Reliability {

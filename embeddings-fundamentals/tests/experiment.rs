@@ -215,3 +215,46 @@ async fn an_incomplete_run_is_reported_even_when_the_query_side_would_fail() {
         "expected EvaluationNotRun, got {outcome:?}"
     );
 }
+
+#[tokio::test]
+async fn an_incomplete_run_with_applicable_labels_is_reported_when_the_query_side_fails() {
+    // Regression (C2-14): image-only labels still apply after the searchable PDF fails,
+    // so the label check passes; the query-side adapter then fails to load. The
+    // ingestion outcome must still be reported.
+    let outcome = run_experiment(
+        512,
+        "unlabeled-source-and-query-side-fail",
+        "tests/fixtures/evaluation/labels-images-only.toml",
+        Some("lab-searchable-001"),
+        true,
+    )
+    .await;
+    let Err(ExperimentError::EvaluationNotRun(incomplete)) = outcome else {
+        panic!("expected EvaluationNotRun, got {outcome:?}");
+    };
+    assert_eq!(incomplete.reliability.failed_sources, 1);
+    assert!(
+        incomplete
+            .evaluation
+            .reason
+            .contains("injected query-side load failure"),
+        "{}",
+        incomplete.evaluation.reason
+    );
+}
+
+#[tokio::test]
+async fn a_complete_run_whose_query_side_fails_is_an_error() {
+    let outcome = run_experiment(
+        512,
+        "complete-query-side-fails",
+        "tests/fixtures/evaluation/labels-images-only.toml",
+        None,
+        true,
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(ExperimentError::Build(_))),
+        "a complete ingestion has nothing incomplete to report: {outcome:?}"
+    );
+}
