@@ -7,10 +7,7 @@ use clap::{Parser, Subcommand};
 
 use crate::tools;
 
-/// Exit code for a run with failed required sources (PLAN §3 Phase 1).
-pub const EXIT_INCOMPLETE: u8 = 2;
-/// Exit code for validation refusals (capabilities, permissions, eligibility).
-pub const EXIT_VALIDATION: u8 = 3;
+pub use crate::pipeline::{EXIT_INCOMPLETE, EXIT_VALIDATION};
 
 /// Medical Document Embedding Lab.
 #[derive(Debug, Parser)]

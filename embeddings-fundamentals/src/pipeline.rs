@@ -29,6 +29,11 @@ use crate::ids::{
 use crate::record::{Record, RecordEmbedding, RecordMetadata};
 use crate::storage::{ExperimentSnapshot, FsRecordStore, StoreError};
 
+/// Process exit code for a run with a failed required source.
+pub const EXIT_INCOMPLETE: u8 = 2;
+/// Process exit code for a run refused by validation.
+pub const EXIT_VALIDATION: u8 = 3;
+
 /// Waits between retries; replaced by a no-op in tests.
 pub trait Sleeper: Send + Sync {
     /// Sleeps for `duration`.
@@ -239,6 +244,16 @@ pub struct RunReport {
 }
 
 impl RunReport {
+    /// Process exit code the CLI uses for this run: 0 when it succeeded,
+    /// [`EXIT_INCOMPLETE`] otherwise.
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        match self.run_status {
+            RunStatus::Succeeded => 0,
+            RunStatus::Incomplete => EXIT_INCOMPLETE,
+        }
+    }
+
     /// Report of one source.
     #[must_use]
     pub fn source(&self, id: &SourceId) -> Option<&SourceReport> {
