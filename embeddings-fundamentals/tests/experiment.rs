@@ -10,8 +10,8 @@ use std::time::Duration;
 use embeddings_fundamentals::adapters::BuildError;
 use embeddings_fundamentals::corpus::LoadedManifest;
 use embeddings_fundamentals::domain::{FailureStage, RunStatus, SourceStatus};
-use embeddings_fundamentals::embedding::EmbeddingStrategy;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
+use embeddings_fundamentals::embedding::{EmbeddingStrategy, EngineId};
 use embeddings_fundamentals::evaluation::Dataset;
 use embeddings_fundamentals::experiment::{
     self, ExperimentError, ExperimentInputs, Instruments, Tools,
@@ -39,6 +39,7 @@ async fn run_with_budget(max_input_tokens: usize, id: &str) -> ConfigurationResu
         id,
         "tests/fixtures/evaluation/labels-images-only.toml",
         None,
+        false,
     )
     .await
     .expect("experiment")
@@ -53,6 +54,7 @@ async fn run_experiment(
     id: &str,
     labels: &str,
     failing_stem: Option<&str>,
+    fail_query_side: bool,
 ) -> Result<ConfigurationResult, ExperimentError> {
     let manifest =
         LoadedManifest::load(&repo("tests/fixtures/corpus/manifest.toml")).expect("manifest");
@@ -72,7 +74,15 @@ async fn run_experiment(
     let template = DeterministicEmbedder::builder().build().expect("adapter");
     let mut capabilities = template.capabilities().clone();
     capabilities.max_input_tokens = NonZeroUsize::new(max_input_tokens);
+    let builds = std::sync::atomic::AtomicUsize::new(0);
     let build = async || -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+        let n = builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if fail_query_side && n > 0 {
+            return Err(BuildError::Load {
+                engine: EngineId::Deterministic,
+                reason: "injected query-side load failure".into(),
+            });
+        }
         let adapter = DeterministicEmbedder::builder()
             .capabilities(capabilities.clone())
             .build()
@@ -139,6 +149,7 @@ async fn a_failed_labeled_source_is_reported_as_incomplete_without_an_evaluation
         "labeled-source-fails",
         "config/evaluation/labels-synthetic-v2.toml",
         Some("lab-searchable-001"),
+        false,
     )
     .await;
     let Err(ExperimentError::EvaluationNotRun(incomplete)) = outcome else {
@@ -179,9 +190,28 @@ async fn a_failed_unlabeled_source_still_completes_the_evaluation() {
         "unlabeled-source-fails",
         "tests/fixtures/evaluation/labels-images-only.toml",
         Some("lab-searchable-001"),
+        false,
     )
     .await
     .expect("experiment");
     assert_eq!(result.run_status, RunStatus::Incomplete);
     assert_eq!(result.reliability.failed_sources, 1);
+}
+
+#[tokio::test]
+async fn an_incomplete_run_is_reported_even_when_the_query_side_would_fail() {
+    // Regression (G2-9): the label check runs before the query-side adapter load and
+    // the warm-up query, so their failure cannot hide the incomplete-run report.
+    let outcome = run_experiment(
+        512,
+        "query-side-fails",
+        "config/evaluation/labels-synthetic-v2.toml",
+        Some("lab-searchable-001"),
+        true,
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(ExperimentError::EvaluationNotRun(_))),
+        "expected EvaluationNotRun, got {outcome:?}"
+    );
 }

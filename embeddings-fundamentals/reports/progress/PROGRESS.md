@@ -175,8 +175,8 @@ None for Phase 0.
 
 ### Outstanding (not claimed)
 - ~~Intermittent `WriterBusy` on store reopen~~: fixed, see the status paragraph above.
-- Reviews in progress: Grok rounds 1–3 (G2-1..G2-6, round 3 NO FINDINGS), Codex round 1 (C2-1..C2-9), Grok round 4 NO FINDINGS, Codex round 2 (C2-2..C2-9 CLOSED; C2-1 reopened; new C2-10..C2-12, all fixed). The round-2 fixes change behavior, so Grok round 5 then Codex round 3 confirm. See `reports/reviews/phase-2/FINDINGS.md`.
-- Integration after the fixes: `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 9 passed (2026-10-28).
+- Reviews in progress: Grok rounds 1–3 (G2-1..G2-6, round 3 NO FINDINGS), Codex round 1 (C2-1..C2-9), Grok round 4 NO FINDINGS, Codex round 2 (C2-2..C2-9 CLOSED; C2-1 reopened; new C2-10..C2-12, all fixed). Grok round 5 raised G2-7..G2-9 (fixed); Grok round 6 then Codex round 3 confirm. See `reports/reviews/phase-2/FINDINGS.md`.
+- Integration after the fixes: `RUN_INTEGRATION=1 cargo test --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 10 passed after the Codex round-2 fixes, including the new CLI exit-2 test for C2-10 (2026-10-28). The OpenAI live test is not compiled without `engine-openai` and stays outstanding.
 - OpenAI live integration: no `OPENAI_API_KEY` and no owner authorization for remote processing.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - The price in `config/prices/openai-embeddings-2026-10.toml` must be verified against the published price before an OpenAI estimate is reported.

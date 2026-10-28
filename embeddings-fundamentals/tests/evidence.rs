@@ -100,3 +100,27 @@ fn an_incomplete_ingestion_is_visible_in_the_markdown() {
     let cells: Vec<&str> = row.split('|').map(str::trim).collect();
     assert_eq!(cells.get(3), Some(&"1"), "failed sources shown in {row}");
 }
+
+#[test]
+fn a_timed_out_hardware_probe_does_not_make_runs_incomparable() {
+    // Regression (G2-8): two published results from one machine, one of them with the
+    // `sysctl` fields a timed-out probe leaves unset.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("reports/phase-2");
+    let load = |name: &str| -> ConfigurationResult {
+        serde_json::from_str(&std::fs::read_to_string(root.join(name)).expect("read"))
+            .expect("parse")
+    };
+    let full = load("p2-fastembed-minilm.json");
+    let mut timed_out = load("p2-embed-anything-minilm.json");
+    timed_out.hardware.cpu = None;
+    timed_out.hardware.memory_bytes = None;
+    let report = ComparisonReport::new(vec![timed_out.clone(), full.clone()], Vec::new())
+        .expect("same machine");
+    assert_eq!(report.hardware, full.hardware, "known fields are kept");
+    let mut other = full;
+    other.hardware.logical_cpus = Some(other.hardware.logical_cpus.unwrap_or(0) + 4);
+    assert!(
+        ComparisonReport::new(vec![timed_out, other], Vec::new()).is_err(),
+        "a different core count is another machine"
+    );
+}

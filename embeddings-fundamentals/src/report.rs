@@ -257,6 +257,7 @@ impl ComparisonReport {
         notes: Vec<String>,
     ) -> Result<Self, ReportError> {
         let first = configurations.first().ok_or(ReportError::Empty)?;
+        let mut hardware = first.hardware.clone();
         for c in &configurations {
             let differs = |what| ReportError::NotComparable {
                 experiment: c.experiment_id.clone(),
@@ -277,14 +278,15 @@ impl ComparisonReport {
             if c.fingerprints.evaluation != first.fingerprints.evaluation {
                 return Err(differs("evaluation fingerprint"));
             }
-            // Timings and memory from different machines are not comparable.
-            if c.hardware != first.hardware {
-                return Err(differs("measurement hardware"));
-            }
+            // Timings and memory from different machines are not comparable; a probe
+            // field one run could not read is unknown, not different.
+            hardware = hardware
+                .merge(&c.hardware)
+                .ok_or_else(|| differs("measurement hardware"))?;
         }
         Ok(Self {
             comparison_kind: COMPARISON_KIND.to_owned(),
-            hardware: first.hardware.clone(),
+            hardware,
             corpus_checksum: first.corpus_checksum.clone(),
             query_set: first.evaluation.query_set.clone(),
             labels: first.evaluation.labels.clone(),

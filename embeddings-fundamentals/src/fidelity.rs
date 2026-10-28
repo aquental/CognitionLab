@@ -253,9 +253,11 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
         })
         .collect();
     // Lines claimed per page, so no extracted line counts for two sample rows. Exact
-    // name matches are reserved for the whole page first; the value is only a fallback
-    // for the remaining rows when exactly one line on the page carries it and no row
-    // claimed that line. The result does not depend on the order of the sample rows.
+    // name matches are reserved for the whole page first. The value is only a fallback
+    // for the remaining rows, over the lines no name claimed: a row binds when it is the
+    // only unmatched row on its page with that value and exactly one unclaimed line
+    // carries it. Ambiguity leaves every row involved unbound, so the result does not
+    // depend on the order of the sample rows.
     let mut claimed: BTreeMap<(SourceId, u32), std::collections::BTreeSet<usize>> = BTreeMap::new();
     let mut assigned: Vec<Option<usize>> = vec![None; rows.len()];
     for (slot, (row, (_, lines))) in assigned.iter_mut().zip(rows.iter().zip(&prepared)) {
@@ -274,23 +276,32 @@ pub fn evaluate(sample: &LoadedSample, pages: &[ExtractedPage]) -> FidelityRepor
             taken.insert(i);
         }
     }
+    let mut wanted: BTreeMap<(SourceId, u32, String), usize> = BTreeMap::new();
+    for (row, slot) in rows.iter().zip(&assigned) {
+        if slot.is_none() {
+            *wanted
+                .entry((row.source_id.clone(), row.page, norm(&row.value)))
+                .or_default() += 1;
+        }
+    }
     for (slot, (row, (_, lines))) in assigned.iter_mut().zip(rows.iter().zip(&prepared)) {
         if slot.is_some() {
             continue;
         }
         let value = norm(&row.value);
-        let mut matches = lines
+        let page_key = (row.source_id.clone(), row.page);
+        if wanted.get(&(page_key.0.clone(), page_key.1, value.clone())) != Some(&1) {
+            continue;
+        }
+        let taken = claimed.entry(page_key).or_default();
+        let mut free = lines
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.get(1) == Some(&value))
+            .filter(|(i, c)| !taken.contains(i) && c.get(1) == Some(&value))
             .map(|(i, _)| i);
-        if let (Some(i), None) = (matches.next(), matches.next()) {
-            let taken = claimed
-                .entry((row.source_id.clone(), row.page))
-                .or_default();
-            if taken.insert(i) {
-                *slot = Some(i);
-            }
+        if let (Some(i), None) = (free.next(), free.next()) {
+            taken.insert(i);
+            *slot = Some(i);
         }
     }
     for ((row, (method, lines)), index) in rows.iter().zip(&prepared).zip(assigned) {
@@ -438,6 +449,33 @@ mod tests {
                 report.mismatches.iter().all(|m| m.row == "A"),
                 "{rows:?}: B must score all four fields: {report:?}"
             );
+        }
+    }
+
+    #[test]
+    fn residual_value_matches_are_unique_and_skip_name_reserved_lines() {
+        // Regression (G2-7): two unmatched rows sharing a value compete for one line,
+        // so neither binds, in either order.
+        let one_line = [page("Xxx | 92 | mg/dL | 70–99")];
+        let a = ("A", "92", "mmol/L", "1–2");
+        let b = ("B", "92", "mg/dL", "70–99");
+        for rows in [[a, b], [b, a]] {
+            let report = evaluate(&sample(&rows), &one_line);
+            assert_eq!(report.rows_not_found, 2, "{rows:?}: {report:?}");
+            assert_eq!(report.overall.correct, 0, "{rows:?}: {report:?}");
+        }
+        // A value repeated on a line that a name already reserved does not block the
+        // fallback: the one unclaimed line with that value binds.
+        let reserved = [page(
+            "Glucose | 92 | mg/dL | 70–99\nXxx | 92 | mg/dL | 70–99",
+        )];
+        let glucose = ("Glucose", "92", "mg/dL", "70–99");
+        let other = ("Other", "92", "mg/dL", "70–99");
+        for rows in [[glucose, other], [other, glucose]] {
+            let report = evaluate(&sample(&rows), &reserved);
+            assert_eq!(report.rows_not_found, 0, "{rows:?}: {report:?}");
+            // Glucose 4 fields; Other 3 (its name is unreadable).
+            assert_eq!(report.overall.correct, 7, "{rows:?}: {report:?}");
         }
     }
 
