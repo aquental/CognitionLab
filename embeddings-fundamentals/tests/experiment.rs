@@ -147,7 +147,7 @@ async fn a_failed_labeled_source_is_reported_as_incomplete_without_an_evaluation
     let outcome = run_experiment(
         512,
         "labeled-source-fails",
-        "config/evaluation/labels-synthetic-v2.toml",
+        "config/evaluation/labels-synthetic-v3.toml",
         Some("lab-searchable-001"),
         false,
     )
@@ -205,7 +205,7 @@ async fn an_incomplete_run_is_reported_even_when_the_query_side_would_fail() {
     let outcome = run_experiment(
         512,
         "query-side-fails",
-        "config/evaluation/labels-synthetic-v2.toml",
+        "config/evaluation/labels-synthetic-v3.toml",
         Some("lab-searchable-001"),
         true,
     )

@@ -1,12 +1,14 @@
 //! Steps for `us03.feature` (PRD §5.3): comparable retrieval evaluation. Milestone 2
-//! covers the text-only example and the low-relevance scenario.
+//! covers the text-only example and the low-relevance scenario, milestone 3 the
+//! image-only example.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail, ensure};
 use cucumber::{given, then, when};
-use embeddings_fundamentals::evaluation::{EvaluationMode, evaluate_text};
+use embeddings_fundamentals::domain::Modality;
+use embeddings_fundamentals::evaluation::{EvaluationMode, evaluate_images, evaluate_text};
 use embeddings_fundamentals::report::ComparisonReport;
 use embeddings_fundamentals::retrieval::Scope;
 use serde::Deserialize;
@@ -16,7 +18,7 @@ use super::eval_fixture::{self, repo};
 use crate::{LabWorld, SpaceOf, fixture};
 
 const QUERIES: &str = "config/evaluation/queries-v1.toml";
-const LABELS: &str = "config/evaluation/labels-synthetic-v2.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v3.toml";
 const IMAGE_ONLY_LABELS: &str = "tests/fixtures/evaluation/labels-images-only.toml";
 
 /// Checksum of a file computed here, independently of the library.
@@ -91,34 +93,60 @@ fn frozen_dataset(world: &mut LabWorld) -> Result<()> {
     expr = "a compatible fixture index with at least three candidates for each query in {string} mode"
 )]
 async fn fixture_index(world: &mut LabWorld, mode: String) -> Result<()> {
+    let (modality, count) = match EvaluationMode::from_name(&mode) {
+        Some(EvaluationMode::TextOnly) => {
+            world.embedder = Arc::new(eval_fixture::keyword_builder()?.build()?);
+            eval_fixture::add_pdf_corpus(world)?;
+            world.ingest().await?;
+            (Modality::Text, world.active_records()?.len())
+        }
+        Some(EvaluationMode::ImageOnly) => {
+            let images = Arc::new(eval_fixture::image_keyword_builder()?.build()?);
+            world.image_embedder = Some(Arc::clone(&images));
+            eval_fixture::add_image_corpus(world)?;
+            world.ingest_images().await?;
+            let records = world.store.active_records(&images.model_info_space())?;
+            (Modality::Image, records.len())
+        }
+        _ => bail!("milestone 3 provides text-only and image-only fixture indexes, not {mode:?}"),
+    };
     ensure!(
-        EvaluationMode::from_name(&mode) == Some(EvaluationMode::TextOnly),
-        "milestone 2 provides text-only fixture indexes, not {mode:?}"
+        world.validation_error.is_none(),
+        "the {modality:?} run was refused: {:?}",
+        world.validation_error
     );
-    world.embedder = Arc::new(eval_fixture::keyword_builder()?.build()?);
-    eval_fixture::add_pdf_corpus(world)?;
-    world.ingest().await?;
-    let count = world.active_records()?.len();
     ensure!(count >= 3, "index has only {count} candidates");
+    world.notes.insert("metrics_fixture".into(), mode);
     Ok(())
 }
 
 #[when(expr = "I evaluate {string} mode")]
 async fn evaluate(world: &mut LabWorld, mode: String) -> Result<()> {
-    ensure!(
-        EvaluationMode::from_name(&mode) == Some(EvaluationMode::TextOnly),
-        "unsupported mode {mode:?}"
-    );
     let dataset = world.dataset.as_ref().context("no dataset")?;
-    let space = world.embedder.model_info_space();
-    let report = evaluate_text(
-        &world.store,
-        &space,
-        &*world.embedder,
-        dataset,
-        Scope::Active,
-    )
-    .await?;
+    let report = match EvaluationMode::from_name(&mode) {
+        Some(EvaluationMode::TextOnly) => {
+            let space = world.embedder.model_info_space();
+            evaluate_text(
+                &world.store,
+                &space,
+                &*world.embedder,
+                dataset,
+                Scope::Active,
+            )
+            .await?
+        }
+        Some(EvaluationMode::ImageOnly) => {
+            let images = world.image_embedder.clone().context("no image index")?;
+            let space = images.model_info_space();
+            evaluate_images(&world.store, &space, &*images, dataset, Scope::Active).await?
+        }
+        _ => bail!("unsupported mode {mode:?}"),
+    };
+    ensure!(
+        report.mode.as_str() == mode,
+        "evaluated {} mode, requested {mode}",
+        report.mode.as_str()
+    );
     world.evaluation = Some(report);
     Ok(())
 }
@@ -194,7 +222,11 @@ fn checksums(world: &mut LabWorld) -> Result<()> {
 )]
 fn precomputed(world: &mut LabWorld) -> Result<()> {
     let report = world.evaluation.as_ref().context("no evaluation")?;
-    let text = std::fs::read_to_string(fixture("metrics/text-only.toml"))?;
+    let mode = world
+        .notes
+        .get("metrics_fixture")
+        .context("no fixture index")?;
+    let text = std::fs::read_to_string(fixture(&format!("metrics/{mode}.toml")))?;
     let fixture: MetricFixture = toml::from_str(&text).context("parse metrics fixture")?;
     let observed: BTreeMap<&str, _> = report
         .queries

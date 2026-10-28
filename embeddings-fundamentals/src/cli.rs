@@ -65,7 +65,7 @@ pub struct ExperimentArgs {
     #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
     pub queries: PathBuf,
     /// Frozen relevance labels.
-    #[arg(long, default_value = "config/evaluation/labels-synthetic-v2.toml")]
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v3.toml")]
     pub labels: PathBuf,
     /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
     #[arg(long, default_value_t = 20)]

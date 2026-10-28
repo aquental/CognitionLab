@@ -1,0 +1,198 @@
+# Relevance labels for the SYNTHETIC fixture corpus (tests/fixtures/corpus), written by
+# hand from the chunk texts: 0 = irrelevant, 1 = partially relevant, 2 = directly
+# relevant (PRD §9.2). Items not listed are irrelevant (0). These labels measure the
+# pipeline on synthetic documents only; labels for the owner's anonymized corpus are
+# an outstanding owner input (PLAN §0.2).
+#
+# v2 (2026-10-28, review finding C2-1): every text label carries an `anchor`, a
+# distinctive substring of the chunk text it was written for. A chunk id is unique only
+# within one chunking revision, so the evaluator refuses to score a label whose chunk is
+# missing from the evaluated index or no longer contains its anchor (NFC,
+# case-insensitive, whitespace collapsed), instead of silently attaching the judgment to
+# different text.
+#
+# v3 (2026-10-28, Milestone 3): the judgments of v2 unchanged; every image label now
+# carries an `anchor` naming its original image: the file name of an image file, or
+# `<file>#page=<page>&image=<pdfimages num>` for an image embedded in a PDF. An image
+# chunk id numbers the images an image run keeps on a page, so a filter change could
+# make it name another image; the evaluator refuses an image label whose chunk does not
+# come from the anchored original. v2 stays checked in because the Phase 2 evidence
+# (reports/phase-2) was produced with it.
+version = "labels-synthetic-v3"
+query_set = "queries-v1"
+corpus = "synthetic"
+
+[[label]]
+query = "q01"
+item = "lab-searchable-001-p1-text-1"
+anchor = "Hemoglobina"
+label = 2
+note = "Hemoglobin row with value, unit, and reference range (native text)"
+
+[[label]]
+query = "q01"
+item = "lab-scanned-002-p1-text-1"
+anchor = "Hemoglobina"
+label = 2
+note = "Hemoglobin row recovered by OCR"
+
+[[label]]
+query = "q02"
+item = "lab-searchable-001-p2-text-0"
+anchor = "Glicemia de jejum"
+label = 2
+note = "Fasting glucose row with value 92 mg/dL"
+
+[[label]]
+query = "q02"
+item = "lab-scanned-002-p2-text-0"
+anchor = "Glicemia de jejum"
+label = 2
+note = "Fasting glucose row recovered by OCR"
+
+[[label]]
+query = "q03"
+item = "lab-searchable-001-p2-text-1"
+anchor = "Creatinina"
+label = 2
+note = "Creatinine row with reference range 0,6–1,1"
+
+[[label]]
+query = "q03"
+item = "lab-scanned-002-p2-text-1"
+anchor = "Creatinina"
+label = 2
+note = "Creatinine row recovered by OCR"
+
+[[label]]
+query = "q04"
+item = "lab-searchable-001-p2-text-2"
+anchor = "Colesterol total"
+label = 2
+note = "Total cholesterol row"
+
+[[label]]
+query = "q04"
+item = "lab-searchable-001-p2-text-3"
+anchor = "Triglicer"
+label = 2
+note = "Triglycerides row"
+
+[[label]]
+query = "q04"
+item = "lab-scanned-002-p2-text-2"
+anchor = "Colesterol total"
+label = 2
+note = "Total cholesterol row recovered by OCR"
+
+[[label]]
+query = "q04"
+item = "lab-scanned-002-p2-text-3"
+anchor = "Triglicer"
+label = 2
+note = "Triglycerides row recovered by OCR"
+
+[[label]]
+query = "q05"
+item = "us-mixed-003-p1-text-3"
+anchor = "Ultrassonografia abdominal sem alterações"
+label = 2
+note = "Conclusion section of the ultrasound report"
+
+[[label]]
+query = "q05"
+item = "us-mixed-003-p2-text-3"
+anchor = "Ultrassonografia abdominal sem alterações"
+label = 2
+note = "Conclusion section of the ultrasound report (OCR page)"
+
+[[label]]
+query = "q05"
+item = "lab-searchable-001-p2-text-4"
+anchor = "valores dentro dos intervalos"
+label = 1
+note = "Laboratory report conclusion line"
+
+[[label]]
+query = "q05"
+item = "lab-scanned-002-p2-text-4"
+anchor = "valores dentro dos intervalos"
+label = 1
+note = "Laboratory report conclusion line recovered by OCR"
+
+[[label]]
+query = "q06"
+item = "us-mixed-003-p1-text-2"
+anchor = "Fígado de dimensões normais"
+label = 2
+note = "Findings section of the ultrasound report"
+
+[[label]]
+query = "q06"
+item = "us-mixed-003-p2-text-2"
+anchor = "Fígado de dimensões normais"
+label = 2
+note = "Findings section of the ultrasound report (OCR page)"
+
+[[label]]
+query = "q07"
+item = "chest-001-p1-image-0"
+anchor = "chest-001.png"
+label = 2
+note = "Synthetic chest radiograph"
+
+[[label]]
+query = "q08"
+item = "abd-us-001-p1-image-0"
+anchor = "abd-us-001.jpg"
+label = 2
+note = "Synthetic abdominal ultrasound image"
+
+[[label]]
+query = "q08"
+item = "us-mixed-003-p1-image-0"
+anchor = "us-mixed-003.pdf#page=1&image=0"
+label = 2
+note = "Ultrasound image embedded in the ultrasound report"
+
+[[label]]
+query = "q08"
+item = "us-mixed-003-p1-text-0"
+anchor = "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL"
+label = 1
+note = "Title of the abdominal ultrasound report, not an image"
+
+[[label]]
+query = "q08"
+item = "us-mixed-003-p2-text-0"
+anchor = "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL"
+label = 1
+note = "Title of the abdominal ultrasound report repeated on page 2, not an image"
+
+[[label]]
+query = "q09"
+item = "us-mixed-003-p1-image-0"
+anchor = "us-mixed-003.pdf#page=1&image=0"
+label = 2
+note = "Image embedded in the ultrasound report"
+
+[[label]]
+query = "q09"
+item = "abd-us-001-p1-image-0"
+anchor = "abd-us-001.jpg"
+label = 1
+note = "Abdominal ultrasound image not linked to the report"
+
+[[label]]
+query = "q10"
+item = "us-mixed-003-p1-text-1"
+anchor = "transdutor convexo"
+label = 2
+note = "Technique section (transducer and preparation)"
+
+[[label]]
+query = "q10"
+item = "us-mixed-003-p2-text-1"
+anchor = "transdutor convexo"
+label = 2
+note = "Technique section (OCR page)"

@@ -74,6 +74,20 @@ pub struct OriginalAsset {
     pub height: u32,
 }
 
+impl OriginalAsset {
+    /// Stable reference to the original image: the file name for an image file, and
+    /// `<file>#page=<page>&image=<num>` for an image embedded in a PDF. The `pdfimages`
+    /// number does not depend on which images a filter keeps, so a relevance label can
+    /// use it to check that a chunk id still names the image it was written for.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        match self.pdf_image_num {
+            Some(num) => format!("{}#page={}&image={num}", self.file, self.page),
+            None => self.file.clone(),
+        }
+    }
+}
+
 /// A caption produced by a model, always marked as generated (PRD §8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

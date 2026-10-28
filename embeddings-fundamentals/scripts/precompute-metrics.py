@@ -7,7 +7,7 @@ the frozen relevance-label file. Output (stdout): the same TOML with per-query a
 macro-averaged Precision@3, Hit@3, and nDCG@3 appended.
 
     python3 scripts/precompute-metrics.py tests/fixtures/metrics/text-only.ranks.toml \
-        config/evaluation/labels-synthetic-v2.toml > tests/fixtures/metrics/text-only.toml
+        config/evaluation/labels-synthetic-v3.toml > tests/fixtures/metrics/text-only.toml
 """
 import math
 import sys
