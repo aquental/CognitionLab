@@ -7,7 +7,9 @@
 //!    The process is fresh, so its cold start (PRD §9.4) is that first load plus the
 //!    first embedding call (the first ingestion batch, which also opens the first
 //!    connection of a remote engine);
-//! 2. load a second adapter for the query side and run the first frozen query (the
+//! 2. check the text labels against the pinned snapshot (an incomplete ingestion whose
+//!    labels cannot apply ends here as [`ExperimentError::EvaluationNotRun`]), then
+//!    load a second adapter for the query side and run the first frozen query (the
 //!    discarded warm-up query). This runs in the already warm process and is reported
 //!    as `query_side_start`, never as a cold start;
 //! 3. evaluate every frozen query once in the experiment's pinned snapshot (top 3; its
@@ -24,7 +26,7 @@ use crate::corpus::LoadedManifest;
 use crate::cost::{Billed, PriceTable, estimate};
 use crate::domain::{Execution, RunStatus, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
-use crate::evaluation::{Dataset, EvalError, evaluate_text};
+use crate::evaluation::{Dataset, EvalError, check_text_labels, evaluate_text};
 use crate::extraction::{OcrEngine, TextExtractor};
 use crate::fidelity::{self, LoadedSample};
 use crate::measurement::{
@@ -35,7 +37,7 @@ use crate::report::{
     ColdStart, ConfigurationResult, Costs, EvaluationNotRun, EvaluationNotRunStatus, Fingerprints,
     IncompleteExperiment, IngestionMeasurement, Measurements, QuerySideStart, Reliability,
 };
-use crate::retrieval::{Scope, SearchError, search_text};
+use crate::retrieval::{Scope, SearchError, read_records, search_text};
 use crate::storage::EvaluationProvenance;
 use crate::storage::{FsRecordStore, StoreError};
 
@@ -229,6 +231,27 @@ where
     };
     let scope = Scope::Experiment(&snapshot);
     let space = info.embedding_space_id.clone();
+    // Labels are checked against the pinned snapshot before any query-side work, so an
+    // incomplete ingestion whose labels cannot apply is always reported (exit 2), even
+    // if the query-side adapter or the warm-up query would fail.
+    if let Err(e) = check_text_labels(inputs.dataset, &read_records(store, &space, scope).await?) {
+        return Err(match e {
+            EvalError::LabelNotApplicable { .. } if report.run_status == RunStatus::Incomplete => {
+                ExperimentError::EvaluationNotRun(Box::new(IncompleteExperiment {
+                    hardware: instruments.hardware.clone(),
+                    experiment_id,
+                    run_status: report.run_status,
+                    evaluation: EvaluationNotRun {
+                        status: EvaluationNotRunStatus::NotRun,
+                        reason: e.to_string(),
+                    },
+                    reliability: reliability(&report, embedding.failed_calls),
+                    ingestion: report,
+                }))
+            }
+            e => e.into(),
+        });
+    }
     let started = clock.now();
     let adapter = build().await?;
     let model_load_ms = millis(clock.now().saturating_sub(started));
@@ -240,27 +263,7 @@ where
 
     // 3. One evaluation pass; its usage is the query-set cost.
     query_calls.clear();
-    let evaluation = match evaluate_text(store, &space, &measured, inputs.dataset, scope).await {
-        Ok(evaluation) => evaluation,
-        Err(e @ EvalError::LabelNotApplicable { .. })
-            if report.run_status == RunStatus::Incomplete =>
-        {
-            return Err(ExperimentError::EvaluationNotRun(Box::new(
-                IncompleteExperiment {
-                    hardware: instruments.hardware.clone(),
-                    experiment_id,
-                    run_status: report.run_status,
-                    evaluation: EvaluationNotRun {
-                        status: EvaluationNotRunStatus::NotRun,
-                        reason: e.to_string(),
-                    },
-                    reliability: reliability(&report, embedding.failed_calls),
-                    ingestion: report,
-                },
-            )));
-        }
-        Err(e) => return Err(e.into()),
-    };
+    let evaluation = evaluate_text(store, &space, &measured, inputs.dataset, scope).await?;
     let query_usage = query_calls.summary(InputKind::Query).usage_tokens;
 
     // 4. Warm latency.

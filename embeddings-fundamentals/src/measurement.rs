@@ -450,6 +450,31 @@ async fn probe_output(program: &str, args: &[&str], limit: std::time::Duration) 
 }
 
 impl Hardware {
+    /// Combines two descriptions of the machine a measurement ran on. The stable
+    /// identity (OS, architecture, logical CPUs, accelerator) must be equal; a probed
+    /// field (`cpu`, `memory_bytes`) that one side could not read is unknown, not
+    /// different, and is taken from the other side. Returns `None` when the two
+    /// describe different machines.
+    #[must_use]
+    pub fn merge(&self, other: &Self) -> Option<Self> {
+        fn probed<T: Clone + PartialEq>(a: Option<&T>, b: Option<&T>) -> Option<Option<T>> {
+            match (a, b) {
+                (Some(a), Some(b)) if a != b => None,
+                (a, b) => Some(a.or(b).cloned()),
+            }
+        }
+        let same = self.os == other.os
+            && self.arch == other.arch
+            && self.logical_cpus == other.logical_cpus
+            && self.accelerator == other.accelerator;
+        same.then_some(())?;
+        Some(Self {
+            cpu: probed(self.cpu.as_ref(), other.cpu.as_ref())?,
+            memory_bytes: probed(self.memory_bytes.as_ref(), other.memory_bytes.as_ref())?,
+            ..self.clone()
+        })
+    }
+
     /// Detects the current machine (best effort; unknown fields stay `None`). Engines
     /// in this build run on the CPU. Probes run as async subprocesses with a timeout,
     /// and `/proc` is read through `tokio::fs`.
@@ -494,6 +519,37 @@ impl Hardware {
 mod tests {
     use super::*;
     use crate::embedding::deterministic::DeterministicEmbedder;
+
+    #[test]
+    fn a_probe_field_that_could_not_be_read_is_unknown_not_different() {
+        // Regression (G2-8): a timed-out `sysctl` leaves `cpu`/`memory_bytes` unset;
+        // that must not make two runs on the same machine incomparable.
+        let full = Hardware {
+            os: "macos".into(),
+            arch: "aarch64".into(),
+            cpu: Some("Apple M3".into()),
+            logical_cpus: Some(8),
+            memory_bytes: Some(16),
+            accelerator: "cpu".into(),
+        };
+        let probe_timed_out = Hardware {
+            cpu: None,
+            memory_bytes: None,
+            ..full.clone()
+        };
+        assert_eq!(probe_timed_out.merge(&full), Some(full.clone()));
+        assert_eq!(full.merge(&probe_timed_out), Some(full.clone()));
+        let other_cpu = Hardware {
+            cpu: Some("Apple M3 Pro".into()),
+            ..full.clone()
+        };
+        assert_eq!(full.merge(&other_cpu), None);
+        let other_cores = Hardware {
+            logical_cpus: Some(12),
+            ..probe_timed_out.clone()
+        };
+        assert_eq!(full.merge(&other_cores), None);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_stalled_hardware_probe_times_out_without_blocking_the_runtime() {
