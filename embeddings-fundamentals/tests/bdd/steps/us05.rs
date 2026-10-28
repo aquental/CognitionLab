@@ -11,10 +11,11 @@ use anyhow::{Context, Result, ensure};
 use cucumber::{given, then, when};
 use embeddings_fundamentals::adapters::build_contract_test;
 use embeddings_fundamentals::config::ExperimentConfig;
-use embeddings_fundamentals::cost::{PriceTable, estimate};
+use embeddings_fundamentals::cost::PriceTable;
 use embeddings_fundamentals::domain::Execution;
+use embeddings_fundamentals::embedding::deterministic::UsageReporting;
 use embeddings_fundamentals::embedding::{EmbeddingStrategy, EngineId};
-use embeddings_fundamentals::report::ConfigurationResult;
+use embeddings_fundamentals::report::{ComparisonReport, ConfigurationResult};
 use serde_json::Value;
 
 use super::eval_fixture::{self, repo};
@@ -184,10 +185,26 @@ fn match_expected(world: &mut LabWorld) -> Result<()> {
             "measurements.cold_start.model_load_ms",
         ),
         (
-            "cold_first_query_ms",
-            "measurements.cold_start.first_query_ms",
+            "cold_first_operation_ms",
+            "measurements.cold_start.first_operation_ms",
+        ),
+        (
+            "cold_first_operation_items",
+            "measurements.cold_start.first_operation_items",
         ),
         ("cold_total_ms", "measurements.cold_start.total_ms"),
+        (
+            "query_side_model_load_ms",
+            "measurements.query_side_start.model_load_ms",
+        ),
+        (
+            "query_side_first_query_ms",
+            "measurements.query_side_start.first_query_ms",
+        ),
+        (
+            "query_side_total_ms",
+            "measurements.query_side_start.total_ms",
+        ),
         ("warm_samples", "measurements.warm_query_latency.samples"),
         (
             "warm_median_ms",
@@ -403,6 +420,17 @@ fn marked(world: &mut LabWorld, status: String) -> Result<()> {
         memory.get("value").is_none(),
         "an unavailable value has no number: {memory}"
     );
+    // The GPU field of a remote run must not claim that inference ran locally.
+    let gpu = &json["measurements"]["gpu_memory"];
+    let reason = gpu["reason"].as_str().unwrap_or_default();
+    ensure!(
+        gpu["status"] == status.as_str() && reason.contains("remote provider"),
+        "remote GPU memory must be unavailable at the provider: {gpu}"
+    );
+    ensure!(
+        !reason.contains("CPU"),
+        "a remote run claims local CPU inference: {gpu}"
+    );
     Ok(())
 }
 
@@ -417,31 +445,59 @@ fn local_ram(world: &mut LabWorld) -> Result<()> {
 
 #[given("a run with missing provider usage or missing pricing data")]
 async fn missing_data(world: &mut LabWorld) -> Result<()> {
-    // Missing pricing: a real measured remote run without a price table.
     eval_fixture::add_pdf_corpus(world)?;
     world.remote_allowed = true;
     let config =
         ExperimentConfig::load(&repo("config/experiments/text-openai-3-small.toml"))?.engine;
     let stand_in = build_contract_test(&config)?;
+    // Missing pricing: a real measured remote run without a price table.
     let builder = eval_fixture::keyword_builder()?
         .engine_label(config.engine)
         .model_id(config.model_id.clone())
         .capabilities(stand_in.capabilities().clone());
-    let run = eval_fixture::measured_run(world, builder, LABELS, None, false).await?;
-    // Missing usage: a provider response without usage, priced with a valid table.
-    let price = PriceTable::load(&fixture(PRICE))?;
-    let no_usage = estimate(Execution::Remote, None, Some(&price));
-    world.notes.insert(
-        "costs".into(),
-        serde_json::to_string(&[run.cost.ingestion.clone(), no_usage])?,
+    eval_fixture::measured_run(world, builder, LABELS, None, false).await?;
+    // Missing usage: a real measured remote run, priced with a valid table, whose
+    // provider omits `usage` from every second successful response. A partial sum must
+    // never be reported as an estimate. Its own space, so ingestion really embeds.
+    let builder = eval_fixture::keyword_builder()?
+        .engine_label(config.engine)
+        .model_id(format!("{}-omits-usage", config.model_id))
+        .capabilities(stand_in.capabilities().clone())
+        .usage_reporting(UsageReporting::OddCallsOnly);
+    let price = fixture(PRICE);
+    let run = eval_fixture::measured_run(world, builder, LABELS, Some(&price), false).await?;
+    ensure!(
+        run.measurements.embedding.calls >= 2 && run.measurements.embedding.failed_calls == 0,
+        "the usage case needs several successful ingestion calls: {:?}",
+        run.measurements.embedding
     );
     Ok(())
 }
 
 #[when("I generate its cost report")]
 fn cost_report(world: &mut LabWorld) -> Result<()> {
-    let costs = world.notes.get("costs").context("no costs")?.clone();
-    world.notes.insert("json".into(), costs);
+    // The same report the `report` command writes (JSON and Markdown).
+    let report = ComparisonReport::new(
+        eval_fixture::controlled()?.hardware,
+        world.configs.clone(),
+        vec!["synthetic fixture corpus".to_owned()],
+    )?;
+    world.notes.insert("markdown".into(), report.to_markdown());
+    let json: Value = serde_json::to_value(&report)?;
+    let costs: Vec<Value> = json["configurations"]
+        .as_array()
+        .context("configurations")?
+        .iter()
+        .flat_map(|c| {
+            [
+                c["cost"]["ingestion"].clone(),
+                c["cost"]["query_set"].clone(),
+            ]
+        })
+        .collect();
+    world
+        .notes
+        .insert("json".into(), serde_json::to_string(&costs)?);
     Ok(())
 }
 
@@ -464,6 +520,23 @@ fn null_cost(world: &mut LabWorld) -> Result<()> {
 
 #[then("unknown cost is not reported as zero")]
 fn not_zero(world: &mut LabWorld) -> Result<()> {
+    let markdown = world.notes.get("markdown").context("no markdown")?;
+    let cost_section = markdown
+        .split("## Cost and reliability")
+        .nth(1)
+        .context("no cost section in the Markdown report")?;
+    for row in cost_section
+        .lines()
+        .filter(|l| l.starts_with("| measured-"))
+    {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        for cell in cells.get(2..4).context("cost cells")? {
+            ensure!(
+                cell.starts_with("Unavailable"),
+                "cost rendered as {cell:?} in {row}"
+            );
+        }
+    }
     let json: Value = serde_json::from_str(world.notes.get("json").context("no report")?)?;
     for c in json.as_array().context("costs")? {
         ensure!(

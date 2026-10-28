@@ -214,6 +214,9 @@ pub fn evaluate(sample: &LoadedSample, records: &[Record]) -> FidelityReport {
     let mut overall = Accuracy::default();
     let mut mismatches = Vec::new();
     let mut not_found = 0;
+    // Lines already scored, per page, so no extracted line counts for two sample rows.
+    let mut used: std::collections::BTreeMap<_, std::collections::BTreeSet<usize>> =
+        std::collections::BTreeMap::new();
     for row in &sample.sample.rows {
         let page_records: Vec<&Record> = records
             .iter()
@@ -239,10 +242,28 @@ pub fn evaluate(sample: &LoadedSample, records: &[Record]) -> FidelityReport {
             .collect();
         let name = norm(&row.test_name).to_lowercase();
         let value = norm(&row.value);
-        let found = lines
+        // Match by test name first. The value is only a fallback when exactly one line on
+        // the page carries it and no other sample row already claimed that line, so one
+        // extracted line is never scored as two rows.
+        let by_name = lines
             .iter()
-            .find(|c| c.first().is_some_and(|n| n.to_lowercase() == name))
-            .or_else(|| lines.iter().find(|c| c.get(1) == Some(&value)));
+            .position(|c| c.first().is_some_and(|n| n.to_lowercase() == name));
+        let by_value = || {
+            let mut matches = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.get(1) == Some(&value))
+                .map(|(i, _)| i);
+            match (matches.next(), matches.next()) {
+                (Some(i), None) => Some(i),
+                _ => None,
+            }
+        };
+        let page_key = (row.source_id.clone(), row.page);
+        let index = by_name
+            .or_else(by_value)
+            .filter(|i| used.entry(page_key.clone()).or_default().insert(*i));
+        let found = index.and_then(|i| lines.get(i));
         if found.is_none() {
             not_found += 1;
         }
@@ -301,6 +322,64 @@ mod tests {
         );
         // Decomposed "ó" (o + combining acute) equals the precomposed form after NFC.
         assert_eq!(norm("Hemato\u{301}crito"), norm("Hematócrito"));
+    }
+
+    fn page_record(text: &str) -> Record {
+        let mut record: Record =
+            serde_json::from_str(include_str!("../reports/examples/record-001.json"))
+                .expect("example record");
+        record.chunk_text = Some(text.to_owned());
+        record
+    }
+
+    fn sample(rows: &[(&str, &str, &str, &str)]) -> LoadedSample {
+        let mut text = String::from("version = \"t\"\ncorpus = \"t\"\n");
+        for (name, value, unit, range) in rows {
+            text.push_str(&format!(
+                "[[row]]\nsource_id = \"lab-searchable-001\"\npage = 1\ntest_name = \"{name}\"\nvalue = \"{value}\"\nunit = \"{unit}\"\nreference_range = \"{range}\"\n"
+            ));
+        }
+        LoadedSample {
+            sample: toml::from_str(&text).expect("sample"),
+            checksum: Checksum::of_bytes(text.as_bytes()),
+        }
+    }
+
+    #[test]
+    fn one_extracted_line_is_never_scored_for_two_rows_with_the_same_value() {
+        // Regression (G2-5): both rows' names are unreadable in the extraction and both
+        // values are 92, so the value fallback is ambiguous and neither row binds.
+        let records = [page_record(
+            "Xxx | 92 | mg/dL | 70–99\nYyy | 92 | g/dL | 1–2",
+        )];
+        let report = evaluate(
+            &sample(&[
+                ("Glicemia", "92", "mg/dL", "70–99"),
+                ("Outro", "92", "g/dL", "1–2"),
+            ]),
+            &records,
+        );
+        assert_eq!(report.rows_not_found, 2, "{report:?}");
+        assert_eq!(report.overall.correct, 0);
+    }
+
+    #[test]
+    fn a_unique_value_still_binds_and_a_claimed_line_is_not_reused() {
+        let records = [page_record(
+            "Xxx | 92 | mg/dL | 70–99\nCreatinina | 0,9 | mg/dL | 0,6–1,2",
+        )];
+        // Row 1 binds by its unique value; row 2 by name; row 3 names row 2's line again.
+        let report = evaluate(
+            &sample(&[
+                ("Glicemia", "92", "mg/dL", "70–99"),
+                ("Creatinina", "0,9", "mg/dL", "0,6–1,2"),
+                ("Creatinina", "0,9", "mg/dL", "0,6–1,2"),
+            ]),
+            &records,
+        );
+        assert_eq!(report.rows_not_found, 1, "{report:?}");
+        // Row 1: name wrong, value/unit/range right (3); row 2: all 4 right.
+        assert_eq!(report.overall.correct, 7);
     }
 
     #[test]
