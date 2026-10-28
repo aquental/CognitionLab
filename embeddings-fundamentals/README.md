@@ -6,7 +6,7 @@ A project to investigate how reliably embeddings can retrieve information from P
 
 I am building this project as part of my portfolio for **AI engineering roles**, with a focus on information retrieval, multimodal systems, and the engineering needed to make model outputs measurable and traceable.
 
-> **Current stage: specification and implementation planning.** The product requirements, architecture, experiment protocol, and Gherkin acceptance scenarios are documented. The Rust crate currently contains a starter `main.rs`; the pipeline, adapters, tests, and benchmark results are not implemented yet. The capabilities below describe the intended system.
+> **Current stage: Phase 0 (scaffolding and BDD harness) implemented.** The Rust crate has deterministic identifiers, the embedding strategy contract with a fault-injectable deterministic adapter, a Cucumber runner whose required-scenario inventory is derived from the PRD, a synthetic fixture corpus, and CI. Ingestion, retrieval, the real engine adapters, and benchmark results are not implemented yet. The capabilities below describe the intended system; see `reports/progress/PROGRESS.md` for the current state.
 
 [Product requirements](spec/PRD.md) · [Implementation plan](spec/PLAN.md) · [Current source](src/main.rs)
 
@@ -93,7 +93,7 @@ The planned **Cucumber for Rust** suite maps Gherkin scenarios to `#[given]`, `#
 | Stage | Deliverable | Status |
 |---|---|---|
 | Specification | Requirements, architecture, acceptance scenarios, and implementation plan | Documented in `spec/` |
-| Phase 0 | Library/CLI structure, deterministic adapter, BDD harness, and CI | Planned |
+| Phase 0 | Library/CLI structure, deterministic adapter, BDD harness, and CI | Implemented (see `reports/progress/PROGRESS.md`) |
 | Milestone 1 | PDF extraction, OCR, text embeddings, and traceable search | Planned |
 | Milestone 2 | Provider comparisons, retrieval metrics, and resource/cost reports | Planned |
 | Milestone 3 | Text-to-image retrieval and Portuguese query evaluation | Planned |
@@ -103,13 +103,26 @@ The current repository contains:
 
 ```text
 embeddings-fundamentals/
-├── README.md
-├── Cargo.toml
-├── Cargo.lock
-├── src/main.rs       # Starter executable
-└── spec/
-    ├── PRD.md        # Problem, evaluation protocol, and acceptance contract
-    └── PLAN.md       # Architecture, implementation phases, and tradeoffs
+├── src/
+│   ├── ids.rs              # Canonical-JSON hashing and validated ID newtypes
+│   ├── domain.rs           # Shared enums (modality, execution)
+│   ├── embedding/          # Strategy trait, vector validation, deterministic adapter
+│   ├── tools.rs, cli.rs    # External-tool probe and the `doctor` command
+│   └── main.rs             # Thin binary: parse, run, map to exit code
+├── tests/
+│   ├── bdd.rs              # Cucumber suite; inventory derived from spec/PRD.md
+│   ├── bdd_selftest.rs     # Proves the runner fails on skipped/ambiguous/missing scenarios
+│   ├── integration.rs      # Real tools and engines (RUN_INTEGRATION=1)
+│   └── fixtures/corpus/    # Synthetic, invented lab reports and images + manifest
+├── examples/gen_fixtures.rs
+├── config/acceptance.toml  # Current acceptance milestone
+├── reports/                # Progress records and adversarial review reports
+└── spec/                   # PRD, PLAN, execution prompt
+```
+
+```bash
+cargo test                 # unit, BDD, and runner self-tests
+cargo run -- doctor        # check poppler and tesseract
 ```
 
 There is no ingestion or search demo to run yet. For a technical review, start with the [strategy contracts](spec/PLAN.md#2-core-contracts), [evaluation protocol](spec/PRD.md#9-evaluation-plan), and [reliability design](spec/PLAN.md#4-reliability--data-handling-design).
