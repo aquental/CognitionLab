@@ -172,6 +172,24 @@ pub struct ExperimentSnapshot {
     pub fingerprints: BTreeMap<String, Fingerprint>,
     /// Checksum of the corpus manifest.
     pub corpus_checksum: Checksum,
+    /// Frozen evaluation inputs of an experiment run (PLAN §4.2); `None` for a plain
+    /// ingestion that no evaluation belongs to.
+    #[serde(default)]
+    pub evaluation: Option<EvaluationProvenance>,
+}
+
+/// Exact query set and labels an experiment evaluated, by version and file checksum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluationProvenance {
+    /// Query-set version label.
+    pub query_set_version: String,
+    /// Checksum of the query-set file bytes.
+    pub query_set_checksum: Checksum,
+    /// Label-set version label.
+    pub labels_version: String,
+    /// Checksum of the label file bytes.
+    pub labels_checksum: Checksum,
 }
 
 /// Filesystem record store.
@@ -1079,6 +1097,7 @@ mod tests {
             revisions: vec![],
             fingerprints: BTreeMap::new(),
             corpus_checksum: Checksum::of_bytes(b"c"),
+            evaluation: None,
         };
         store.save_experiment(&snapshot).expect("save");
         assert!(matches!(

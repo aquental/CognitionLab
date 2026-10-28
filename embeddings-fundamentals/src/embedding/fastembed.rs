@@ -184,8 +184,19 @@ pub async fn load(
     let files = tokio::task::spawn_blocking(move || fetch(&model, &rev, &file))
         .await
         .map_err(|e| model_error(e.to_string()))??;
-    let tokens = HfTokenCounter::load(&files.tokenizer)?;
-    let limit = hf::effective_limit(model_id, &files.config, max_input_tokens)?;
+    // Tokenizer deserialization and config reads are blocking file work (C2-8).
+    let (model, tokenizer, config) = (
+        model_id.to_owned(),
+        files.tokenizer.clone(),
+        files.config.clone(),
+    );
+    let (tokens, limit) = tokio::task::spawn_blocking(move || {
+        let tokens = HfTokenCounter::load(&tokenizer)?;
+        let limit = hf::effective_limit(&model, &config, max_input_tokens)?;
+        Ok::<_, LoadError>((tokens, limit))
+    })
+    .await
+    .map_err(|e| model_error(e.to_string()))??;
     let model = model_id.to_owned();
     let session = tokio::task::spawn_blocking(move || {
         let user_model = UserDefinedEmbeddingModel::new(

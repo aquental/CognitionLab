@@ -115,12 +115,19 @@ pub async fn load(
     .await
     .map_err(|e| model_error(e.to_string()))?
     .map_err(|e| model_error(e.to_string()))?;
-    let tokens = HfTokenCounter::load(&hf::cached_file(model_id, &revision, "tokenizer.json"))?;
-    let max_input_tokens = hf::effective_limit(
-        model_id,
-        &hf::cached_file(model_id, &revision, "config.json"),
-        max_input_tokens,
-    )?;
+    // Tokenizer deserialization and config reads are blocking file work (C2-8).
+    let (model, rev) = (model_id.to_owned(), revision.clone());
+    let (tokens, max_input_tokens) = tokio::task::spawn_blocking(move || {
+        let tokens = HfTokenCounter::load(&hf::cached_file(&model, &rev, "tokenizer.json"))?;
+        let limit = hf::effective_limit(
+            &model,
+            &hf::cached_file(&model, &rev, "config.json"),
+            max_input_tokens,
+        )?;
+        Ok::<_, LoadError>((tokens, limit))
+    })
+    .await
+    .map_err(|e| model_error(e.to_string()))??;
     let info = ModelInfo::from_descriptor(SpaceDescriptor {
         engine: EngineId::EmbedAnything,
         engine_version: ENGINE_VERSION.to_owned(),

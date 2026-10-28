@@ -9,6 +9,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Execution;
+use crate::embedding::EngineId;
 
 /// A versioned provider price table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,11 +125,26 @@ const fn exact_f64(n: u64) -> f64 {
     n as f64
 }
 
+/// Unit of the usage every adapter reports (provider-billed input tokens).
+pub const USAGE_UNIT: &str = "token";
+
+/// What was billed: the engine (provider) and the model that produced the usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Billed<'a> {
+    /// Canonical engine id; a price table's `provider` must equal it.
+    pub engine: EngineId,
+    /// Model identifier; a price table's `model` must equal it.
+    pub model_id: &'a str,
+}
+
 /// Estimates the provider cost of `usage` units for an engine that runs at
-/// `execution`.
+/// `execution`. A price table applies only to the billed provider and model and to
+/// usage measured in [`USAGE_UNIT`]; otherwise the cost is unavailable with the
+/// mismatch as its reason, never priced at another model's rate.
 #[must_use]
 pub fn estimate(
     execution: Execution,
+    billed: Billed<'_>,
     usage: Option<u64>,
     price: Option<&PriceTable>,
 ) -> CostEstimate {
@@ -158,6 +174,28 @@ pub fn estimate(
             EstimateStatus::Unavailable,
             "missing pricing data: no price table for this provider and model",
         ),
+        (Some(_), Some(table)) if table.provider != billed.engine.as_str() => empty(
+            EstimateStatus::Unavailable,
+            &format!(
+                "price table does not apply: provider {} is not the billed engine {}",
+                table.provider,
+                billed.engine.as_str()
+            ),
+        ),
+        (Some(_), Some(table)) if table.model != billed.model_id => empty(
+            EstimateStatus::Unavailable,
+            &format!(
+                "price table does not apply: model {} is not the billed model {}",
+                table.model, billed.model_id
+            ),
+        ),
+        (Some(_), Some(table)) if table.unit != USAGE_UNIT => empty(
+            EstimateStatus::Unavailable,
+            &format!(
+                "price table does not apply: billed per {}, usage is measured in {USAGE_UNIT}s",
+                table.unit
+            ),
+        ),
         (Some(units), Some(table)) => CostEstimate {
             estimate_status: EstimateStatus::Estimated,
             estimated_cost: Some(
@@ -179,6 +217,47 @@ mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
 
+    fn billed() -> Billed<'static> {
+        Billed {
+            engine: EngineId::OpenAi,
+            model_id: "text-embedding-3-small",
+        }
+    }
+
+    #[test]
+    fn a_price_table_for_another_provider_model_or_unit_is_never_applied() {
+        // Regression (C2-2).
+        let other_model = PriceTable {
+            model: "text-embedding-3-large".into(),
+            ..table()
+        };
+        let per_request = PriceTable {
+            unit: "request".into(),
+            ..table()
+        };
+        let other_provider = PriceTable {
+            provider: "cohere".into(),
+            ..table()
+        };
+        for (t, what) in [
+            (other_model, "model"),
+            (per_request, "billed per request"),
+            (other_provider, "provider"),
+        ] {
+            let c = estimate(Execution::Remote, billed(), Some(1_000), Some(&t));
+            assert_eq!(c.estimate_status, EstimateStatus::Unavailable, "{what}");
+            assert!(c.estimated_cost.is_none(), "{what}");
+            assert!(
+                c.reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains("does not apply")
+                        && r.contains(what.split(' ').next().unwrap_or(what))),
+                "{what}: {:?}",
+                c.reason
+            );
+        }
+    }
+
     fn table() -> PriceTable {
         PriceTable {
             version: "p1".into(),
@@ -194,7 +273,7 @@ mod tests {
 
     #[test]
     fn a_thousand_tokens_cost_a_millionth_of_the_quoted_price_times_a_thousand() {
-        let cost = estimate(Execution::Remote, Some(1_000), Some(&table()));
+        let cost = estimate(Execution::Remote, billed(), Some(1_000), Some(&table()));
         assert_eq!(cost.estimate_status, EstimateStatus::Estimated);
         // 1,000 / 1,000,000 × 0.02 = 0.00002; a missing scale would give 20.
         assert_abs_diff_eq!(
@@ -207,8 +286,8 @@ mod tests {
     #[test]
     fn unknown_costs_are_null_with_a_reason_never_zero() {
         for cost in [
-            estimate(Execution::Remote, None, Some(&table())),
-            estimate(Execution::Remote, Some(10), None),
+            estimate(Execution::Remote, billed(), None, Some(&table())),
+            estimate(Execution::Remote, billed(), Some(10), None),
         ] {
             assert_eq!(cost.estimate_status, EstimateStatus::Unavailable);
             assert_eq!(cost.estimated_cost, None);
@@ -218,7 +297,7 @@ mod tests {
                     .is_some_and(|r| r.starts_with("missing"))
             );
         }
-        let local = estimate(Execution::Local, None, None);
+        let local = estimate(Execution::Local, billed(), None, None);
         assert_eq!(local.estimate_status, EstimateStatus::NotApplicable);
         assert_eq!(local.estimated_cost, None);
     }

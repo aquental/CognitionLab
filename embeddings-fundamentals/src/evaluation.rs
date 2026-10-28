@@ -17,13 +17,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::domain::Modality;
 use crate::embedding::EmbeddingStrategy;
 use crate::ids::{
     Checksum, ChunkId, EmbeddingSpaceId, Fingerprint, IdError, QueryId, RecordId, SourceId,
 };
-use crate::retrieval::{Scope, SearchError, SearchHit, search_text};
+use crate::record::Record;
+use crate::retrieval::{Scope, SearchError, SearchHit, read_records, search_text};
 use crate::storage::FsRecordStore;
 
 /// Cut-off of every metric.
@@ -95,8 +97,14 @@ pub struct QuerySet {
 pub struct Label {
     /// Query identifier.
     pub query: QueryId,
-    /// Labeled item (chunk id, stable across embedding spaces).
+    /// Labeled item (chunk id, stable across embedding spaces but unique only within one
+    /// chunking revision).
     pub item: ChunkId,
+    /// Distinctive substring of the text the label was written for; required for text
+    /// items. A text label is scored only when its chunk exists in the evaluated index
+    /// and still contains the anchor (NFC, case-insensitive, whitespace collapsed).
+    #[serde(default)]
+    pub anchor: Option<String>,
     /// 0 = irrelevant, 1 = partially relevant, 2 = directly relevant.
     pub label: u8,
     /// Why the item is (ir)relevant.
@@ -154,6 +162,17 @@ pub enum EvalError {
     /// Rankings were supplied for another set of queries than the frozen one.
     #[error("rankings do not match the query set: {0}")]
     RankingMismatch(String),
+    /// A frozen label does not apply to the evaluated index: its chunk is missing or
+    /// holds other text (for example after a chunking change shifted chunk indices).
+    #[error("label {query} / {item} does not apply to this index: {reason}")]
+    LabelNotApplicable {
+        /// Query.
+        query: QueryId,
+        /// Labeled chunk.
+        item: ChunkId,
+        /// Why.
+        reason: String,
+    },
     /// A query could not be run.
     #[error(transparent)]
     Search(#[from] SearchError),
@@ -229,6 +248,14 @@ impl Dataset {
                 return Err(EvalError::Invalid(format!(
                     "label {} for {} / {} is outside 0..=2",
                     l.label, l.query, l.item
+                )));
+            }
+            if l.item.modality() == Modality::Text
+                && l.anchor.as_deref().is_none_or(|a| a.trim().is_empty())
+            {
+                return Err(EvalError::Invalid(format!(
+                    "text label {} / {} has no anchor; a chunk id alone does not identify its text",
+                    l.query, l.item
                 )));
             }
             if !seen.insert((&l.query, &l.item)) {
@@ -528,6 +555,49 @@ pub fn evaluate(
 /// # Errors
 ///
 /// Returns [`EvalError::Search`] when a query fails (for example a space mismatch).
+fn anchor_form(text: &str) -> String {
+    text.nfc()
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Refuses text labels that do not apply to `records` (the evaluated index): the
+/// labeled chunk must exist and contain the label's anchor.
+///
+/// # Errors
+///
+/// Returns [`EvalError::LabelNotApplicable`] for the first label that does not apply.
+pub fn check_text_labels(dataset: &Dataset, records: &[Record]) -> Result<(), EvalError> {
+    let texts: BTreeMap<&ChunkId, &str> = records
+        .iter()
+        .filter(|r| r.modality == Modality::Text)
+        .map(|r| (&r.chunk_id, r.chunk_text.as_deref().unwrap_or_default()))
+        .collect();
+    for l in &dataset.labels.value.labels {
+        if l.item.modality() != Modality::Text {
+            continue;
+        }
+        let not_applicable = |reason: &str| EvalError::LabelNotApplicable {
+            query: l.query.clone(),
+            item: l.item.clone(),
+            reason: reason.to_owned(),
+        };
+        let Some(text) = texts.get(&l.item) else {
+            return Err(not_applicable("the chunk is not in the evaluated index"));
+        };
+        let anchor = l.anchor.as_deref().unwrap_or_default();
+        if !anchor_form(text).contains(&anchor_form(anchor)) {
+            return Err(not_applicable(
+                "the chunk no longer contains the label's anchor (chunking or extraction changed)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn evaluate_text(
     store: &Arc<FsRecordStore>,
     space: &EmbeddingSpaceId,
@@ -535,6 +605,7 @@ pub async fn evaluate_text(
     dataset: &Dataset,
     scope: Scope<'_>,
 ) -> Result<EvaluationReport, EvalError> {
+    check_text_labels(dataset, &read_records(store, space, scope).await?)?;
     let mut rankings = BTreeMap::new();
     for query in &dataset.queries.value.queries {
         let hits = search_text(store, space, embedder, &query.text, K, scope).await?;
@@ -598,9 +669,86 @@ mod tests {
         Label {
             query: query.parse().expect("query"),
             item: item.parse().expect("item"),
+            anchor: Some("hemoglobina".into()),
             label: value,
             note: "n".into(),
         }
+    }
+
+    fn dataset_with(labels: Vec<Label>) -> Dataset {
+        Dataset::new(
+            frozen(queries(), b"q"),
+            frozen(
+                LabelSet {
+                    version: "l".into(),
+                    query_set: "v".into(),
+                    corpus: "synthetic".into(),
+                    labels,
+                },
+                b"l",
+            ),
+        )
+        .expect("dataset")
+    }
+
+    fn record(chunk: &str, text: &str) -> Record {
+        let mut record: Record =
+            serde_json::from_str(include_str!("../reports/examples/record-001.json"))
+                .expect("example record");
+        record.chunk_id = chunk.parse().expect("chunk");
+        record.chunk_text = Some(text.to_owned());
+        record
+    }
+
+    #[test]
+    fn a_text_label_without_an_anchor_is_rejected() {
+        let mut unanchored = label("q1", "s-p1-text-0", 2);
+        unanchored.anchor = None;
+        let outcome = Dataset::new(
+            frozen(queries(), b"q"),
+            frozen(
+                LabelSet {
+                    version: "l".into(),
+                    query_set: "v".into(),
+                    corpus: "synthetic".into(),
+                    labels: vec![unanchored],
+                },
+                b"l",
+            ),
+        );
+        assert!(matches!(outcome, Err(EvalError::Invalid(_))));
+        // Image labels need no text anchor.
+        let mut image = label("q1", "s-p1-image-0", 2);
+        image.anchor = None;
+        dataset_with(vec![image]);
+    }
+
+    #[test]
+    fn labels_that_no_longer_match_their_chunk_are_refused() {
+        // Regression (C2-1): a chunking change shifted the hemoglobin row from index 0 to
+        // index 1; chunk 0 now holds another row.
+        let dataset = dataset_with(vec![label("q1", "s-p1-text-0", 2)]);
+        let shifted = [
+            record(
+                "s-p1-text-0",
+                "Hemograma\nHematócrito | 40,2 | % | 36,0–46,0",
+            ),
+            record(
+                "s-p1-text-1",
+                "Hemograma\nHemoglobina | 13,5 | g/dL | 12,0–16,0",
+            ),
+        ];
+        assert!(matches!(
+            check_text_labels(&dataset, &shifted),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        assert!(matches!(
+            check_text_labels(&dataset, &[]),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        // NFC, case, and whitespace differences still match.
+        let ok = [record("s-p1-text-0", "Hemograma\n  HEMOGLOBINA  | 13,5")];
+        check_text_labels(&dataset, &ok).expect("anchor matches");
     }
 
     #[test]
@@ -636,7 +784,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/evaluation");
         let dataset = Dataset::load(
             &root.join("queries-v1.toml"),
-            &root.join("labels-synthetic-v1.toml"),
+            &root.join("labels-synthetic-v2.toml"),
         )
         .expect("dataset");
         assert_eq!(dataset.queries.value.queries.len(), 10);
