@@ -1,0 +1,9 @@
+Bioquímica
+Exame | Resultado | Unidade | Intervalo de referência
+Glicemia de jejum | 92 | mg/dL | 70–99
+Creatinina | 0,9 | mg/dL | 0,6–1,1
+Colesterol total | 182 | mg/dL | < 190
+Triglicerídeos | 120 | mg/dL | < 150
+
+Conclusão: valores dentro dos intervalos de referência.
+

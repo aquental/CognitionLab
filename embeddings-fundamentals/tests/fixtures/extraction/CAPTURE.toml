@@ -1,0 +1,5 @@
+# Tool versions used by `cargo run --example capture_extraction`.
+pdftotext = "pdftotext version 26.10.0"
+pdftoppm = "pdftoppm version 26.10.0"
+tesseract = "tesseract 5.5.3"
+ocr = "pdftoppm -png -singlefile -r 300; tesseract -l por+eng --psm 6 tsv"

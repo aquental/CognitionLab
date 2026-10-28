@@ -19,14 +19,16 @@ fn parse_class(class: &str) -> Result<ErrorClass> {
 
 fn store_entries(world: &LabWorld) -> Result<Vec<String>> {
     let mut names = Vec::new();
-    for entry in fs::read_dir(world.store.path()).context("read scenario store")? {
-        names.push(
-            entry
-                .context("read store entry")?
-                .file_name()
-                .to_string_lossy()
-                .into_owned(),
-        );
+    for entry in fs::read_dir(world.store_dir.path()).context("read scenario store")? {
+        let name = entry
+            .context("read store entry")?
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        // Dot-files (`.writer.lock`) belong to the store itself, not to the scenario.
+        if !name.starts_with('.') {
+            names.push(name);
+        }
     }
     names.sort();
     Ok(names)
@@ -35,7 +37,7 @@ fn store_entries(world: &LabWorld) -> Result<Vec<String>> {
 #[given("a fresh scenario world")]
 fn fresh_world(world: &mut LabWorld) -> Result<()> {
     ensure!(
-        world.store.path().is_dir(),
+        world.store_dir.path().is_dir(),
         "scenario store directory does not exist"
     );
     Ok(())
@@ -49,7 +51,7 @@ fn adapter_fails_next(world: &mut LabWorld, count: u32, class: String) -> Result
 
 #[when("the scenario writes a marker file into its store")]
 fn write_marker(world: &mut LabWorld) -> Result<()> {
-    fs::write(world.store.path().join("marker"), b"harness").context("write marker")
+    fs::write(world.store_dir.path().join("marker"), b"harness").context("write marker")
 }
 
 #[when("the scenario embeds one document through the deterministic adapter")]

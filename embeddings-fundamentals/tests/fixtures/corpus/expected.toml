@@ -1,5 +1,6 @@
 # Expected extraction behaviour of the synthetic fixtures (PLAN §0.1 "Modalities per input").
-# Text chunk counts are added when the Phase 1 chunker is frozen.
+# `text_records` counts per page were derived by hand from the captured extraction
+# (tests/fixtures/extraction) and the structure-aware-v1 rules (see src/chunking.rs).
 #
 # Page rules: a page whose text layer passes the native-text rule is "native"; otherwise
 # it is rendered and OCR'd ("ocr"). A full-page raster on a page without native text is an
@@ -9,25 +10,33 @@
 [[sources]]
 source_id = "lab-searchable-001"
 pages = ["native", "native"]
+# p1: title+patient paragraph, 4 blood-count rows; p2: 4 biochemistry rows, conclusion paragraph.
+text_records = [5, 5]
 image_records = []
 
 [[sources]]
 source_id = "lab-scanned-002"
 pages = ["ocr", "ocr"]
+# Same structure as the searchable report, recovered by OCR.
+text_records = [5, 5]
 image_records = []
 
 [[sources]]
 source_id = "us-mixed-003"
 pages = ["native", "ocr"]
+# Each page: title+patient paragraph, Técnica, Achados (2 lines), Conclusão.
+text_records = [4, 4]
 # Page 1 ultrasound (256x192). The 48 px logo and its soft mask are dropped.
 image_records = [{ page = 1, count = 1 }]
 
 [[sources]]
 source_id = "chest-001"
 pages = []
+text_records = []
 image_records = [{ page = 1, count = 1 }]
 
 [[sources]]
 source_id = "abd-us-001"
 pages = []
+text_records = []
 image_records = [{ page = 1, count = 1 }]

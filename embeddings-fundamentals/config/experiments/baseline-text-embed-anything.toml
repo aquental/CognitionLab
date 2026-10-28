@@ -1,0 +1,17 @@
+# Stage 1 text baseline (PRD §10): multilingual MiniLM through EmbedAnything (candle).
+# The same model runs through FastEmbed (ONNX) in Phase 2 for the engine comparison.
+
+[engine]
+engine = "embed_anything"
+model_id = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+model_revision = "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+dimensions = 384
+# sentence-transformers max_seq_length for this model.
+max_input_tokens = 128
+prefix_policy = "none"
+
+[ingest]
+max_attempts = 3
+backoff_ms = 200
+batch_size = 32
+language = "pt-BR"

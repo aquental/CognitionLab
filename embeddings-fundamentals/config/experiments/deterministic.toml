@@ -1,0 +1,8 @@
+# Deterministic hash-based adapter: no model download, reproducible vectors.
+# Useful to exercise the CLI end to end; it measures nothing about retrieval quality.
+
+[engine]
+engine = "deterministic"
+model_id = "deterministic-v1"
+dimensions = 8
+max_input_tokens = 512
