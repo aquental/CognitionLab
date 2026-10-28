@@ -59,25 +59,82 @@ pub fn filename_findings(file: &Path) -> Vec<Finding> {
         .collect()
 }
 
-/// Element names (`prefix:name`) inside an XMP packet, excluding the packet scaffolding.
+/// Element and attribute names (`prefix:name`) inside an XMP packet, excluding the
+/// packet scaffolding and namespace declarations. Values are never collected.
 fn xmp_keys(packet: &str) -> BTreeSet<String> {
     let scaffolding = [
         "x:xmpmeta",
+        "x:xmptk",
         "rdf:RDF",
         "rdf:Description",
         "rdf:Seq",
         "rdf:Bag",
         "rdf:Alt",
         "rdf:li",
+        "rdf:about",
+        "rdf:parseType",
+        "xml:lang",
     ];
-    Regex::new(r"<([A-Za-z][\w.-]*:[A-Za-z][\w.-]*)")
-        .map(|re| {
-            re.captures_iter(packet)
-                .filter_map(|c| c.get(1).map(|m| m.as_str().to_owned()))
-                .filter(|k| !scaffolding.contains(&k.as_str()))
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut keys = BTreeSet::new();
+    for pattern in [
+        r"<([A-Za-z][\w.-]*:[A-Za-z][\w.-]*)",
+        r"\s([A-Za-z][\w.-]*:[A-Za-z][\w.-]*)\s*=",
+    ] {
+        if let Ok(re) = Regex::new(pattern) {
+            keys.extend(
+                re.captures_iter(packet)
+                    .filter_map(|c| c.get(1).map(|m| m.as_str().to_owned()))
+                    .filter(|k| !scaffolding.contains(&k.as_str()) && !k.starts_with("xmlns:")),
+            );
+        }
+    }
+    keys
+}
+
+/// IPTC IIM dataset names found in a JPEG APP13 block (`record:dataset`, with common
+/// names). Only the dataset tags are read, never their values.
+fn iptc_datasets(bytes: &[u8]) -> BTreeSet<String> {
+    let names: [((u8, u8), &str); 12] = [
+        ((2, 5), "ObjectName"),
+        ((2, 25), "Keywords"),
+        ((2, 55), "DateCreated"),
+        ((2, 80), "By-line"),
+        ((2, 85), "By-lineTitle"),
+        ((2, 90), "City"),
+        ((2, 95), "Province-State"),
+        ((2, 101), "Country"),
+        ((2, 110), "Credit"),
+        ((2, 115), "Source"),
+        ((2, 116), "CopyrightNotice"),
+        ((2, 120), "Caption-Abstract"),
+    ];
+    let mut found = BTreeSet::new();
+    let Some(start) = find(bytes, b"Photoshop 3.0\0") else {
+        return found;
+    };
+    let block = &bytes[start..];
+    let mut i = 0;
+    while i + 5 <= block.len() {
+        // IIM dataset: 0x1C, record (1..=9), dataset, 2-byte big-endian length.
+        if block[i] == 0x1C && (1..=9).contains(&block[i + 1]) {
+            let (record, dataset) = (block[i + 1], block[i + 2]);
+            let len = usize::from(u16::from_be_bytes([block[i + 3], block[i + 4]]));
+            if i + 5 + len <= block.len() {
+                let name = names
+                    .iter()
+                    .find(|(key, _)| *key == (record, dataset))
+                    .map_or_else(
+                        || format!("{record}:{dataset}"),
+                        |(_, n)| format!("{record}:{dataset} {n}"),
+                    );
+                found.insert(name);
+                i += 5 + len;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    found
 }
 
 fn xmp_finding(area: &'static str, packet: &str) -> Finding {
@@ -216,7 +273,21 @@ pub fn image_findings(path: &Path) -> Vec<Finding> {
         ));
     }
     if bytes.starts_with(&[0xFF, 0xD8]) && find(&bytes, b"Photoshop 3.0\0").is_some() {
-        findings.push(finding("iptc", "JPEG APP13 (IPTC/Photoshop) block present"));
+        let datasets = iptc_datasets(&bytes);
+        findings.push(if datasets.is_empty() {
+            finding(
+                "iptc",
+                "JPEG APP13 (IPTC/Photoshop) block present; no IIM datasets parsed",
+            )
+        } else {
+            finding(
+                "iptc",
+                format!(
+                    "IPTC datasets present: {}",
+                    datasets.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            )
+        });
     }
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         let keywords = png_text_keywords(&bytes);
@@ -269,7 +340,11 @@ mod tests {
             0xE1,
             b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta><rdf:RDF><rdf:Description><dc:creator>X</dc:creator></rdf:Description></rdf:RDF></x:xmpmeta>",
         );
-        let iptc = segment(0xED, b"Photoshop 3.0\08BIM\x04\x04\0\0\0\0\0\0");
+        // 8BIM resource 0x0404 holding one IIM dataset 2:80 (By-line) with value "Fulano".
+        let iptc = segment(
+            0xED,
+            b"Photoshop 3.0\08BIM\x04\x04\0\0\0\0\0\x0b\x1c\x02\x50\x00\x06Fulano",
+        );
         let tagged = [&original[..2], &xmp, &iptc, &original[2..]].concat();
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("tagged.jpg");
@@ -281,10 +356,34 @@ mod tests {
                 .any(|f| f.area == "xmp" && f.detail.contains("dc:creator")),
             "{findings:?}"
         );
-        assert!(findings.iter().any(|f| f.area == "iptc"), "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.area == "iptc" && f.detail.contains("2:80 By-line")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().all(|f| !f.detail.contains("Fulano")),
+            "IPTC values are never reported"
+        );
         assert!(
             findings.iter().all(|f| !f.detail.contains(">X<")),
             "values are never reported"
+        );
+    }
+
+    #[test]
+    fn attribute_form_xmp_keys_are_listed_without_values() {
+        let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" dc:creator="Fulano" photoshop:City="Recife"/></rdf:RDF></x:xmpmeta>"#;
+        let keys: Vec<String> = xmp_keys(packet).into_iter().collect();
+        assert_eq!(
+            keys,
+            vec!["dc:creator".to_owned(), "photoshop:City".to_owned()]
+        );
+        let f = xmp_finding("xmp", packet);
+        assert!(
+            !f.detail.contains("Fulano") && !f.detail.contains("Recife"),
+            "{f:?}"
         );
     }
 

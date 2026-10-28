@@ -491,14 +491,23 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         report.revision_id = Some(revision.clone());
         let space = self.embedder.model_info().embedding_space_id.clone();
         let (pointer_space, pointer_source) = (space.clone(), entry.source_id.clone());
-        match self
-            .on_store(move |s| s.active_pointer(&pointer_space, &pointer_source))
-            .await
-        {
-            Ok(Some(pointer)) if pointer.revision_id == revision => {
+        let current = self
+            .on_store(move |s| {
+                let pointer = s.active_pointer(&pointer_space, &pointer_source)?;
+                let intact = s.active_is_intact(&pointer_space, &pointer_source)?;
+                Ok(pointer.map(|p| (p.revision_id, intact)))
+            })
+            .await;
+        match current {
+            Ok(Some((active, true))) if active == revision => {
                 report.status = SourceStatus::Succeeded;
                 report.unchanged = true;
                 return report;
+            }
+            Ok(Some((active, false))) if active == revision => {
+                // The pointer names this revision but its records are missing or altered:
+                // rebuild it; `publish` quarantines the damaged directory.
+                warn!(source_id = %entry.source_id, "active revision is damaged; rebuilding");
             }
             Ok(_) => {}
             Err(e) => return report.fail(FailureStage::Storage, e.to_string()),

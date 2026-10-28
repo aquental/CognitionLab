@@ -156,9 +156,11 @@ fn classify(line: &str) -> LineKind {
     }
     let words = trimmed.split_whitespace().count();
     let starts_upper = trimmed.chars().next().is_some_and(char::is_uppercase);
+    let ends_sentence = trimmed.ends_with(['.', '!', '?', ';']);
     if words <= 4
         && trimmed.chars().count() <= 40
         && starts_upper
+        && !ends_sentence
         && !trimmed
             .chars()
             .any(|c| c.is_ascii_digit() || c == '|' || c == ':')
@@ -289,9 +291,26 @@ impl StructureAwareV1 {
         let mut section: Option<String> = None;
         let mut header: Option<String> = None;
         let mut paragraph: Option<Unit> = None;
+        // A heading with no body under it (followed by another heading, or the last
+        // content of the page) is kept as a paragraph so its text is never dropped.
+        let mut heading_used = true;
+        let mut previous_section: Option<String> = None;
         let flush = |paragraph: &mut Option<Unit>, units: &mut Vec<Unit>| {
             if let Some(unit) = paragraph.take() {
                 units.push(unit);
+            }
+        };
+        let keep_unused = |section: &Option<String>,
+                           previous: &Option<String>,
+                           used: bool,
+                           units: &mut Vec<Unit>| {
+            if let (false, Some(heading)) = (used, section) {
+                units.push(Unit {
+                    kind: ChunkKind::Paragraph,
+                    section: previous.clone(),
+                    lines: vec![heading.clone()],
+                    bbox: None,
+                });
             }
         };
         for line in &page.lines {
@@ -303,7 +322,10 @@ impl StructureAwareV1 {
                 }
                 LineKind::Heading => {
                     flush(&mut paragraph, &mut units);
+                    keep_unused(&section, &previous_section, heading_used, &mut units);
+                    previous_section = section.take();
                     section = Some(text.to_owned());
+                    heading_used = false;
                     header = None;
                 }
                 LineKind::TableHeader => {
@@ -312,6 +334,7 @@ impl StructureAwareV1 {
                 }
                 LineKind::TableRow => {
                     flush(&mut paragraph, &mut units);
+                    heading_used = true;
                     let lines = header
                         .iter()
                         .cloned()
@@ -325,6 +348,7 @@ impl StructureAwareV1 {
                     });
                 }
                 LineKind::Text => {
+                    heading_used = true;
                     let unit = paragraph.get_or_insert_with(|| Unit {
                         kind: ChunkKind::Paragraph,
                         section: section.clone(),
@@ -337,6 +361,7 @@ impl StructureAwareV1 {
             }
         }
         flush(&mut paragraph, &mut units);
+        keep_unused(&section, &previous_section, heading_used, &mut units);
         units
     }
 
@@ -615,6 +640,32 @@ mod tests {
             })
         );
         assert!(WhitespaceTokenCounter.count(&chunks[0].text) <= 1);
+    }
+
+    #[test]
+    fn short_sentences_and_bodiless_headings_are_never_dropped() {
+        let chunks = chunker(false)
+            .chunk(
+                &page(&["Conclusão", "Exame normal."]),
+                &WhitespaceTokenCounter,
+                Some(10),
+            )
+            .expect("chunk");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "Conclusão\nExame normal.");
+        let chunks = chunker(false)
+            .chunk(
+                &page(&["Achados", "Conclusão"]),
+                &WhitespaceTokenCounter,
+                None,
+            )
+            .expect("chunk");
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["Achados", "Achados\nConclusão"],
+            "both lines are indexed"
+        );
     }
 
     #[test]

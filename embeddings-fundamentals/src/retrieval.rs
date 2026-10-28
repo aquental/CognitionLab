@@ -6,6 +6,7 @@
 //! (`total_cmp`), with equal scores broken by ascending `record_id`.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -80,6 +81,9 @@ pub enum SearchError {
     /// The store could not be read.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// A blocking store task panicked or was cancelled.
+    #[error("store task failed: {0}")]
+    Task(String),
 }
 
 /// Dot product accumulated in `f64`.
@@ -98,7 +102,7 @@ fn dot(a: &[f32], b: &[f32]) -> f64 {
 /// not belong to `index_space`, and other [`SearchError`]s for embedding or store
 /// failures. An empty index yields an empty result list.
 pub async fn search_text(
-    store: &FsRecordStore,
+    store: &Arc<FsRecordStore>,
     index_space: &EmbeddingSpaceId,
     embedder: &dyn EmbeddingStrategy,
     query: &str,
@@ -112,16 +116,28 @@ pub async fn search_text(
             query: query_space.clone(),
         });
     }
-    let revisions = match scope {
-        Scope::Active => store.active(index_space)?,
-        Scope::Experiment(snapshot) => snapshot
-            .revisions
-            .iter()
-            .filter(|r| &r.space == index_space)
-            .cloned()
-            .collect(),
+    let pinned: Option<Vec<_>> = match scope {
+        Scope::Active => None,
+        Scope::Experiment(snapshot) => Some(
+            snapshot
+                .revisions
+                .iter()
+                .filter(|r| &r.space == index_space)
+                .cloned()
+                .collect(),
+        ),
     };
-    let records = store.records(&revisions)?;
+    // Reading and parsing records.jsonl is blocking file I/O.
+    let (store, space) = (Arc::clone(store), index_space.clone());
+    let records = tokio::task::spawn_blocking(move || {
+        let revisions = match pinned {
+            Some(revisions) => revisions,
+            None => store.active(&space)?,
+        };
+        store.records(&revisions)
+    })
+    .await
+    .map_err(|e| SearchError::Task(e.to_string()))??;
     if records.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
