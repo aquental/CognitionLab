@@ -86,10 +86,8 @@ embeddings-fundamentals/
 ├── scripts/
 │   ├── sync-features.py        # Generates tests/features/*.feature from spec/PRD.md for acceptance.toml
 │   ├── precompute-metrics.py   # Independently precomputes expected evaluation metrics
-│   ├── review-package.sh       # Builds adversarial review packages
-│   ├── anonymization-verify.py # Local verifier: counts identifiers left in corpus files (counts only)
-│   └── make-covered-name-pdf.py # Writes the synthetic covered-name fixture used to test the verifier
-├── TESTS.md                    # Anonymization guide, owner-corpus construction, automatic anonymizer design
+│   └── review-package.sh       # Builds adversarial review packages
+├── TESTS.md                    # Owner-corpus construction (anonymization lives in ../anonimizador)
 └── reports/                    # Progress log, phase comparison reports, spikes, and adversarial reviews
 ```
 

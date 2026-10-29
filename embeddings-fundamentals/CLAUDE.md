@@ -57,7 +57,7 @@ cargo run --release --features engine-embed-anything,engine-fastembed -- search 
     --config config/experiments/combined-e5-base-siglip.toml --store store --experiment <combined id> --query "..."
 ```
 
-The full reproduction of the final report is in `reports/README.md`. Anonymizing real documents and building the owner corpus (`scripts/anonymization-verify.py`, `draft-manifest`, `draft-labels`) are described in `TESTS.md`.
+The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonimizador verify` tool, is the job of the sibling project `../anonimizador`.
 
 Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
 
