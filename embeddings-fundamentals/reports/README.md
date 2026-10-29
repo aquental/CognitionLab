@@ -91,7 +91,7 @@ A combined result carries its fused RRF score and its rank and cosine score in e
 
 ## Running the owner corpus
 
-[`../TESTS.md`](../TESTS.md) is the full guide: how to anonymize real PDFs and images, check them with `scripts/anonymization-verify.py`, and build the evaluable corpus. In short:
+[`../TESTS.md`](../TESTS.md) is the full guide to building the evaluable corpus. Anonymizing the documents, and checking them with `anonimizador verify`, is covered by the sibling project [`../../anonimizador`](../../anonimizador). In short:
 
 1. Put the anonymized files under `corpus/`, which git ignores except for the manifest. Draft the manifest with `$B draft-manifest --dir corpus --corpus-id <id> --out corpus/manifest.toml`. It holds checksums and measured input types, but no anonymization review.
 2. Record each source's review (filename, embedded metadata, text, pixels, reviewer, date). Then run `$B anonymization-check --manifest corpus/manifest.toml` and `$B manifest --manifest corpus/manifest.toml`. Ineligible sources are refused before extraction.
