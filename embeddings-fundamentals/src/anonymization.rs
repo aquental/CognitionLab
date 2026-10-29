@@ -350,7 +350,7 @@ mod tests {
         // particles, were not flagged at all.
         for name in [
             "MARIA DA SILVA - LAUDO.pdf",
-            "JOÃO P. SOUZA - CALORIMETRIA.pdf",
+            "JOÃO P. SOUZA - RELATORIO.pdf",
             "ANA_LIMA_exame.pdf",
             "EXAME E CONTROLE.pdf",
         ] {
