@@ -437,3 +437,14 @@ def test_a_tj_adjustment_that_a_reader_shows_as_a_space_is_ambiguous():
     # Kerning inside a word stays a continuation: the word is whole in every reading.
     kerned = b"BT [(Z) -2 (u) -30 (l) -2 (e) -49 (o)] TJ ET"
     assert pdf_string_views([kerned]).split == "Zuleo"
+
+
+def test_a_stream_whose_keyword_ends_with_cr_alone_is_inflated():
+    # Regression (Grok G0-43): only LF and CRLF started a stream, though readers accept
+    # a bare CR, so a short name left in such a Flate stream counted 0.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    for eol in (b"\r", b"\n", b"\r\n"):
+        body = zlib.compress(b"BT /F1 12 Tf 72 700 Td (Zuleo) Tj ET\n")
+        data = page + b"9 0 obj << /Filter /FlateDecode >> stream" + eol + body + b"endstream\n"
+        assert raw_count("Zuleo", data) == 1, eol
+        assert raw_count("Zulea", data) == 0, eol
