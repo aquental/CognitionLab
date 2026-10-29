@@ -80,3 +80,7 @@ NO FINDINGS. C4-1..C4-5 are confirmed closed. Next: Antigravity.
 | ID | Reviewer | Severity | Description | Resolution / refutation | Files | Validation evidence | Reviewer confirmation | Status |
 |---|---|---|---|---|---|---|---|---|
 | A4-1 | Antigravity | medium | `evaluate_combined` checked the leg spaces and the text-to-image capability, but not the combined snapshot, before reading records. A snapshot missing a leg read as an empty index, so the run failed as an inapplicable label instead of a snapshot mismatch. A wrong fusion fingerprint was refused only at the first query, so with no query it was never refused | Valid. `evaluate_combined` runs `check_combined_snapshot` for an experiment scope before any record is read. The `# Errors` section says so | `src/evaluation.rs` | `tests/combined.rs::a_combined_search_of_an_experiment_must_be_that_combined_run`: a snapshot missing the image leg, a leg-only snapshot, and another `k` all give `EvalError::Search(SnapshotMismatch)`, and no query is embedded. A mutant without the check fails | pending (Antigravity round 2) | fixed |
+
+## Grok round 7 (`grok-round7.md`, reviewed `d0d99e8`)
+
+NO FINDINGS. Grok re-reviewed the whole phase after the A4-1 fix changed behavior it had reviewed. Its context compacted during the review, and it then read the rest of the inlined diff before giving its verdict. Next: Codex round 3, then Antigravity round 2 to confirm A4-1.
