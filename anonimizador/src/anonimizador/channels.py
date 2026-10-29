@@ -18,6 +18,10 @@ from concurrent.futures import Executor
 
 # The places searched, in report order.
 CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
+# Channels whose texts are separate parts of the file (pages, embedded images), not
+# alternative readings of the same bytes. Their parts are searched together, so every
+# occurrence counts and a term split across a page break is found (Grok G0-6).
+PARTS_CHANNELS = ("ocr", "images")
 # Channels whose text a document shows or declares (searched for patterns).
 PATTERN_CHANNELS = ("text", "ocr", "images", "metadata")
 # Images smaller than this on either side are icons or masks, not readable text.

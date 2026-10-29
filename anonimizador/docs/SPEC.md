@@ -29,11 +29,14 @@ Turn the owner's real medical PDFs and images into an anonymized corpus that the
 Count each term in six places: the file name, the metadata, the text layer, the OCR of rendered pages, the OCR of embedded images, and the raw bytes. Raw bytes include inflated streams, so leftover incremental updates are covered.
 - Matching ignores case and accents.
 - Long terms are matched without spaces or punctuation.
-- Numbers are matched by their digits.
+- Numbers are matched by their digits. A term with 5 digits or more is a number whatever its label, and digits up to 3 non-alphanumeric characters apart are one number (Grok G0-1, G0-2).
+- Every page and embedded image counts, and they are searched together, so a term split across a page break is found. Alternative readings of the same bytes (encodings) count an occurrence once (Grok G0-6).
 - A term found in the file but not on the page is flagged, because it is text under a drawn box.
 - Identifier patterns are counted as hints.
 - A place that cannot be read is an error, never an empty place. This covers a failed or timed-out tool, an encrypted PDF, missing OCR language data, and pages that did not render. The file is reported `ERROR` with the place and the tool, never the path, and the run exits 2 (Grok G4-5).
 - The file name is the path relative to the directory searched, so directory names are searched too (Grok G4-6).
+- Directories are walked recursively, following symbolic links once per real directory. A directory that cannot be listed is an error that stops the run, never a skipped place (Grok G0-3).
+- A terms file that is not UTF-8 is refused with exit 2 and no traceback (Grok G0-4).
 
 ### R3. Locate text
 - Read the native text with positions on the page (`pdftotext -bbox-layout`, or a PDF library's word boxes).

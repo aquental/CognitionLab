@@ -13,7 +13,14 @@ from collections.abc import Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 
-from anonimizador.channels import CHANNELS, PATTERN_CHANNELS, Reading, read_image, read_pdf
+from anonimizador.channels import (
+    CHANNELS,
+    PARTS_CHANNELS,
+    PATTERN_CHANNELS,
+    Reading,
+    read_image,
+    read_pdf,
+)
 from anonimizador.terms import Term, count_patterns
 
 SUFFIXES = {".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image"}
@@ -84,6 +91,26 @@ def missing_tools(use_ocr: bool) -> list[str]:
     return [t for t in tools if shutil.which(t) is None]
 
 
+def raise_error(error: OSError) -> None:
+    raise error
+
+
+def walk(top: str) -> Iterator[tuple[str, list[str]]]:
+    """Each directory under `top` with its file names, hidden entries skipped. A
+    directory that cannot be listed raises `OSError`, and symlinked directories are
+    followed, each real directory once: a skipped directory could hide an identifying
+    file behind a clean one (Grok G0-3)."""
+    seen: set[str] = set()
+    for root, dirs, names in os.walk(top, onerror=raise_error, followlinks=True):
+        real = os.path.realpath(root)
+        if real in seen:
+            dirs[:] = []
+            continue
+        seen.add(real)
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        yield root, sorted(n for n in names if not n.startswith("."))
+
+
 def collect(paths: list[str]) -> list[CorpusFile]:
     """The PDF, PNG, and JPEG files named or found under directories (hidden entries
     skipped), in path order. A file found under a directory is named by its path
@@ -92,13 +119,19 @@ def collect(paths: list[str]) -> list[CorpusFile]:
     files: dict[str, CorpusFile] = {}
     for position, path in enumerate(paths, start=1):
         if os.path.isdir(path):
-            for root, dirs, names in os.walk(path):
-                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-                for name in sorted(names):
-                    if not name.startswith(".") and os.path.splitext(name)[1].lower() in SUFFIXES:
-                        found = os.path.join(root, name)
-                        relative = os.path.relpath(found, path).replace(os.sep, "/")
-                        files.setdefault(found, CorpusFile(found, relative))
+            try:
+                for root, names in walk(path):
+                    for name in names:
+                        if os.path.splitext(name)[1].lower() in SUFFIXES:
+                            found = os.path.join(root, name)
+                            relative = os.path.relpath(found, path).replace(os.sep, "/")
+                            files.setdefault(found, CorpusFile(found, relative))
+            except OSError as e:
+                # The message of an OSError holds the path: report its reason only.
+                reason = e.strerror or type(e).__name__
+                raise VerifyError(
+                    f"cannot list a directory under argument {position} ({reason})"
+                ) from None
         elif os.path.isfile(path):
             files.setdefault(path, CorpusFile(path, os.path.basename(path)))
         else:
@@ -139,10 +172,14 @@ def check_file(
     for number, term in enumerate(terms, start=1):
         counts = {}
         for channel in CHANNELS:
-            searchable = channel != "raw" or term.searchable_in_binary
-            counts[channel] = (
-                max((term.count(t) for t in texts[channel]), default=0) if searchable else 0
-            )
+            if channel == "raw" and not term.searchable_in_binary:
+                counts[channel] = 0
+            elif channel in PARTS_CHANNELS:
+                counts[channel] = term.count("\n".join(texts[channel]))
+            else:
+                # Alternative readings of the same bytes (encodings): an occurrence
+                # counts once.
+                counts[channel] = max((term.count(t) for t in texts[channel]), default=0)
         if any(counts.values()):
             hits.append(TermHit(number, counts))
     hints = count_patterns([t for c in PATTERN_CHANNELS for t in texts[c]])
