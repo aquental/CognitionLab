@@ -506,3 +506,67 @@ def test_a_number_whose_space_is_drawn_at_a_move_is_a_pattern_hint():
     # A join starts after the last space too, so a long last word uses up no length.
     long = f"Telefone: {AMBIGUOUS}(11){AMBIGUOUS}98765-4321"
     assert "(11)98765-4321" in mixed_readings(long).split("\n")
+
+
+def test_an_inline_image_or_a_stray_dictionary_opener_hides_no_drawn_string():
+    # Regression (Grok G0-46): a "<<" in an inline image's samples opened a dictionary
+    # that nothing closed, so every later string was left out of the drawn readings.
+    page = b"BT /F1 12 Tf 72 740 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    for samples in (b"\x10\x20<<\x30\x40\x50\x60", b"\x10%(\x20<<\x30\x40"):
+        image = b"BI /W 8 /H 1 /CS /G /BPC 8 ID " + samples + b" EI\n"
+        for text in (
+            b"BT /F1 12 Tf 72 700 Td (Zu) Tj (leo) Tj ET",
+            b"BT [(Z) -2 (u) -2 (l) -2 (e) -2 (o)] TJ ET",
+            b"BT (Zu) Tj % (XX)\n (leo) Tj ET",
+            b"BT (Zu) Tj /Span << /Lang (pt) >> BDC (leo) Tj EMC ET",
+        ):
+            content = page + image + text
+            assert raw_count("Zuleo", content) == 1, (samples, text)
+            assert raw_count("Zulea", content) == 0, (samples, text)
+            stream = b"4 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(content)
+            assert raw_count("Zuleo", stream + b"endstream\n") == 1, (samples, text)
+        assert raw_count("Quirvo", page + image + b"BT (Qui) Tj (rvo) Tj ET") == 1
+        cpf = b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj"
+        cpf += b" 6 0 Td (789) Tj 22 0 Td (-) Tj 6 0 Td (09) Tj ET"
+        raw = raw_readings(page + image + cpf)
+        assert count_patterns(raw.strings, raw.joins, raw.drawn) == {"cpf": 1}, samples
+    # A "<<" that no ">>" closes is no dictionary, inline image or not.
+    assert pdf_string_views([b"BT (Zu) Tj \x10<<\x30 (leo) Tj ET"]).drawn == "Zuleo"
+    # Samples are skipped: a comment that ends the line, and a ">>" that would close an
+    # earlier image's "<<", hide nothing.
+    same_line = b"BI /W 4 /H 1 /CS /G /BPC 8 ID \x10%\x20\x30 EI BT (Zu) Tj (leo) Tj ET"
+    assert raw_count("Zuleo", same_line) == 1
+    two = b"BI /W 2 /H 1 /CS /G /BPC 8 ID <<\x30 EI\nBT (Zu) Tj (leo) Tj ET\n"
+    two += b"BI /W 2 /H 1 /CS /G /BPC 8 ID \x30>> EI\n"
+    assert raw_count("Zuleo", two) == 1
+    # A stream keyword drops a "<<" its binary data left open.
+    data = b"stream\n\x10<<\x20\nendstream\nBT (Zu) Tj (leo) Tj ET\nstream\n\x30>>\x40\nendstream"
+    assert pdf_string_views([data]).drawn.startswith("Zuleo")
+
+
+def test_a_literal_nested_deeper_than_one_level_is_one_string():
+    # Regression (Grok G0-47): a literal was read one parenthesis level deep, so an
+    # escaped name in a string nested two levels was never decoded.
+    for literal in (
+        rb"(Zul\351o (obs (2)))",
+        rb"(Zul\351o (a (b (c))))",
+        rb"(Zul\351o \( (a (b)))",
+        rb"(Zul\351o (obs))",
+        rb"(obs (2) Zul\351o)",
+        rb"((Zul\351o))",
+        rb"(Zul\351o (a) (b))",
+        rb"(A (B (Zul\351o)))",
+    ):
+        data = b"BT /F1 12 Tf 72 700 Td " + literal + b" Tj ET"
+        assert raw_count("Zul\xe9o", data) == 1, literal
+        assert raw_count("Zul\xe9a", data) == 0, literal
+        stream = b"4 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(data)
+        assert raw_count("Zul\xe9o", stream + b"endstream\n") == 1, literal
+    # It is drawn whole: a short name split before it is whole in the drawn readings.
+    assert raw_count("Zul\xe9o", rb"BT (Zu) Tj (l\351o (a (b))) Tj ET") == 1
+    # A deeper literal holds its text outside the strings in it, which are read too, and
+    # is read only when it is short and within one stream: binary data pairs
+    # parentheses over any length.
+    assert pdf_string_views([b"(a (b (c)) d)"]).lines == "a \n d\nb (c)"
+    assert pdf_string_views([b"(" + b"a" * 1100 + b" (b (c)))"]).lines == "b (c)"
+    assert pdf_string_views([b"(a (endstream (c)))"]).lines == "endstream (c)"
