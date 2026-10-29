@@ -57,17 +57,17 @@ anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)
 ```
 
 How to read the report:
-- **Directories** are searched recursively, following symbolic links (each real directory once). A directory that cannot be listed stops the run with exit 2, because a skipped directory proves nothing.
+- **Directories** are searched recursively, following symbolic links (each real directory once; every other path that reaches it is searched as a name too). A directory that cannot be listed stops the run with exit 2, because a skipped directory proves nothing.
 - **Files** are named by position. Pass `--show-names` to print their names as the corpus records them: the path relative to the directory searched, directories included. Directory names are searched too, because a manifest records the whole relative path.
 - **Terms** are named by their position among the terms in the file, so `term 1` is the first term listed.
-- **Matching** ignores case and accents. Long terms are matched without spaces or punctuation, so OCR spacing errors and line breaks do not hide them. Numbers are matched by their digits: `123.456.789-09`, `12345678909`, and `CPF 123.456.789-09` are the same term. Any term with 5 digits or more is matched by its digits, and digits up to 3 characters apart (spaces, punctuation, parentheses, line breaks) are one number, so `(11) 98765-4321` and a number broken across lines are found. Every page and embedded image counts, and a term split across a page break is found.
+- **Matching** ignores case and accents. Long terms are matched without spaces or punctuation, so OCR spacing errors and line breaks do not hide them. Numbers are matched by their digits: `123.456.789-09`, `12345678909`, and `CPF 123.456.789-09` are the same term. Any term with 5 digits or more is matched by its digits, and digits up to 3 characters apart (spaces, punctuation, parentheses, line breaks) are one number, so `(11) 98765-4321` and a number broken across lines are found. Every page and embedded image counts, and a term split across a page break is found. UTF-16 metadata (EXIF, Windows tags) is decoded, so a short name stored in it is found.
 - **The hint** marks the classic failed redaction: a box drawn over text that is still in the file.
 - **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints. They fail the check only with `--strict-patterns`.
 - **Safety:** the verifier refuses a terms file that git could commit. The terms file must be UTF-8 text.
 
 - **ERROR** marks a file in which a place could not be read: a tool failed or timed out, a PDF is encrypted, or pages did not render. The `unreadable:` lines name the place and the tool, never the file. An unread place proves nothing, so such a file is never reported `ok`.
 
-Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error, a missing tool or OCR language, or a file with an unreadable place. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR. `--timeout` (default 600 s) bounds each tool run.
+Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error, a missing tool or OCR language, or a file with an unreadable place. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR. `--timeout` (default 600 s) bounds each tool run. `--dpi` and `--timeout` must be positive whole numbers.
 
 ## Development
 

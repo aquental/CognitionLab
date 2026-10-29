@@ -46,8 +46,25 @@ def test_symlinked_directories_are_followed_once(tmp_path: Path):
     pdf(root / "clean.pdf")
     (root / "linked").symlink_to(outside, target_is_directory=True)
     (root / "loop").symlink_to(root, target_is_directory=True)
-    names = [f.name for f in collect([str(root)])]
-    assert names == ["clean.pdf", "linked/lab.pdf"]
+    files = collect([str(root)])
+    assert [f.name for f in files] == ["clean.pdf", "linked/lab.pdf"]
+    # The loop's name is searched too, as an alias of every file under it.
+    assert [f.aliases for f in files] == [("loop/clean.pdf",), ("loop/linked/lab.pdf",)]
+
+
+def test_a_second_link_to_a_directory_keeps_its_name(tmp_path: Path, monkeypatch):
+    # Regression (Grok G0-7): a directory reached again through a symlink was skipped,
+    # so the link's name was never searched: a neutral name that sorted first hid it.
+    root = tmp_path / "corpus"
+    pdf(root / "laudos" / "clean.pdf")
+    (root / "sicrano").symlink_to(root / "laudos", target_is_directory=True)
+    files = collect([str(root)])
+    assert [(f.name, f.aliases) for f in files] == [("laudos/clean.pdf", ("sicrano/clean.pdf",))]
+    reading = Reading()
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    result = check_file(1, files[0], [verify.Term("Sicrano")], Options(), None)
+    assert [hit.counts["name"] for hit in result.hits] == [1]
+    assert result.path == "laudos/clean.pdf"
 
 
 def counts_of(monkeypatch, texts: dict[str, list[str]]) -> dict[str, int]:

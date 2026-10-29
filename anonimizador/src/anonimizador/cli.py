@@ -17,6 +17,18 @@ from anonimizador.verify import Options, VerifyError, collect, missing_tools, re
 EXIT_OK, EXIT_FOUND, EXIT_USAGE = 0, 1, 2
 
 
+def positive_int(value: str) -> int:
+    """An argument that must be a whole number above zero: argparse reports anything
+    else as a usage error (exit 2), never as a traceback (Grok G0-9)."""
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive whole number")
+    return number
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="anonimizador",
@@ -38,11 +50,11 @@ def parser() -> argparse.ArgumentParser:
         help="file of identifiers to look for, one per line (keep it outside the repository)",
     )
     v.add_argument("--lang", default="por+eng", help="tesseract languages")
-    v.add_argument("--dpi", type=int, default=300, help="page render resolution")
+    v.add_argument("--dpi", type=positive_int, default=300, help="page render resolution")
     v.add_argument("--no-ocr", action="store_true", help="skip rendering and OCR")
     v.add_argument(
         "--timeout",
-        type=int,
+        type=positive_int,
         default=600,
         help="seconds each tool run may take before its channel is reported unreadable",
     )

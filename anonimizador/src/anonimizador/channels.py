@@ -124,11 +124,47 @@ def png_text_chunks(data: bytes) -> list[bytes]:
     return out
 
 
+# Runs of UTF-16 text (EXIF and Windows metadata): letters with a NUL beside each.
+UTF16_RUNS = {
+    "utf-16-le": re.compile(rb"(?:[^\x00]\x00){2,}"),
+    "utf-16-be": re.compile(rb"(?:\x00[^\x00]){2,}"),
+}
+
+
+def split_ends(text: str, first: bool, last: bool) -> str:
+    if first and len(text) > 1:
+        text = text[0] + "\n" + text[1:]
+    if last and len(text) > 1:
+        text = text[:-1] + "\n" + text[-1]
+    return text
+
+
+def utf16_views(blob: bytes) -> list[str]:
+    """The UTF-16 runs of `blob`, decoded, one run per line, one view per byte order
+    (Grok G0-8). Read as single bytes, UTF-16 puts a NUL between letters, so a short
+    term was never a whole word. A NUL-terminated ASCII character beside a run reads as
+    one more character of it, and the bytes cannot tell the two apart, so each view
+    also comes with the first and the last character of each run set apart. That can
+    only add matches, never hide one."""
+    views = []
+    for encoding, pattern in UTF16_RUNS.items():
+        runs = [run.decode(encoding) for run in pattern.findall(blob)]
+        if runs:
+            views.extend(
+                "\n".join(split_ends(run, first, last) for run in runs)
+                for first in (False, True)
+                for last in (False, True)
+            )
+    return views
+
+
 def decode_both(blobs: list[bytes]) -> list[str]:
+    """Each blob read as UTF-8, as Latin-1, and through its UTF-16 runs."""
     texts = []
     for blob in blobs:
         texts.append(blob.decode("utf-8", "ignore"))
         texts.append(blob.decode("latin-1"))
+        texts.extend(utf16_views(blob))
     return texts
 
 
