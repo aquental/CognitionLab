@@ -6,19 +6,21 @@
 //! writes the image header, the pixel data, and the end marker. The stored asset is
 //! content-addressed by the SHA-256 of those bytes.
 //!
-//! Two pieces of metadata change what the image shows, so they are applied to the pixels
-//! before they are dropped: the EXIF orientation (the asset is stored upright, as a viewer
-//! displays the original) and transparency (the image is composited over opaque white,
-//! so pixels hidden under alpha 0 never become visible).
+//! Three pieces of information change what the image shows, so they are applied to the
+//! pixels before they are dropped: a PDF image's mask (extracted by `pdfimages` as a
+//! separate gray image; it becomes the alpha channel), the EXIF orientation (the asset is
+//! stored upright, as a viewer displays the original), and transparency (the image is
+//! composited over opaque white, so pixels hidden under alpha 0 never become visible).
 
 use std::io::Cursor;
 
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbImage};
+use image::imageops::FilterType;
+use image::{DynamicImage, GrayImage, ImageDecoder, ImageFormat, ImageReader, RgbImage};
 
 use crate::ids::Checksum;
 
 /// Identity of the preparation step; part of the image-preparation fingerprint.
-pub const SCRUBBER_ID: &str = "decode-orient-flatten-white-rgb8-png-v2";
+pub const SCRUBBER_ID: &str = "decode-mask-orient-flatten-white-rgb8-png-v3";
 
 /// A decoded and re-encoded image.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,21 +68,31 @@ impl MetadataScrubber {
     /// Returns [`AssetError`] when the input cannot be decoded, has no pixels, or the
     /// output cannot be encoded.
     pub fn scrub(&self, bytes: &[u8]) -> Result<PreparedImage, AssetError> {
-        let reader = ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()
-            .map_err(|e| AssetError::Decode(e.to_string()))?;
-        match reader.format() {
-            Some(ImageFormat::Png | ImageFormat::Jpeg) => {}
-            other => {
-                return Err(AssetError::Decode(format!(
-                    "unsupported format {other:?} (PNG or JPEG expected)"
-                )));
-            }
-        }
+        self.scrub_masked(bytes, None)
+    }
+
+    /// Like [`Self::scrub`], with the image's PDF mask as `pdfimages` writes it: a gray
+    /// image whose value is the opacity (soft mask: the alpha; explicit mask: 0 hidden,
+    /// 255 painted), scaled to the image size as a PDF viewer does. Masked-out pixels are
+    /// therefore composited away instead of being revealed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::scrub`]; a mask that cannot be decoded is a [`AssetError::Decode`].
+    pub fn scrub_masked(
+        &self,
+        bytes: &[u8],
+        mask: Option<&[u8]>,
+    ) -> Result<PreparedImage, AssetError> {
+        let reader = reader_of(bytes)?;
         let decode = |e: image::ImageError| AssetError::Decode(e.to_string());
         let mut decoder = reader.into_decoder().map_err(decode)?;
         let orientation = decoder.orientation().map_err(decode)?;
         let mut decoded = DynamicImage::from_decoder(decoder).map_err(decode)?;
+        if let Some(mask) = mask {
+            // The mask belongs to the stored raster, before any display orientation.
+            decoded = with_mask(&decoded, &opacity_of(mask)?);
+        }
         decoded.apply_orientation(orientation);
         let rgb = if decoded.color().has_alpha() {
             flatten_on_white(&decoded)
@@ -101,6 +113,44 @@ impl MetadataScrubber {
             height,
         })
     }
+}
+
+fn reader_of(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>, AssetError> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| AssetError::Decode(e.to_string()))?;
+    match reader.format() {
+        Some(ImageFormat::Png | ImageFormat::Jpeg) => Ok(reader),
+        other => Err(AssetError::Decode(format!(
+            "unsupported format {other:?} (PNG or JPEG expected)"
+        ))),
+    }
+}
+
+/// Decodes a mask as 8-bit opacity (a 1-bit mask expands to 0 and 255).
+fn opacity_of(mask: &[u8]) -> Result<GrayImage, AssetError> {
+    let decoded = reader_of(mask)?
+        .decode()
+        .map_err(|e| AssetError::Decode(format!("mask: {e}")))?;
+    Ok(decoded.to_luma8())
+}
+
+/// The image with `opacity` (scaled to its size) multiplied into its alpha channel.
+fn with_mask(image: &DynamicImage, opacity: &GrayImage) -> DynamicImage {
+    let mut rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let scaled;
+    let opacity = if opacity.dimensions() == (width, height) {
+        opacity
+    } else {
+        scaled = image::imageops::resize(opacity, width, height, FilterType::Triangle);
+        &scaled
+    };
+    for (pixel, mask) in rgba.pixels_mut().zip(opacity.pixels()) {
+        let alpha = (u16::from(pixel.0[3]) * u16::from(mask.0[0]) + 127) / 255;
+        pixel.0[3] = u8::try_from(alpha).unwrap_or(u8::MAX);
+    }
+    DynamicImage::ImageRgba8(rgba)
 }
 
 /// Composites an image with alpha over opaque white (8-bit, rounded).
@@ -326,6 +376,55 @@ mod tests {
             .expect("scrub");
         assert!(is_red(*decoded(&upright.png).get_pixel(4, 8)));
         assert_eq!(png_chunks(&rotated.png), ["IHDR", "IDAT", "IEND"]);
+    }
+
+    fn pdf_mask_fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/pdf-masks")
+                .join(name),
+        )
+        .expect("captured pdfimages output")
+    }
+
+    /// Regression (C3-6): the captured `pdfimages` output of `masked-images.pdf` (red
+    /// left halves hidden by a 48×48 soft mask and by a 1-bit explicit mask). Prepared
+    /// with their masks, the hidden halves are white and the visible halves stay blue;
+    /// without them the hidden red would be revealed.
+    #[test]
+    fn pdf_masks_hide_what_the_viewer_hides() {
+        let red_left = pdf_mask_fixture("img-001-000.png");
+        let unmasked = decoded(&MetadataScrubber.scrub(&red_left).expect("scrub").png);
+        assert!(
+            is_red(*unmasked.get_pixel(10, 48)),
+            "fixture shows red unmasked"
+        );
+        for (image, mask) in [
+            ("img-001-000.png", "img-001-001.png"),
+            ("img-001-002.png", "img-001-003.png"),
+        ] {
+            let prepared = MetadataScrubber
+                .scrub_masked(&pdf_mask_fixture(image), Some(&pdf_mask_fixture(mask)))
+                .expect("scrub");
+            assert_eq!((prepared.width, prepared.height), (96, 96));
+            let rgb = decoded(&prepared.png);
+            for y in [0, 48, 95] {
+                for x in [0, 20, 45] {
+                    assert_eq!(
+                        rgb.get_pixel(x, y).0,
+                        [255, 255, 255],
+                        "{mask} at ({x},{y})"
+                    );
+                }
+                for x in [50, 75, 95] {
+                    assert!(is_blue(*rgb.get_pixel(x, y)), "{mask} at ({x},{y})");
+                }
+            }
+            assert!(
+                !rgb.pixels().any(|p| p.0[0] > 128 && p.0[1] < 128),
+                "{mask}: a hidden red pixel was revealed"
+            );
+        }
     }
 
     #[test]

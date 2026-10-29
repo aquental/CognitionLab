@@ -55,6 +55,19 @@ impl ImageFilter {
     }
 }
 
+/// The mask that `pdfimages -list` lists right after `image`: poppler emits a soft mask
+/// (`smask`, `/SMask`) or an explicit mask (`mask`, `/Mask` image) immediately after the
+/// image it belongs to, on the same page. Hidden pixels of the image are only hidden
+/// through it, so a kept image is prepared with its mask (C3-6).
+#[must_use]
+pub fn mask_of<'a>(listed: &'a [ImageInfo], image: &ImageInfo) -> Option<&'a ImageInfo> {
+    let next = image.position_on_page.checked_add(1)?;
+    listed
+        .iter()
+        .find(|m| m.page == image.page && m.position_on_page == next)
+        .filter(|m| matches!(m.kind.as_str(), "smask" | "mask"))
+}
+
 fn parse_error(reason: impl Into<String>) -> ExtractionError {
     ExtractionError::Parse {
         what: "pdfimages -list output",
@@ -137,6 +150,26 @@ page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-pp
    1     2 smask      48    48  gray    1   8  image  no         5  0    72    72   89B 3.9%
    2     3 image    1240  1755  rgb     3   8  image  no         8  0   150   150 52.3K 0.8%
 ";
+
+    #[test]
+    fn a_mask_belongs_to_the_image_listed_right_before_it() {
+        let masked = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf-masks/images.list"),
+        )
+        .expect("captured pdfimages list");
+        let listed = parse_list(&masked).expect("list");
+        let mask =
+            |position: usize| mask_of(&listed, &listed[position]).map(|m| (m.num, m.kind.as_str()));
+        assert_eq!(mask(0), Some((1, "smask")));
+        assert_eq!(mask(2), Some((3, "mask")));
+        assert_eq!(mask(1), None);
+        assert_eq!(mask(3), None);
+        // An image followed by another image, or last on its page, has no mask.
+        let mixed = parse_list(MIXED).expect("list");
+        assert_eq!(mask_of(&mixed, &mixed[0]), None);
+        assert_eq!(mask_of(&mixed, &mixed[1]).map(|m| m.num), Some(2));
+        assert_eq!(mask_of(&mixed, &mixed[3]), None);
+    }
 
     #[test]
     fn the_list_is_parsed_with_per_page_positions() {

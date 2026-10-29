@@ -13,8 +13,8 @@ Configurations differ in engine, weight format, or model, so differences are not
 
 | Experiment | Engine | Model | Revision | Weights | Dims | Prefix | Batch | Space | Extraction fp | Chunking fp | Evaluation fp |
 |---|---|---|---|---|---:|---|---:|---|---|---|---|
-| p3-clip-vit-b32 | embed_anything 0.7.1 | openai/clip-vit-base-patch32 | 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268 | candle | 512 | None | 16 | `space-6603884ac3fef0f888b11488a160b13c` | `8a4be74221f5` | `edac75deed57` | `484079928a35` |
-| p3-siglip-multilingual | embed_anything 0.7.1 | google/siglip-base-patch16-256-multilingual | 8952a4eafcde3cb7ab46b1dd629b33f8784ca9c6 | candle | 768 | None | 16 | `space-912b12ea1376ca71b44ae24b04fc91ca` | `8a4be74221f5` | `edac75deed57` | `484079928a35` |
+| p3-clip-vit-b32 | embed_anything 0.7.1 | openai/clip-vit-base-patch32 | 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268 | candle | 512 | None | 16 | `space-6603884ac3fef0f888b11488a160b13c` | `8a4be74221f5` | `7d8dff06acd5` | `484079928a35` |
+| p3-siglip-multilingual | embed_anything 0.7.1 | google/siglip-base-patch16-256-multilingual | 8952a4eafcde3cb7ab46b1dd629b33f8784ca9c6 | candle | 768 | None | 16 | `space-912b12ea1376ca71b44ae24b04fc91ca` | `8a4be74221f5` | `7d8dff06acd5` | `484079928a35` |
 
 ## Retrieval quality (k = 3, macro averages)
 
@@ -27,8 +27,8 @@ Configurations differ in engine, weight format, or model, so differences are not
 
 | Experiment | Ingestion ms | ms/page | chunks/s | Batch latency ms | Embeds/s | Model load ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
-| p3-clip-vit-b32 | 7899.7 | - | 0.4 | 1631.24 | 0.6 | 12780.7 | 13463.0 | 1771.27 | 4070.09 | 701530112 bytes | 23256 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p3-siglip-multilingual | 37558.0 | - | 0.1 | 11830.64 | 0.1 | 43678.4 | 59702.8 | 3296.59 | 6599.41 | 3512320000 bytes | 33075 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p3-clip-vit-b32 | 341.1 | - | 8.8 | 48.32 | 20.7 | 779.0 | 828.1 | 34.64 | 43.77 | 693846016 bytes | 23281 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p3-siglip-multilingual | 845.6 | - | 3.5 | 225.30 | 4.4 | 2518.8 | 2742.6 | 62.21 | 64.66 | 3507666944 bytes | 33100 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
 
 ## Cost and reliability
 
@@ -114,5 +114,5 @@ Configurations differ in engine, weight format, or model, so differences are not
 - Synthetic fixture corpus and synthetic labels only: three synthetic images (two image files and the embedded page-1 image of us-mixed-003). These numbers exercise the image pipeline and do not measure medical retrieval quality. The owner corpus, labels, and fidelity sample are outstanding.
 - Image-only mode: the frozen text queries are embedded through each model's text-query path and ranked against image records only. nDCG uses each query's frozen labels over every modality (PRD §5.3), so text-only relevant items lower the ideal-normalized score of an image-only ranking.
 - Extraction fidelity is not reported: it measures text extraction, which an image run does not use (see reports/phase-2).
-- Measurement host under heavy unrelated load (load average about 34-39 on 8 logical CPUs from other desktop applications during these runs): latencies and throughput are indicative only and not comparable with the Phase 2 text runs.
+- Measurement host under moderate unrelated load (load average about 6 on 8 logical CPUs from other desktop applications) during these runs; earlier runs of the same configurations under heavy load (load average 25-39) had warm medians of 0.78-1.8 s (CLIP) and 1.9-3.3 s (SigLIP). Latencies and throughput are therefore indicative only and not comparable with the Phase 2 text runs.
 - Single run on one machine; latencies are indicative, not statistically compared.

@@ -797,3 +797,78 @@ async fn a_deleted_or_altered_asset_is_rebuilt_on_the_next_image_run() {
         .expect("run");
     assert!(third.sources.iter().all(|s| s.unchanged), "{third:?}");
 }
+
+#[tokio::test]
+async fn masked_pdf_images_are_stored_as_a_viewer_shows_them() {
+    // Regression (C3-6): page 1 of `us-mixed-003` replays the captured `pdfimages` output
+    // of `pdf-masks/masked-images.pdf` (two images whose red left halves are hidden by a
+    // soft mask and by an explicit mask). The masks are not records; the stored assets
+    // keep the visible blue halves and never reveal the hidden red.
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let mut manifest_one = manifest.clone();
+    manifest_one
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "us-mixed-003");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let masks = fixtures().join("pdf-masks");
+    extractor.set_image_list(
+        "us-mixed-003",
+        &std::fs::read_to_string(masks.join("images.list")).expect("list"),
+    );
+    for position in 0..4 {
+        let png = std::fs::read(masks.join(format!("img-001-{position:03}.png"))).expect("png");
+        extractor.set_image("us-mixed-003", 1, position, png);
+    }
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(
+        DeterministicEmbedder::builder()
+            .text_to_image()
+            .build()
+            .expect("adapter"),
+    );
+    let space = embedder.model_info().embedding_space_id.clone();
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder,
+    };
+    let mut settings = IngestSettings::new("masks".parse().expect("id"));
+    settings.modality = Modality::Image;
+    let report = pipeline
+        .ingest(&manifest_one, &settings)
+        .await
+        .expect("run");
+    assert_eq!(
+        report.sources[0].status,
+        SourceStatus::Succeeded,
+        "{report:?}"
+    );
+    let records = store.active_records(&space).expect("records");
+    let nums: Vec<_> = records
+        .iter()
+        .map(|r| r.metadata.original_asset.as_ref().map(|a| a.reference()))
+        .collect();
+    assert_eq!(records.len(), 2, "masks became records: {nums:?}");
+    for record in &records {
+        let uri = record.asset_uri.as_ref().expect("asset uri");
+        let png = store.read_asset(uri).expect("asset");
+        let rgb = image::load_from_memory(&png).expect("png").to_rgb8();
+        assert_eq!(rgb.dimensions(), (96, 96));
+        assert_eq!(
+            rgb.get_pixel(10, 48).0,
+            [255, 255, 255],
+            "{uri}: hidden half"
+        );
+        assert_eq!(rgb.get_pixel(80, 48).0, [0, 0, 255], "{uri}: visible half");
+        assert!(
+            !rgb.pixels().any(|p| p.0[0] > 128 && p.0[1] < 128),
+            "{uri}: a hidden red pixel was revealed"
+        );
+    }
+}

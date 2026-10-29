@@ -2,7 +2,7 @@
 //! Tesseract.
 
 use std::num::NonZeroU32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
@@ -35,21 +35,62 @@ async fn run(tool: &'static str, args: &[&std::ffi::OsStr]) -> Result<Output, Ex
     Ok(output)
 }
 
-/// Runs `work` in a fresh temporary directory that is created and removed on the
-/// blocking pool (PLAN §2.3): `TempDir`'s recursive removal is synchronous file I/O and
-/// must not run on a runtime worker, on success or on failure.
+/// A scratch directory whose removal always runs on the blocking pool (PLAN §2.3):
+/// `TempDir`'s recursive removal is synchronous file I/O and must not run on a runtime
+/// worker, on success, on failure, or when the future that owns it is cancelled.
+struct Scratch {
+    path: PathBuf,
+    dir: Option<tempfile::TempDir>,
+}
+
+fn blocking_failed(e: tokio::task::JoinError) -> ExtractionError {
+    ExtractionError::Io(std::io::Error::other(e))
+}
+
+impl Scratch {
+    async fn create() -> Result<Self, ExtractionError> {
+        let dir = tokio::task::spawn_blocking(tempfile::tempdir)
+            .await
+            .map_err(blocking_failed)??;
+        Ok(Self {
+            path: dir.path().to_owned(),
+            dir: Some(dir),
+        })
+    }
+
+    /// Removes the directory on the blocking pool and reports a removal failure.
+    async fn close(mut self) -> Result<(), ExtractionError> {
+        let Some(dir) = self.dir.take() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || dir.close())
+            .await
+            .map_err(blocking_failed)?
+            .map_err(ExtractionError::Io)
+    }
+}
+
+impl Drop for Scratch {
+    /// Reached with the directory still present only when the owning future was
+    /// cancelled before `close`: the removal is handed to the blocking pool (outside a
+    /// runtime there is no worker to protect, so it runs in place).
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => drop(runtime.spawn_blocking(move || drop(dir))),
+                Err(_) => drop(dir),
+            }
+        }
+    }
+}
+
+/// Runs `work` in a fresh [`Scratch`] directory and removes it afterwards.
 async fn in_scratch<T>(
     work: impl AsyncFnOnce(&Path) -> Result<T, ExtractionError>,
 ) -> Result<T, ExtractionError> {
-    let blocking_failed = |e: tokio::task::JoinError| ExtractionError::Io(std::io::Error::other(e));
-    let scratch = tokio::task::spawn_blocking(tempfile::tempdir)
-        .await
-        .map_err(blocking_failed)??;
-    let outcome = work(scratch.path()).await;
-    let removed = tokio::task::spawn_blocking(move || scratch.close())
-        .await
-        .map_err(blocking_failed)
-        .and_then(|r| r.map_err(ExtractionError::Io));
+    let scratch = Scratch::create().await?;
+    let outcome = work(&scratch.path).await;
+    let removed = scratch.close().await;
     let value = outcome?;
     removed?;
     Ok(value)
@@ -311,6 +352,40 @@ impl ImageExtractor for PopplerImageExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cancelled extraction drops its scratch directory without removing it on the
+    /// runtime thread: with the only blocking thread held, the directory must still exist
+    /// right after the cancellation, and it is gone once the blocking pool runs.
+    #[test]
+    fn a_cancelled_extraction_removes_its_scratch_directory_on_the_blocking_pool() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (sent, entered) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn(in_scratch(async move |dir: &Path| {
+                tokio::fs::write(dir.join("img-001-000.png"), b"x").await?;
+                sent.send(dir.to_owned()).expect("send");
+                std::future::pending::<Result<(), ExtractionError>>().await
+            }));
+            let dir = entered.await.expect("scratch created");
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let blocker = tokio::task::spawn_blocking(move || held.recv());
+            task.abort();
+            assert!(task.await.expect_err("cancelled").is_cancelled());
+            assert!(
+                dir.exists(),
+                "the scratch directory was removed on the runtime thread"
+            );
+            release.send(()).expect("release");
+            blocker.await.expect("blocker").expect("recv");
+            // The blocking pool runs its queue in order on its single thread.
+            tokio::task::spawn_blocking(|| ()).await.expect("flush");
+            assert!(!dir.exists(), "{} was not removed", dir.display());
+        });
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn scratch_directories_are_removed_on_success_and_failure() {

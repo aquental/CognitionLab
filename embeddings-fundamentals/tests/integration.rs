@@ -566,6 +566,48 @@ async fn a_real_image_run_keeps_embedded_images_and_drops_page_scans() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn real_pdfimages_output_matches_the_captured_mask_fixtures() {
+    // C3-6: the masked-image pipeline regression replays `tests/fixtures/pdf-masks`; this
+    // proves that replay is what the installed `pdfimages` produces (same list, same
+    // pixels for every image and mask) and that each image gets its own mask.
+    use embeddings_fundamentals::extraction::images::{ImageExtractor, mask_of, parse_list};
+    require_integration();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf-masks");
+    let pdf = dir.join("masked-images.pdf");
+    let images = PopplerImageExtractor::detect().await;
+    let listed = images.list_images(&pdf).await.expect("list");
+    let captured =
+        parse_list(&std::fs::read_to_string(dir.join("images.list")).expect("captured list"))
+            .expect("parse");
+    assert_eq!(listed, captured);
+    for info in &listed {
+        let real = images.extract_image(&pdf, info).await.expect("extract");
+        let fixture = std::fs::read(dir.join(format!(
+            "img-{:03}-{:03}.png",
+            info.page.get(),
+            info.position_on_page
+        )))
+        .expect("captured png");
+        let pixels = |png: &[u8]| image::load_from_memory(png).expect("png").to_rgba8();
+        assert_eq!(pixels(&real), pixels(&fixture), "image {}", info.num);
+    }
+    let kinds: Vec<_> = listed
+        .iter()
+        .map(|i| mask_of(&listed, i).map(|m| (m.num, m.kind.clone())))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            Some((1, "smask".to_owned())),
+            None,
+            Some((3, "mask".to_owned())),
+            None
+        ]
+    );
+}
+
 #[cfg(feature = "engine-embed-anything")]
 #[expect(
     clippy::expect_used,

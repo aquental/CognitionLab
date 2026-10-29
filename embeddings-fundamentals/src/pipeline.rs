@@ -29,7 +29,7 @@ use crate::embedding::{
     AssetRef, Capability, EmbeddingBatch, EmbeddingError, EmbeddingStrategy, ErrorClass, InputKind,
     TextInput, validate_batch,
 };
-use crate::extraction::images::{ImageExtractor, ImageFilter};
+use crate::extraction::images::{ImageExtractor, ImageFilter, mask_of};
 use crate::extraction::{ExtractionConfig, OcrEngine, PageText, TextExtractor};
 use crate::ids::{
     Checksum, ChunkId, EmbeddingSpaceId, ExperimentId, Fingerprint, IdError, ItemId, RecordId,
@@ -403,6 +403,8 @@ struct RawImage {
     pdf_image_num: Option<u32>,
     method: ExtractionMethod,
     bytes: Vec<u8>,
+    /// The PDF image's soft or explicit mask, as `pdfimages` extracted it.
+    mask: Option<Vec<u8>>,
 }
 
 /// One image to embed: where it came from and its prepared asset.
@@ -896,8 +898,8 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
 
     /// Collects the images of one source: the file itself for PNG/JPEG, otherwise every
     /// listed image the filter keeps on a page whose text layer is usable (on a page that
-    /// needs OCR the raster is the page scan). Each image is re-encoded without metadata
-    /// on the blocking pool.
+    /// needs OCR the raster is the page scan), together with its mask when it has one.
+    /// Each image is masked and re-encoded without metadata on the blocking pool.
     async fn source_images(
         &self,
         ctx: &SourceContext<'_>,
@@ -935,6 +937,15 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                     .extract_image(&path, image)
                     .await
                     .map_err(extraction)?;
+                let mask = match mask_of(&listed, image) {
+                    Some(mask) => Some(
+                        self.images
+                            .extract_image(&path, mask)
+                            .await
+                            .map_err(extraction)?,
+                    ),
+                    None => None,
+                };
                 let index = u32::try_from(raw.iter().filter(|r| r.page == image.page).count())
                     .map_err(|_| {
                         (
@@ -948,6 +959,7 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                     pdf_image_num: Some(image.num),
                     method: ExtractionMethod::EmbeddedImage,
                     bytes,
+                    mask,
                 });
             }
         } else {
@@ -960,13 +972,14 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                 pdf_image_num: None,
                 method: ExtractionMethod::ImageFile,
                 bytes,
+                mask: None,
             });
         }
         tokio::task::spawn_blocking(move || {
             raw.into_iter()
                 .map(|image| {
                     let prepared = MetadataScrubber
-                        .scrub(&image.bytes)
+                        .scrub_masked(&image.bytes, image.mask.as_deref())
                         .map_err(|e| (FailureStage::Extraction, e.to_string()))?;
                     Ok(SourceImage {
                         page: image.page,
