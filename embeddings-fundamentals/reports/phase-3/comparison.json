@@ -42,7 +42,7 @@
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
       "fingerprints": {
         "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
-        "chunking": "edac75deed57a1235e4008bf433adcee23e91af8d502e0fca82a2b491c94b4fc",
+        "chunking": "7d8dff06acd59b492dd11ab4d59141ca5cf1b2daf58813325c38667fa72428ee",
         "evaluation": "484079928a35cfc9dc25acb54442bfe4ff676466cbdc0c64269b81a0c68af301"
       },
       "evaluation": {
@@ -69,7 +69,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -83,7 +83,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -97,7 +97,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -123,7 +123,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -137,7 +137,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -151,7 +151,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -177,7 +177,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -191,7 +191,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -205,7 +205,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -231,7 +231,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -245,7 +245,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -259,7 +259,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -285,7 +285,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -299,7 +299,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -313,7 +313,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -339,7 +339,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -353,7 +353,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -367,7 +367,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -393,7 +393,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -407,7 +407,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -421,7 +421,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -447,7 +447,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -461,7 +461,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -475,7 +475,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -501,7 +501,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -515,7 +515,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -529,7 +529,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -555,7 +555,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ad53cea8cce0122",
+                "record_id": "550af807074753e2",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -569,7 +569,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "398705178bdf3ced",
+                "record_id": "c5a804a1590d644e",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -583,7 +583,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "66c7ada3799cd519",
+                "record_id": "73644c22cdf2d1b1",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -612,42 +612,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 7899.676917,
+          "duration_ms": 341.07441700000004,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 0.3797623664259028
+          "chunks_per_second": 8.795734451112468
         },
-        "ingestion_model_load_ms": 12780.697625,
+        "ingestion_model_load_ms": 778.976958,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 4893.714792,
-          "mean_batch_latency_ms": 1631.2382639999998,
-          "items_per_second": 0.613031230365989,
+          "total_ms": 144.954876,
+          "mean_batch_latency_ms": 48.31829200000001,
+          "items_per_second": 20.69609579742595,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 12780.697625,
-          "first_operation_ms": 682.269667,
+          "model_load_ms": 778.976958,
+          "first_operation_ms": 49.168167,
           "first_operation_items": 1,
-          "total_ms": 13462.967292
+          "total_ms": 828.145125
         },
         "query_side_start": {
-          "model_load_ms": 2222.01,
-          "first_query_ms": 606.337084,
-          "total_ms": 2828.347084
+          "model_load_ms": 575.666333,
+          "first_query_ms": 46.55625,
+          "total_ms": 622.222583
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 1771.273333,
-          "p95_ms": 4070.088125
+          "median_ms": 34.636583,
+          "p95_ms": 43.773917
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 701530112.0,
+          "value": 693846016.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -658,7 +658,7 @@
         "provider_inference_memory": null,
         "index_size": {
           "status": "measured",
-          "value": 23256.0,
+          "value": 23281.0,
           "unit": "bytes",
           "scope": "active revisions on disk"
         }
@@ -720,7 +720,7 @@
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
       "fingerprints": {
         "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
-        "chunking": "edac75deed57a1235e4008bf433adcee23e91af8d502e0fca82a2b491c94b4fc",
+        "chunking": "7d8dff06acd59b492dd11ab4d59141ca5cf1b2daf58813325c38667fa72428ee",
         "evaluation": "484079928a35cfc9dc25acb54442bfe4ff676466cbdc0c64269b81a0c68af301"
       },
       "evaluation": {
@@ -747,7 +747,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -761,7 +761,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -775,7 +775,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -801,7 +801,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -815,7 +815,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -829,7 +829,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -855,7 +855,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -869,7 +869,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -883,7 +883,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -909,7 +909,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -923,7 +923,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -937,7 +937,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -963,7 +963,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -977,7 +977,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -991,7 +991,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1017,7 +1017,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -1031,7 +1031,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -1045,7 +1045,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1071,7 +1071,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -1085,7 +1085,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -1099,7 +1099,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1125,7 +1125,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -1139,7 +1139,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1153,7 +1153,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -1179,7 +1179,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -1193,7 +1193,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1207,7 +1207,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -1233,7 +1233,7 @@
             "results": [
               {
                 "rank": 1,
-                "record_id": "6ec38671f62487b1",
+                "record_id": "5193e87b9126c7b3",
                 "source_id": "chest-001",
                 "chunk_id": "chest-001-p1-image-0",
                 "modality": "image",
@@ -1247,7 +1247,7 @@
               },
               {
                 "rank": 2,
-                "record_id": "d7a76136bf40570e",
+                "record_id": "f49af4b4e8afe3a1",
                 "source_id": "abd-us-001",
                 "chunk_id": "abd-us-001-p1-image-0",
                 "modality": "image",
@@ -1261,7 +1261,7 @@
               },
               {
                 "rank": 3,
-                "record_id": "8d212af96fcfa2bd",
+                "record_id": "34d1f9238c0603d5",
                 "source_id": "us-mixed-003",
                 "chunk_id": "us-mixed-003-p1-image-0",
                 "modality": "image",
@@ -1290,42 +1290,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 37558.008834,
+          "duration_ms": 845.629459,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 0.07987643895765319
+          "chunks_per_second": 3.5476531334985104
         },
-        "ingestion_model_load_ms": 43678.374875,
+        "ingestion_model_load_ms": 2518.8324159999997,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 35491.934916,
-          "mean_batch_latency_ms": 11830.644972,
-          "items_per_second": 0.08452624538786642,
+          "total_ms": 675.907499,
+          "mean_batch_latency_ms": 225.30249966666668,
+          "items_per_second": 4.438477165053616,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 43678.374875,
-          "first_operation_ms": 16024.386582999998,
+          "model_load_ms": 2518.8324159999997,
+          "first_operation_ms": 223.801791,
           "first_operation_items": 1,
-          "total_ms": 59702.761458
+          "total_ms": 2742.6342069999996
         },
         "query_side_start": {
-          "model_load_ms": 15636.318333,
-          "first_query_ms": 1871.684916,
-          "total_ms": 17508.003249
+          "model_load_ms": 512.053625,
+          "first_query_ms": 55.511209,
+          "total_ms": 567.564834
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 3296.587542,
-          "p95_ms": 6599.410083000001
+          "median_ms": 62.211625,
+          "p95_ms": 64.656375
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 3512320000.0,
+          "value": 3507666944.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -1336,7 +1336,7 @@
         "provider_inference_memory": null,
         "index_size": {
           "status": "measured",
-          "value": 33075.0,
+          "value": 33100.0,
           "unit": "bytes",
           "scope": "active revisions on disk"
         }
@@ -1379,7 +1379,7 @@
     "Synthetic fixture corpus and synthetic labels only: three synthetic images (two image files and the embedded page-1 image of us-mixed-003). These numbers exercise the image pipeline and do not measure medical retrieval quality. The owner corpus, labels, and fidelity sample are outstanding.",
     "Image-only mode: the frozen text queries are embedded through each model's text-query path and ranked against image records only. nDCG uses each query's frozen labels over every modality (PRD §5.3), so text-only relevant items lower the ideal-normalized score of an image-only ranking.",
     "Extraction fidelity is not reported: it measures text extraction, which an image run does not use (see reports/phase-2).",
-    "Measurement host under heavy unrelated load (load average about 34-39 on 8 logical CPUs from other desktop applications during these runs): latencies and throughput are indicative only and not comparable with the Phase 2 text runs.",
+    "Measurement host under moderate unrelated load (load average about 6 on 8 logical CPUs from other desktop applications) during these runs; earlier runs of the same configurations under heavy load (load average 25-39) had warm medians of 0.78-1.8 s (CLIP) and 1.9-3.3 s (SigLIP). Latencies and throughput are therefore indicative only and not comparable with the Phase 2 text runs.",
     "Single run on one machine; latencies are indicative, not statistically compared."
   ]
 }
