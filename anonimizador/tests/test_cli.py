@@ -1,6 +1,7 @@
 """End-to-end `anonimizador verify` on synthetic PDFs, with the real tools."""
 
 import os
+import zlib
 from pathlib import Path
 
 import pytest
@@ -286,3 +287,27 @@ def test_an_image_file_is_read_like_a_pdf_in_raw_bytes(outside_repo, capsys):
     assert "    term 1: raw=1\n" in out and "term 2" not in out
     assert "possible identifiers (patterns): cpf=1" in out
     assert "Zuleo" not in out and "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_a_leftover_word_around_a_comment_and_a_spaced_phone_are_found(outside_repo, capsys):
+    # Regression (Grok G0-44, G0-45), end to end: an unreferenced Flate stream draws a
+    # short name around a commented string and a phone whose space is drawn at a move.
+    old = zlib.compress(
+        b"BT (Zu) Tj % (XX)\n (leo) Tj ET\nBT (11) Tj 20 0 Td ( 98765-4321) Tj ET\n"
+    )
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(
+        build_pdf(b"BT /F1 12 Tf 72 700 Td (Assunto) Tj ET\n", b"")
+        + b"9 0 obj << /Filter /FlateDecode >> stream\n"
+        + old
+        + b"endstream endobj\n"
+    )
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\nZulea\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out and "term 2" not in out
+    assert "possible identifiers (patterns): phone=1" in out
+    assert "Zuleo" not in out and "987" not in out and "432" not in out

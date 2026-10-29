@@ -448,3 +448,61 @@ def test_a_stream_whose_keyword_ends_with_cr_alone_is_inflated():
         data = page + b"9 0 obj << /Filter /FlateDecode >> stream" + eol + body + b"endstream\n"
         assert raw_count("Zuleo", data) == 1, eol
         assert raw_count("Zulea", data) == 0, eol
+
+
+def test_strings_that_are_not_drawn_stay_out_of_a_drawn_word():
+    # Regression (Grok G0-44): a string in a comment, or a dictionary value, was spliced
+    # between the pieces of a drawn word, so a short name counted 0 in raw bytes.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    for data in (
+        b"BT [(Z) -2 (u) -2 (l) % (XX)\n -2 (e) -2 (o)] TJ ET",
+        b"BT (Zu) Tj % (XX)\n (leo) Tj ET",
+        b"BT (Zu) Tj % <4142>\n (leo) Tj ET",
+        b"BT (Zu) Tj /Span << /Lang (pt) >> BDC (leo) Tj EMC ET",
+        b"BT (Zu) Tj /Span << /Alt <4142> /P << /Q (r) >> >> BDC (leo) Tj EMC ET",
+        # Without a string, as before.
+        b"BT [(Z) -2 (u) -2 (l) % nota\n -2 (e) -2 (o)] TJ ET",
+        b"BT (Zu) Tj /Span << /MCID 1 >> BDC (leo) Tj EMC ET",
+    ):
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
+        stream = b"9 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(data)
+        assert raw_count("Zuleo", page + stream + b"endstream\n") == 1, data
+    # A longer word, which needs no boundary, is whole too.
+    assert raw_count("Quirvo", b"BT (Qui) Tj % (XX)\n (rvo) Tj ET") == 1
+    # A string only a comment holds is still text of the file.
+    assert raw_count("Zul\xe9o", b"BT (Laudo) Tj % (Zul\\351o)\nET") == 1
+    assert raw_count("Zul\xe9o", b"BT (Laudo) Tj % <5A756CE96F>\nET") == 1
+    # A dictionary left open by binary data ends at the stream keyword.
+    data = b"<< \x8f\x02 endstream\nBT (Zu) Tj 7 0 Td (leo) Tj ET"
+    assert pdf_string_views([data]).drawn == "Zuleo"
+
+
+def test_a_number_whose_space_is_drawn_at_a_move_is_a_pattern_hint():
+    # Regression (Grok G0-45): the space in a phone or a CPF, drawn at the edge of a
+    # piece beside a move, was dropped from every join.
+    def hints(data: bytes) -> dict[str, int]:
+        raw = raw_readings(data)
+        return count_patterns(raw.strings, raw.joins, raw.drawn)
+
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    for data, kind in (
+        (b"BT (11) Tj 20 0 Td ( 98765-4321) Tj ET", "phone"),
+        (b"BT (11) Tj 20 0 Td (98765-4321) Tj ET", "phone"),
+        (b"BT (11) Tj 20 0 Td ( ) Tj 4 0 Td (98765-4321) Tj ET", "phone"),
+        (b"BT (123.456.789- ) Tj 0 -14 Td (09) Tj ET", "cpf"),
+        (b"BT [(123.456.789-) -300 (09)] TJ ET", "cpf"),
+    ):
+        assert hints(data) == {kind: 1}, data
+        stream = b"9 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(data)
+        assert hints(page + stream + b"endstream\n") == {kind: 1}, data
+    # Numbers with a word between them, or a space on each side of the move, make no
+    # number.
+    assert hints(b"BT (Lote 123.456) Tj 9 0 Td ( mg 789-09) Tj ET") == {}
+    assert hints(b"BT (11 ) Tj 20 0 Td ( 98765-4321) Tj ET") == {}
+    assert mixed_readings(f"a 11 {AMBIGUOUS} 9876 x") == " 9876\n11  9876"
+    # One space at a boundary joins; two spaces end the join.
+    assert mixed_readings(f"Zu{AMBIGUOUS}  {AMBIGUOUS}leo") == "Zu \nleo"
+    # A join starts after the last space too, so a long last word uses up no length.
+    long = f"Telefone: {AMBIGUOUS}(11){AMBIGUOUS}98765-4321"
+    assert "(11)98765-4321" in mixed_readings(long).split("\n")
