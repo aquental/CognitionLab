@@ -6,6 +6,7 @@ files by position unless asked otherwise.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import tempfile
@@ -98,6 +99,13 @@ def raise_error(error: OSError) -> None:
     raise error
 
 
+class BrokenLinkError(OSError):
+    """A directory entry that leads nowhere (a missing target, a link loop)."""
+
+    def __init__(self) -> None:
+        super().__init__(errno.ENOENT, "a symbolic link leads nowhere")
+
+
 def relative(path: str, top: str) -> str:
     return os.path.relpath(path, top).replace(os.sep, "/")
 
@@ -119,9 +127,13 @@ def scan(top: str) -> list[CorpusFile]:
             continue
         first[real] = relative(root, top)
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-        for name in sorted(names):
-            if not name.startswith(".") and os.path.splitext(name)[1].lower() in SUFFIXES:
-                path = os.path.join(root, name)
+        for name in sorted(n for n in names if not n.startswith(".")):
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                # os.walk lists a link it cannot follow as a file, whatever its name:
+                # what it should reach was never searched (Grok G0-11).
+                raise BrokenLinkError
+            if os.path.splitext(name)[1].lower() in SUFFIXES:
                 found.append((path, relative(path, top)))
     files = []
     for path, name in found:
@@ -134,30 +146,43 @@ def scan(top: str) -> list[CorpusFile]:
     return files
 
 
+def merge(known: CorpusFile | None, file: CorpusFile) -> CorpusFile:
+    """One file reached by several arguments: the first name stays its name, and every
+    other name becomes an alias, so no argument order hides a directory name (Grok
+    G0-13)."""
+    if known is None:
+        return file
+    names = [file.name, *file.aliases, *known.aliases]
+    aliases = tuple(dict.fromkeys(n for n in names if n != known.name))
+    return CorpusFile(known.path, known.name, aliases)
+
+
 def collect(paths: list[str]) -> list[CorpusFile]:
     """The PDF, PNG, and JPEG files named or found under directories (hidden entries
     skipped), in path order. A file found under a directory is named by its path
     relative to that directory, so a name in a subdirectory is searched too (Grok
     G4-6); a file named directly is named by its file name."""
-    files: dict[str, CorpusFile] = {}
+    files: dict[str, CorpusFile] = {}  # real path -> the file
     for position, path in enumerate(paths, start=1):
         if os.path.isdir(path):
             try:
-                for file in scan(path):
-                    files.setdefault(file.path, file)
+                found = scan(path)
             except OSError as e:
                 # The message of an OSError holds the path: report its reason only.
                 reason = e.strerror or type(e).__name__
                 raise VerifyError(
-                    f"cannot list a directory under argument {position} ({reason})"
+                    f"cannot read everything under argument {position} ({reason})"
                 ) from None
         elif os.path.isfile(path):
-            files.setdefault(path, CorpusFile(path, os.path.basename(path)))
+            found = [CorpusFile(path, os.path.basename(path))]
         else:
             raise VerifyError(f"not a file or directory: argument {position}")
+        for file in found:
+            real = os.path.realpath(file.path)
+            files[real] = merge(files.get(real), file)
     if not files:
         raise VerifyError("no PDF, PNG, or JPEG file to check")
-    return [files[p] for p in sorted(files)]
+    return sorted(files.values(), key=lambda f: f.path)
 
 
 def read(file: CorpusFile, options: Options, pool: Executor) -> Reading:

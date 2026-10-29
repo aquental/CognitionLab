@@ -2,13 +2,14 @@
 
 import os
 import re
+import zlib
 from pathlib import Path
 
 import pytest
 from conftest import check_report_privacy
 
 from anonimizador import verify
-from anonimizador.channels import Reading
+from anonimizador.channels import Reading, raw_texts
 from anonimizador.verify import CorpusFile, Options, VerifyError, check_file, collect
 
 TERM = "Fulano Ficticio"
@@ -34,7 +35,7 @@ def test_a_directory_that_cannot_be_listed_is_refused_without_its_name(tmp_path:
             collect([str(root)])
     finally:
         locked.chmod(0o755)
-    assert str(error.value).startswith("cannot list a directory under argument 1 (")
+    assert str(error.value).startswith("cannot read everything under argument 1 (")
     assert "locked" not in str(error.value) and str(tmp_path) not in str(error.value)
 
 
@@ -104,3 +105,48 @@ def test_a_failed_privacy_check_names_counts_and_positions_only():
         check_report_privacy("[1] ok\nsicrano\n", {"beltrano"}, REPORT)
     assert str(error.value) == "report line(s) [1] have an unexpected shape"
     check_report_privacy("[1] ok\n", {"beltrano"}, REPORT)
+
+
+def test_a_link_that_leads_nowhere_is_refused_without_its_name(tmp_path: Path):
+    # Regression (Grok G0-11): os.walk listed a dangling directory link as a file, and
+    # without a corpus suffix it was dropped, so the clean file beside it was "ok".
+    root = tmp_path / "corpus"
+    pdf(root / "clean.pdf")
+    (root / "Zuleo").symlink_to(tmp_path / "unmounted", target_is_directory=True)
+    with pytest.raises(VerifyError) as error:
+        collect([str(root)])
+    message = str(error.value)
+    assert message == "cannot read everything under argument 1 (a symbolic link leads nowhere)"
+    loop = tmp_path / "looped"
+    pdf(loop / "clean.pdf")
+    (loop / "self").symlink_to(loop / "self")
+    with pytest.raises(VerifyError, match="leads nowhere"):
+        collect([str(loop)])
+
+
+def test_every_argument_that_reaches_a_file_names_it(tmp_path: Path):
+    # Regression (Grok G0-13): the first argument's name was kept, so checking a
+    # subfolder before its parent hid the subfolder's name.
+    root = tmp_path / "corpus"
+    clean = pdf(root / "Zuleo" / "clean.pdf")
+    for order in ([root / "Zuleo", root], [root, root / "Zuleo"], [clean, root]):
+        files = collect([str(p) for p in order])
+        assert len(files) == 1
+        assert "Zuleo/clean.pdf" in (files[0].name, *files[0].aliases), order
+
+
+def test_a_short_name_left_only_in_raw_bytes_is_found(monkeypatch):
+    # Regression (Grok G0-10), through the raw readings of real byte layouts.
+    stream = zlib.compress("Zuleo".encode("utf-16-le"))
+    for data in (
+        "Zuleo".encode("utf-16-le"),
+        b"%PDF-1.4\n<< /Author (Zuleo) >>\n",
+        b"%PDF-1.4\n1 0 obj << >> stream\n" + stream + b"endstream\n",
+    ):
+        reading = Reading()
+        reading.texts["raw"] = raw_texts(data)
+        monkeypatch.setattr(verify, "read", lambda *_, r=reading: r)
+        file = CorpusFile("x.pdf", "x.pdf")
+        for term, expected in (("Zuleo", [1]), ("Zulea", [])):
+            result = check_file(1, file, [verify.Term(term)], Options(use_ocr=False), None)
+            assert [hit.counts["raw"] for hit in result.hits] == expected, (data[:12], term)

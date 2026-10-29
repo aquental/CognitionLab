@@ -93,3 +93,12 @@ def test_a_terms_file_that_is_not_utf8_is_refused_without_its_bytes(outside_repo
     with pytest.raises(TermsError, match="not UTF-8") as error:
         load_terms(str(terms))
     assert "0xe7" not in str(error.value) and "position" not in str(error.value)
+
+
+def test_terms_of_four_letters_or_more_are_searched_in_raw_bytes():
+    # Regression (Grok G0-10): every word term under 6 letters was left out of raw
+    # bytes, so a leftover short name (an old info string, UTF-16 metadata) was "ok".
+    assert Term("Zuleo").searchable_in_binary
+    assert Term("Rosa").searchable_in_binary
+    # Three letters match binary data by chance (see RAW_MIN_LENGTH).
+    assert not Term("Ana").searchable_in_binary

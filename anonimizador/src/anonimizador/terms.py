@@ -31,6 +31,11 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 # Terms whose letters-and-digits form is at least this long are matched without
 # spaces or punctuation; shorter ones need whole words.
 COMPACT_MIN = 6
+# Terms with fewer letters and digits than this are not searched in raw bytes: binary
+# data holds short letter runs by chance. Measured on the synthetic fixtures (0.5 MB of
+# PDF and image bytes), 9 of 10 three-letter names matched by chance and no name of 4
+# letters or more did (Grok G0-10).
+RAW_MIN_LENGTH = 4
 # Terms with at least this many digits are matched by their digits alone, whatever
 # label or punctuation surrounds them ("CPF 123.456.789-09" is its digits).
 NUMERIC_MIN_DIGITS = 5
@@ -88,9 +93,9 @@ class Term:
 
     @property
     def searchable_in_binary(self) -> bool:
-        """Short word terms are not searched in raw bytes: binary data is full of short
-        letter runs."""
-        return self.numeric or self.compact is not None
+        """Terms shorter than `RAW_MIN_LENGTH` are not searched in raw bytes: binary
+        data is full of short letter runs."""
+        return self.numeric or len(compact(self.raw)) >= RAW_MIN_LENGTH
 
     def count(self, text: str) -> int:
         """Occurrences of the term in `text`."""

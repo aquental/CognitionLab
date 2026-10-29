@@ -201,7 +201,7 @@ def test_an_unlisted_directory_fails_the_run(terms, outside_repo, capsys):
         locked.chmod(0o755)
     out = capsys.readouterr()
     assert code == EXIT_USAGE
-    assert "cannot list a directory under argument 1" in out.err
+    assert "cannot read everything under argument 1" in out.err
     assert "ok" not in out.out and "locked" not in out.out + out.err
 
 
