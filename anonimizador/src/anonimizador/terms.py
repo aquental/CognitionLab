@@ -87,6 +87,7 @@ class Term:
     numeric: bool = field(init=False)
     compact: str | None = field(init=False)
     words: str = field(init=False)
+    word_pattern: re.Pattern[str] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         digits = re.sub(r"\D", "", self.raw)
@@ -97,6 +98,9 @@ class Term:
         object.__setattr__(self, "numeric", len(digits) >= NUMERIC_MIN_DIGITS)
         object.__setattr__(self, "compact", letters if len(letters) >= COMPACT_MIN else None)
         object.__setattr__(self, "words", words(self.raw))
+        # A lookahead does not consume the space after a match, which the next adjacent
+        # match needs: "a a" holds two "a" (Grok G0-28).
+        object.__setattr__(self, "word_pattern", re.compile(f"(?={re.escape(self.words)})"))
 
     @property
     def searchable_in_binary(self) -> bool:
@@ -113,7 +117,7 @@ class Term:
         if self.compact:
             return compact(text).count(self.compact)
         if self.words.strip():
-            return words(text).count(self.words)
+            return len(self.word_pattern.findall(words(text)))
         return 0
 
 

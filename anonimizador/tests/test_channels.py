@@ -227,3 +227,43 @@ def test_a_number_drawn_glyph_by_glyph_is_a_pattern_hint():
     ):
         assert hints(data) == {"cpf": 1}, data
     assert hints(b"BT [(123)(.)(456)(.)(789)(-)(0)] TJ ET") == {}
+
+
+def glyphs(word: str) -> bytes:
+    """A word drawn glyph by glyph in a TJ array."""
+    return b"[" + b" -2 ".join(b"(" + bytes([c]) + b")" for c in word.encode()) + b"] TJ"
+
+
+def test_a_horizontal_move_is_read_both_as_a_break_and_as_glyph_positioning():
+    # Regression (Grok G0-25, G0-26): a horizontal Td or a Tm on the same baseline
+    # always joined, so two words drawn glyph by glyph became one. Without the glyph
+    # widths a move can be either, so both readings are searched.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    words = glyphs("Zuleo"), glyphs("Assunto")
+    td = b"BT /F1 12 Tf 72 700 Td " + words[0] + b" 20 0 Td " + words[1] + b" ET"
+    tm = b"BT 1 0 0 1 72 700 Tm " + words[0] + b" 1 0 0 1 200 700 Tm " + words[1] + b" ET"
+    for data in (td, tm):
+        assert count("Zuleo", data) == 1, data
+        assert count("Assunto", data) == 1, data
+        assert count("Zulea", data) == 0, data
+        stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
+        assert count("Zuleo", stream) == 1, data
+    # Glyph positioning stays a word: an ambiguous boundary adds a match, never hides one.
+    assert count("Zuleo", b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj ET") == 1
+
+
+def test_a_line_shown_with_a_quote_operator_continues_after_it():
+    # Regression (Grok G0-27): ' and " show the string before them on a new line, and
+    # the text after them continues that line; the break was put after the string.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    for data in (
+        b"BT 72 720 Td (Zu) ' (leo) Tj ET",
+        b"BT 72 720 Td (Zu) ' " + glyphs("leo") + b" ET",
+        b'BT 72 720 Td 0 0 (Zu) " (leo) Tj ET',
+    ):
+        assert count("Zuleo", data) == 1, data
+        assert count("Zulea", data) == 0, data
