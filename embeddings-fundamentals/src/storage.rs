@@ -114,7 +114,7 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> StoreError + '_ {
 const ASSETS_DIR: &str = "assets";
 
 /// `assets/<sha256 hex>.png` for an asset checksum.
-fn asset_uri(checksum: &Checksum) -> String {
+pub(crate) fn asset_uri(checksum: &Checksum) -> String {
     let hex = checksum
         .as_str()
         .strip_prefix("sha256:")
@@ -730,7 +730,9 @@ impl FsRecordStore {
     }
 
     /// Whether the active pointer of `source` names an intact revision: the records file
-    /// exists and its checksum equals the one recorded in the pointer.
+    /// exists, its checksum equals the one recorded in the pointer, and every asset its
+    /// records reference is present with bytes matching its name. An unchanged image
+    /// source whose asset was deleted or altered is therefore rebuilt (C3-1).
     ///
     /// # Errors
     ///
@@ -744,7 +746,14 @@ impl FsRecordStore {
             return Ok(false);
         };
         let dir = self.revision_dir(space, source, &pointer.revision_id);
-        Ok(Self::check_seal(&dir).is_ok_and(|(checksum, _)| checksum == pointer.records_checksum))
+        let Ok((checksum, records)) = Self::load_sealed(&dir) else {
+            return Ok(false);
+        };
+        Ok(checksum == pointer.records_checksum
+            && records
+                .iter()
+                .filter_map(|r| r.asset_uri.as_deref())
+                .all(|uri| self.read_asset(uri).is_ok()))
     }
 
     /// Active revisions of every source in `space`, sorted by source.

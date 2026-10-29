@@ -708,8 +708,9 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                 return Start::Done(report);
             }
             Ok(Some((active, false))) if active == revision => {
-                // The pointer names this revision but its records are missing or altered:
-                // rebuild it; `publish` quarantines the damaged directory.
+                // The pointer names this revision but its records or assets are missing
+                // or altered: rebuild it. `publish` quarantines a damaged directory, and
+                // an image run rewrites its content-addressed assets.
                 warn!(source_id = %entry.source_id, "active revision is damaged; rebuilding");
             }
             Ok(_) => {}

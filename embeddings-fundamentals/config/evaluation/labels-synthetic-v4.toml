@@ -18,7 +18,15 @@
 # make it name another image; the evaluator refuses an image label whose chunk does not
 # come from the anchored original. v2 stays checked in because the Phase 2 evidence
 # (reports/phase-2) was produced with it.
-version = "labels-synthetic-v3"
+#
+# v4 (2026-10-28, review finding C3-5): the judgments of v3 unchanged; every image label
+# also carries `asset_checksum`, the SHA-256 of the stored (metadata-free, upright,
+# flattened) asset it was written for. A file name and a PDF image number do not
+# identify pixels across source revisions, so the evaluator refuses an image label whose
+# chunk's asset has other content. The stored asset depends on the scrubber
+# (`assets::SCRUBBER_ID`); a scrubber change therefore also makes these labels refuse
+# until they are re-checked.
+version = "labels-synthetic-v4"
 query_set = "queries-v1"
 corpus = "synthetic"
 
@@ -138,6 +146,7 @@ note = "Findings section of the ultrasound report (OCR page)"
 query = "q07"
 item = "chest-001-p1-image-0"
 anchor = "chest-001.png"
+asset_checksum = "sha256:6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5"
 label = 2
 note = "Synthetic chest radiograph"
 
@@ -145,6 +154,7 @@ note = "Synthetic chest radiograph"
 query = "q08"
 item = "abd-us-001-p1-image-0"
 anchor = "abd-us-001.jpg"
+asset_checksum = "sha256:8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc"
 label = 2
 note = "Synthetic abdominal ultrasound image"
 
@@ -152,6 +162,7 @@ note = "Synthetic abdominal ultrasound image"
 query = "q08"
 item = "us-mixed-003-p1-image-0"
 anchor = "us-mixed-003.pdf#page=1&image=0"
+asset_checksum = "sha256:70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5"
 label = 2
 note = "Ultrasound image embedded in the ultrasound report"
 
@@ -173,6 +184,7 @@ note = "Title of the abdominal ultrasound report repeated on page 2, not an imag
 query = "q09"
 item = "us-mixed-003-p1-image-0"
 anchor = "us-mixed-003.pdf#page=1&image=0"
+asset_checksum = "sha256:70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5"
 label = 2
 note = "Image embedded in the ultrasound report"
 
@@ -180,6 +192,7 @@ note = "Image embedded in the ultrasound report"
 query = "q09"
 item = "abd-us-001-p1-image-0"
 anchor = "abd-us-001.jpg"
+asset_checksum = "sha256:8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc"
 label = 1
 note = "Abdominal ultrasound image not linked to the report"
 

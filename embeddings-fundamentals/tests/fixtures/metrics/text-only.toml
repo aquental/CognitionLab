@@ -1,6 +1,6 @@
 # Hand-derived labels of the top three text-only results per frozen query, for the
 # deterministic fixture index of tests/fixtures/evaluation/keywords.toml over the
-# synthetic corpus and config/evaluation/labels-synthetic-v3.toml.
+# synthetic corpus and config/evaluation/labels-synthetic-v4.toml.
 #
 # Scores are cosines of normalized keyword vectors (query keywords -> chunk keywords):
 # q01 hemoglobina: both hemoglobin rows 1.0 (label 2, 2); every other chunk 0.0

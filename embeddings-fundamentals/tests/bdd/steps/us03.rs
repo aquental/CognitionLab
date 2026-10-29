@@ -18,7 +18,7 @@ use super::eval_fixture::{self, repo};
 use crate::{LabWorld, SpaceOf, fixture};
 
 const QUERIES: &str = "config/evaluation/queries-v1.toml";
-const LABELS: &str = "config/evaluation/labels-synthetic-v3.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v4.toml";
 const IMAGE_ONLY_LABELS: &str = "tests/fixtures/evaluation/labels-images-only.toml";
 
 /// Checksum of a file computed here, independently of the library.

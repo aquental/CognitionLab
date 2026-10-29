@@ -1,8 +1,9 @@
 # Low-relevance fixture (US-03 "Report low relevance without hiding a completed
 # experiment"): only image items are relevant, so a text-only index can retrieve
 # nothing relevant. Every retrieved text chunk is unlabeled, which means label 0.
-# v2: image labels carry the anchor of their original image (see labels-synthetic-v3).
-version = "labels-images-only-v2"
+# v2: image labels carry the anchor of their original image; v3: and the checksum of
+# their stored asset (see labels-synthetic-v4).
+version = "labels-images-only-v3"
 query_set = "queries-v1"
 corpus = "synthetic"
 
@@ -10,6 +11,7 @@ corpus = "synthetic"
 query = "q07"
 item = "chest-001-p1-image-0"
 anchor = "chest-001.png"
+asset_checksum = "sha256:6737f7fae792224f5ccd27310a22c6f79a6d9a7d469ba0756a73223f30b8c7d5"
 label = 2
 note = "Synthetic chest radiograph"
 
@@ -17,6 +19,7 @@ note = "Synthetic chest radiograph"
 query = "q08"
 item = "abd-us-001-p1-image-0"
 anchor = "abd-us-001.jpg"
+asset_checksum = "sha256:8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc"
 label = 2
 note = "Synthetic abdominal ultrasound image"
 
@@ -24,5 +27,6 @@ note = "Synthetic abdominal ultrasound image"
 query = "q09"
 item = "us-mixed-003-p1-image-0"
 anchor = "us-mixed-003.pdf#page=1&image=0"
+asset_checksum = "sha256:70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5"
 label = 2
 note = "Image embedded in the ultrasound report"

@@ -5,15 +5,20 @@
 //! the input (EXIF, XMP, IPTC, ICC, PNG text chunks) by construction: the encoder only
 //! writes the image header, the pixel data, and the end marker. The stored asset is
 //! content-addressed by the SHA-256 of those bytes.
+//!
+//! Two pieces of metadata change what the image shows, so they are applied to the pixels
+//! before they are dropped: the EXIF orientation (the asset is stored upright, as a viewer
+//! displays the original) and transparency (the image is composited over opaque white,
+//! so pixels hidden under alpha 0 never become visible).
 
 use std::io::Cursor;
 
-use image::{ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbImage};
 
 use crate::ids::Checksum;
 
 /// Identity of the preparation step; part of the image-preparation fingerprint.
-pub const SCRUBBER_ID: &str = "decode-rgb8-png-v1";
+pub const SCRUBBER_ID: &str = "decode-orient-flatten-white-rgb8-png-v2";
 
 /// A decoded and re-encoded image.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +77,16 @@ impl MetadataScrubber {
                 )));
             }
         }
-        let decoded = reader
-            .decode()
-            .map_err(|e| AssetError::Decode(e.to_string()))?;
-        let rgb = decoded.to_rgb8();
+        let decode = |e: image::ImageError| AssetError::Decode(e.to_string());
+        let mut decoder = reader.into_decoder().map_err(decode)?;
+        let orientation = decoder.orientation().map_err(decode)?;
+        let mut decoded = DynamicImage::from_decoder(decoder).map_err(decode)?;
+        decoded.apply_orientation(orientation);
+        let rgb = if decoded.color().has_alpha() {
+            flatten_on_white(&decoded)
+        } else {
+            decoded.to_rgb8()
+        };
         let (width, height) = rgb.dimensions();
         if width == 0 || height == 0 {
             return Err(AssetError::Empty);
@@ -90,6 +101,20 @@ impl MetadataScrubber {
             height,
         })
     }
+}
+
+/// Composites an image with alpha over opaque white (8-bit, rounded).
+fn flatten_on_white(image: &DynamicImage) -> RgbImage {
+    let rgba = image.to_rgba8();
+    RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [r, g, b, a] = rgba.get_pixel(x, y).0;
+        let (a, white) = (u16::from(a), 255 - u16::from(a));
+        let blend = |c: u8| {
+            let mixed = (u16::from(c) * a + 255 * white + 127) / 255;
+            u8::try_from(mixed).unwrap_or(u8::MAX)
+        };
+        image::Rgb([blend(r), blend(g), blend(b)])
+    })
 }
 
 #[cfg(test)]
@@ -186,6 +211,121 @@ mod tests {
         };
         assert_eq!(pixels(&prepared.png), pixels(&original));
         assert_eq!(prepared.checksum, Checksum::of_bytes(&prepared.png));
+    }
+
+    fn decoded(png: &[u8]) -> RgbImage {
+        image::load_from_memory(png).expect("decode").to_rgb8()
+    }
+
+    #[test]
+    fn transparent_pixels_are_composited_over_white_not_revealed() {
+        // Regression (C3-2): a red pixel under alpha 0 must not become visible.
+        let rgba = image::RgbaImage::from_raw(
+            4,
+            1,
+            vec![
+                255, 0, 0, 0, // hidden red
+                0, 0, 255, 255, // opaque blue
+                0, 0, 0, 128, // half-transparent black
+                0, 255, 0, 0, // hidden green
+            ],
+        )
+        .expect("rgba");
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .expect("encode");
+        let prepared = MetadataScrubber.scrub(&png).expect("scrub");
+        let pixels: Vec<[u8; 3]> = decoded(&prepared.png).pixels().map(|p| p.0).collect();
+        // 0 * 128/255 + 255 * 127/255 = 127.
+        assert_eq!(
+            pixels,
+            [
+                [255, 255, 255],
+                [0, 0, 255],
+                [127, 127, 127],
+                [255, 255, 255]
+            ]
+        );
+    }
+
+    /// A JPEG of `width`×`height`, left half red and right half blue, with an EXIF
+    /// orientation tag inserted after the SOI marker.
+    fn oriented_jpeg(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        let image = RgbImage::from_fn(width, height, |x, _| {
+            if x < width / 2 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        let mut jpeg = Vec::new();
+        DynamicImage::ImageRgb8(image)
+            .write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
+            .expect("encode");
+        // TIFF little endian, one IFD entry: Orientation (0x0112), SHORT, count 1.
+        let mut exif = b"Exif\0\0II*\0".to_vec();
+        exif.extend_from_slice(&8_u32.to_le_bytes());
+        exif.extend_from_slice(&1_u16.to_le_bytes());
+        exif.extend_from_slice(&0x0112_u16.to_le_bytes());
+        exif.extend_from_slice(&3_u16.to_le_bytes());
+        exif.extend_from_slice(&1_u32.to_le_bytes());
+        exif.extend_from_slice(&orientation.to_le_bytes());
+        exif.extend_from_slice(&[0, 0]);
+        exif.extend_from_slice(&0_u32.to_le_bytes());
+        let len = u16::try_from(exif.len() + 2).expect("len").to_be_bytes();
+        [&jpeg[..2], &[0xFF, 0xE1], &len, &exif, &jpeg[2..]].concat()
+    }
+
+    fn is_red(p: image::Rgb<u8>) -> bool {
+        p.0[0] > 200 && p.0[2] < 60
+    }
+
+    fn is_blue(p: image::Rgb<u8>) -> bool {
+        p.0[2] > 200 && p.0[0] < 60
+    }
+
+    #[test]
+    fn the_exif_orientation_is_applied_before_it_is_dropped() {
+        // Regression (C3-3): stored upright, as an orientation-aware viewer shows it.
+        // Orientation 6 (rotate 90° clockwise): the left (red) column becomes the top.
+        let rotated = MetadataScrubber
+            .scrub(&oriented_jpeg(32, 16, 6))
+            .expect("scrub");
+        assert_eq!((rotated.width, rotated.height), (16, 32));
+        let pixels = decoded(&rotated.png);
+        assert!(
+            is_red(*pixels.get_pixel(8, 4)),
+            "{:?}",
+            pixels.get_pixel(8, 4)
+        );
+        assert!(
+            is_blue(*pixels.get_pixel(8, 28)),
+            "{:?}",
+            pixels.get_pixel(8, 28)
+        );
+        // Orientation 2 (mirror horizontally): blue on the left, red on the right.
+        let mirrored = MetadataScrubber
+            .scrub(&oriented_jpeg(32, 16, 2))
+            .expect("scrub");
+        assert_eq!((mirrored.width, mirrored.height), (32, 16));
+        let pixels = decoded(&mirrored.png);
+        assert!(
+            is_blue(*pixels.get_pixel(4, 8)),
+            "{:?}",
+            pixels.get_pixel(4, 8)
+        );
+        assert!(
+            is_red(*pixels.get_pixel(28, 8)),
+            "{:?}",
+            pixels.get_pixel(28, 8)
+        );
+        // Orientation 1 keeps the raster; the tag never survives.
+        let upright = MetadataScrubber
+            .scrub(&oriented_jpeg(32, 16, 1))
+            .expect("scrub");
+        assert!(is_red(*decoded(&upright.png).get_pixel(4, 8)));
+        assert_eq!(png_chunks(&rotated.png), ["IHDR", "IDAT", "IEND"]);
     }
 
     #[test]
