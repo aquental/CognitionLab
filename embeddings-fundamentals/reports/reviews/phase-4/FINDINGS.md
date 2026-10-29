@@ -84,3 +84,7 @@ NO FINDINGS. C4-1..C4-5 are confirmed closed. Next: Antigravity.
 ## Grok round 7 (`grok-round7.md`, reviewed `d0d99e8`)
 
 NO FINDINGS. Grok re-reviewed the whole phase after the A4-1 fix changed behavior it had reviewed. Its context compacted during the review, and it then read the rest of the inlined diff before giving its verdict. Next: Codex round 3, then Antigravity round 2 to confirm A4-1.
+
+## Codex round 3 (`codex-round3.md`, reviewed `6d42294`)
+
+NO FINDINGS. Codex re-reviewed the whole phase after the A4-1 fix. Next: Antigravity round 2, to confirm A4-1.
