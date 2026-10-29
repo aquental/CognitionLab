@@ -11,6 +11,7 @@
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
   "text": {
     "experiment_id": "p4-embed-anything-minilm",
+    "revisions": "06eeedf32793f190bbdea0c50c6821301a081a8e1f7a60c826bf2bd50cd0bbb2",
     "engine": "embed_anything",
     "engine_version": "0.7.1",
     "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -22,6 +23,7 @@
   },
   "image": {
     "experiment_id": "p4-clip-vit-b32",
+    "revisions": "f1bfabf2837f070383a35623ae950d151cb1e574352be3b935108a24b92e3fe7",
     "engine": "embed_anything",
     "engine_version": "0.7.1",
     "model_id": "openai/clip-vit-base-patch32",
@@ -849,20 +851,20 @@
   },
   "measurements": {
     "cold_start": {
-      "text_model_load_ms": 1090.747833,
-      "image_model_load_ms": 758.359333,
-      "first_query_ms": 37.034375000000004,
-      "total_ms": 1886.1415409999997
+      "text_model_load_ms": 1054.230417,
+      "image_model_load_ms": 741.656625,
+      "first_query_ms": 36.718917,
+      "total_ms": 1832.6059589999998
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 41.62975,
-      "p95_ms": 43.909749999999995
+      "median_ms": 39.745208,
+      "p95_ms": 45.038125
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 1876180992.0,
+      "value": 1866203136.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

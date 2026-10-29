@@ -40,13 +40,13 @@ Configurations differ in engine, weight format, or model, so differences are not
 
 | Experiment | Mode | Model(s) | Precision@3 | Hit@3 | nDCG@3 | Warm median ms | Warm p95 ms | Index size | Query-set cost |
 |---|---|---|---:|---:|---:|---:|---:|---|---|
-| p4-embed-anything-minilm | text-only | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 | 0.3333 | 0.5000 | 0.4093 | 15.61 | 17.10 | 165702 bytes | NotApplicable: local engine: no provider is billed |
-| p4-fastembed-minilm | text-only | Xenova/paraphrase-multilingual-MiniLM-L12-v2 | 0.3333 | 0.5000 | 0.4093 | 32.27 | 36.68 | 164840 bytes | NotApplicable: local engine: no provider is billed |
-| p4-fastembed-e5-base | text-only | intfloat/multilingual-e5-base | 0.4333 | 0.7000 | 0.5399 | 61.49 | 65.77 | 298563 bytes | NotApplicable: local engine: no provider is billed |
-| p4-clip-vit-b32 | image-only | openai/clip-vit-base-patch32 | 0.1667 | 0.3000 | 0.2407 | 34.61 | 37.13 | 23281 bytes | NotApplicable: local engine: no provider is billed |
-| p4-siglip-multilingual | image-only | google/siglip-base-patch16-256-multilingual | 0.1667 | 0.3000 | 0.2704 | 62.85 | 78.49 | 33100 bytes | NotApplicable: local engine: no provider is billed |
-| p4-combined-e5-base-siglip | combined | intfloat/multilingual-e5-base + google/siglip-base-patch16-256-multilingual | 0.4000 | 0.8000 | 0.5453 | 94.64 | 104.41 | 331663 bytes | text NotApplicable: local engine: no provider is billed; image NotApplicable: local engine: no provider is billed |
-| p4-combined-minilm-clip | combined | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 + openai/clip-vit-base-patch32 | 0.2667 | 0.6000 | 0.3399 | 41.63 | 43.91 | 188983 bytes | text NotApplicable: local engine: no provider is billed; image NotApplicable: local engine: no provider is billed |
+| p4-embed-anything-minilm | text-only | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 | 0.3333 | 0.5000 | 0.4093 | 16.02 | 17.67 | 165702 bytes | NotApplicable: local engine: no provider is billed |
+| p4-fastembed-minilm | text-only | Xenova/paraphrase-multilingual-MiniLM-L12-v2 | 0.3333 | 0.5000 | 0.4093 | 30.55 | 33.63 | 164840 bytes | NotApplicable: local engine: no provider is billed |
+| p4-fastembed-e5-base | text-only | intfloat/multilingual-e5-base | 0.4333 | 0.7000 | 0.5399 | 57.47 | 63.47 | 298563 bytes | NotApplicable: local engine: no provider is billed |
+| p4-clip-vit-b32 | image-only | openai/clip-vit-base-patch32 | 0.1667 | 0.3000 | 0.2407 | 33.94 | 42.30 | 23281 bytes | NotApplicable: local engine: no provider is billed |
+| p4-siglip-multilingual | image-only | google/siglip-base-patch16-256-multilingual | 0.1667 | 0.3000 | 0.2704 | 59.02 | 64.15 | 33100 bytes | NotApplicable: local engine: no provider is billed |
+| p4-combined-e5-base-siglip | combined | intfloat/multilingual-e5-base + google/siglip-base-patch16-256-multilingual | 0.4000 | 0.8000 | 0.5453 | 87.74 | 95.76 | 331663 bytes | text NotApplicable: local engine: no provider is billed; image NotApplicable: local engine: no provider is billed |
+| p4-combined-minilm-clip | combined | sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 + openai/clip-vit-base-patch32 | 0.2667 | 0.6000 | 0.3399 | 39.75 | 45.04 | 188983 bytes | text NotApplicable: local engine: no provider is billed; image NotApplicable: local engine: no provider is billed |
 
 ## Combined retrieval against its legs
 
@@ -54,10 +54,10 @@ Quality change relative to each leg run alone, and the latency the second leg an
 
 | Combined | Leg | Leg run | ΔPrecision@3 | ΔHit@3 | ΔnDCG@3 | Warm median ms (leg → combined) |
 |---|---|---|---:|---:|---:|---|
-| p4-combined-e5-base-siglip | text | p4-fastembed-e5-base | -0.0333 | +0.1000 | +0.0054 | 61.49 → 94.64 |
-| p4-combined-e5-base-siglip | image | p4-siglip-multilingual | +0.2333 | +0.5000 | +0.2749 | 62.85 → 94.64 |
-| p4-combined-minilm-clip | text | p4-embed-anything-minilm | -0.0667 | +0.1000 | -0.0694 | 15.61 → 41.63 |
-| p4-combined-minilm-clip | image | p4-clip-vit-b32 | +0.1000 | +0.3000 | +0.0992 | 34.61 → 41.63 |
+| p4-combined-e5-base-siglip | text | p4-fastembed-e5-base | -0.0333 | +0.1000 | +0.0054 | 57.47 → 87.74 |
+| p4-combined-e5-base-siglip | image | p4-siglip-multilingual | +0.2333 | +0.5000 | +0.2749 | 59.02 → 87.74 |
+| p4-combined-minilm-clip | text | p4-embed-anything-minilm | -0.0667 | +0.1000 | -0.0694 | 16.02 → 39.75 |
+| p4-combined-minilm-clip | image | p4-clip-vit-b32 | +0.1000 | +0.3000 | +0.0992 | 33.94 → 39.75 |
 
 ## Combined efficiency
 
@@ -65,18 +65,18 @@ A combined run ingests nothing: it searches the revisions its legs' runs pinned.
 
 | Experiment | Text model load ms | Image model load ms | First fused query ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |
 |---|---:|---:|---:|---:|---:|---:|---|---|---|
-| p4-combined-e5-base-siglip | 7359.5 | 2687.0 | 87.5 | 10134.0 | 94.64 | 104.41 | 6357270528 bytes | 331663 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p4-combined-minilm-clip | 1090.7 | 758.4 | 37.0 | 1886.1 | 41.63 | 43.91 | 1876180992 bytes | 188983 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-combined-e5-base-siglip | 6832.8 | 2717.8 | 84.3 | 9634.9 | 87.74 | 95.76 | 6372458496 bytes | 331663 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-combined-minilm-clip | 1054.2 | 741.7 | 36.7 | 1832.6 | 39.75 | 45.04 | 1866203136 bytes | 188983 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
 
 ## Efficiency
 
 | Experiment | Ingestion ms | ms/page | chunks/s | Batch latency ms | Embeds/s | Model load ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
-| p4-embed-anything-minilm | 2769.8 | 461.6 | 10.1 | 134.50 | 69.4 | 455.4 | 584.4 | 15.61 | 17.10 | 1672593408 bytes | 165702 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p4-fastembed-minilm | 2750.3 | 458.4 | 10.2 | 126.53 | 73.8 | 2386.9 | 2530.4 | 32.27 | 36.68 | 5566349312 bytes | 164840 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p4-fastembed-e5-base | 3344.8 | 557.5 | 8.4 | 312.47 | 29.9 | 8382.8 | 8743.1 | 61.49 | 65.77 | 6588727296 bytes | 298563 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p4-clip-vit-b32 | 345.4 | - | 8.7 | 50.35 | 19.9 | 808.2 | 860.1 | 34.61 | 37.13 | 699990016 bytes | 23281 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
-| p4-siglip-multilingual | 857.9 | - | 3.5 | 228.21 | 4.4 | 2587.7 | 2812.9 | 62.85 | 78.49 | 3550543872 bytes | 33100 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-embed-anything-minilm | 3052.0 | 508.7 | 9.2 | 167.03 | 55.9 | 1773.8 | 2016.5 | 16.02 | 17.67 | 1642168320 bytes | 165702 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-fastembed-minilm | 2736.0 | 456.0 | 10.2 | 122.24 | 76.4 | 3131.4 | 3276.1 | 30.55 | 33.63 | 5118296064 bytes | 164840 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-fastembed-e5-base | 3369.6 | 561.6 | 8.3 | 302.28 | 30.9 | 7397.5 | 7739.8 | 57.47 | 63.47 | 7233503232 bytes | 298563 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-clip-vit-b32 | 340.4 | - | 8.8 | 48.55 | 20.6 | 792.5 | 841.8 | 33.94 | 42.30 | 701464576 bytes | 23281 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
+| p4-siglip-multilingual | 821.7 | - | 3.7 | 219.56 | 4.6 | 2615.3 | 2837.7 | 59.02 | 64.15 | 3510992896 bytes | 33100 bytes | unavailable (inference runs on the local CPU; no GPU is used) |
 
 ## Cost and reliability
 
@@ -353,5 +353,5 @@ Score is the fused RRF score; the leg columns give each result's rank and cosine
 - OpenAI text-embedding-3-small is not in this comparison: OPENAI_API_KEY and owner permission for remote processing (remote_allowed) are outstanding. Its adapter is implemented and covered by deterministic tests only.
 - Combined retrieval fuses ranks with RRF (k = 60, ranks from 1, fusion depth all); raw scores of the two models are never compared. A combined run ingests nothing: it pins the revisions of its text run and image run in its own snapshot, so 'search --mode combined --experiment <id>' reproduces it (the search refuses a snapshot fused with other parameters or missing a leg). Its index size is the size of the revisions that snapshot pins.
 - On this corpus, fusion raises Hit@3 above every single leg (E5-base + SigLIP 0.80 vs 0.70 text-only and 0.30 image-only; MiniLM + CLIP 0.60 vs 0.50 and 0.30): on the image queries (q07-q09) relevant images reach the top 3, and on the laboratory queries (q01-q04) irrelevant images displace relevant text chunks. Precision@3 and nDCG@3 are NOT robust. With disjoint lists and depth all, the fused ranks 1-2 are the two leg winners (1/61 each) and rank 3 is one of the two runners-up (1/62 each), so the order of every fused tie between a text and an image item is decided by the record-id tie-break (PRD 6.6). Record ids hash (revision, chunk, space), and the chunking-rules revision r2 changed every text revision id without changing any chunk of this corpus. That alone moved E5-base + SigLIP from P@3 0.367 / nDCG@3 0.508 to 0.400 / 0.545, and MiniLM + CLIP from 0.300 / 0.388 to 0.267 / 0.340. Differences between combined and text-only quality on this corpus are therefore within tie-break noise. Low quality is a valid result; a relevance-aware cross-leg tie rule, weighted fusion, a score floor, or a smaller image depth are not evaluated here.
-- Latency was measured on a shared developer machine under moderate load (load average 4-11 during the runs; the last regeneration about 5-6); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.
+- Latency was measured on a shared developer machine under moderate load (load average 4-11 during the runs, the last regeneration included); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.
 - Extraction fidelity is reported for text runs only: it measures text extraction, which image runs and combined runs do not perform.

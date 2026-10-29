@@ -11,6 +11,7 @@
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
   "text": {
     "experiment_id": "p4-fastembed-e5-base",
+    "revisions": "3551b211438d5b4d52678a17130f34a502b3a6487a9bbe20d2a5962ad61046b4",
     "engine": "fastembed",
     "engine_version": "7.5.0",
     "model_id": "intfloat/multilingual-e5-base",
@@ -22,6 +23,7 @@
   },
   "image": {
     "experiment_id": "p4-siglip-multilingual",
+    "revisions": "b87afc6487eb7b9a9390c5ee9ba2fe8258d72ff02f6ecfe861c99f34c3a91dab",
     "engine": "embed_anything",
     "engine_version": "0.7.1",
     "model_id": "google/siglip-base-patch16-256-multilingual",
@@ -849,20 +851,20 @@
   },
   "measurements": {
     "cold_start": {
-      "text_model_load_ms": 7359.477833999999,
-      "image_model_load_ms": 2686.999584,
-      "first_query_ms": 87.497375,
-      "total_ms": 10133.974793
+      "text_model_load_ms": 6832.795292,
+      "image_model_load_ms": 2717.818084,
+      "first_query_ms": 84.267375,
+      "total_ms": 9634.880750999999
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 94.641084,
-      "p95_ms": 104.40724999999999
+      "median_ms": 87.740792,
+      "p95_ms": 95.757042
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 6357270528.0,
+      "value": 6372458496.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

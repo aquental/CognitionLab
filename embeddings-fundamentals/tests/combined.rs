@@ -13,13 +13,13 @@ use embeddings_fundamentals::embedding::deterministic::{
     DeterministicBuilder, DeterministicEmbedder,
 };
 use embeddings_fundamentals::embedding::{EmbeddingError, EmbeddingStrategy};
-use embeddings_fundamentals::evaluation::{Dataset, EvaluationMode};
+use embeddings_fundamentals::evaluation::{Dataset, EvalError, EvaluationMode, evaluate_combined};
 use embeddings_fundamentals::experiment::{
     self, CombinedInputs, ExperimentError, ExperimentInputs, Instruments, Tools,
 };
 use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
 use embeddings_fundamentals::fusion::FusionParams;
-use embeddings_fundamentals::ids::{Checksum, ExperimentId};
+use embeddings_fundamentals::ids::{Checksum, ExperimentId, Fingerprint};
 use embeddings_fundamentals::measurement::{FixedMemory, Hardware, ManualClock};
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep};
 use embeddings_fundamentals::report::{
@@ -535,6 +535,8 @@ async fn the_comparison_report_sets_combined_retrieval_beside_its_legs() {
         ),
         "{refused:?}"
     );
+    let combined_text_revisions = combined.text.revisions.clone();
+    let combined_for_revisions = combined.clone();
     let mut wrong_leg = combined;
     wrong_leg.text.embedding_space_id = f.image.embedding_space_id.clone();
     let refused = ComparisonReport::new(vec![f.text.clone(), f.image.clone()], vec![])
@@ -544,6 +546,73 @@ async fn the_comparison_report_sets_combined_retrieval_beside_its_legs() {
         matches!(refused, Err(ReportError::LegMismatch { leg: "text", .. })),
         "{refused:?}"
     );
+
+    // Regression (Codex C4-3): the same leg id and space over other revisions (another
+    // store, or other extraction or chunking), or a result that does not record its
+    // revisions, is not the run the combined leg searched.
+    assert!(f.text.revisions.is_some() && combined_text_revisions.is_some());
+    assert_eq!(f.text.revisions, combined_text_revisions);
+    for revisions in [Some(Fingerprint::of(&"other revisions").expect("fp")), None] {
+        let mut other_store = f.text.clone();
+        other_store.revisions = revisions;
+        let refused = ComparisonReport::new(vec![other_store, f.image.clone()], vec![])
+            .expect("report")
+            .with_combined(vec![combined_for_revisions.clone()]);
+        assert!(
+            matches!(
+                refused,
+                Err(ReportError::LegMismatch {
+                    leg: "text",
+                    reason: "over other or unrecorded revisions (another store, extraction, or chunking)",
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_combined_run_refuses_an_incomplete_or_unrecorded_leg() {
+    // Regression (Codex C4-1): a leg whose run failed a required source would make the
+    // combined evidence look complete.
+    let f = fixture().await;
+    let corpus = f.manifest.manifest_checksum.clone();
+    let path = f.store.root().join("experiments").join("text-run.json");
+    let original = std::fs::read_to_string(&path).expect("snapshot");
+    let mut json: serde_json::Value = serde_json::from_str(&original).expect("json");
+    assert_eq!(json["run_status"], "succeeded");
+    let mut permissions = std::fs::metadata(&path).expect("meta").permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test edits a snapshot file on purpose"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).expect("writable");
+
+    json["run_status"] = "incomplete".into();
+    std::fs::write(&path, json.to_string()).expect("write");
+    let refused = combine(&f, "c-1", ("text-run", "image-run"), &f.dataset, &corpus).await;
+    assert!(
+        matches!(&refused, Err(ExperimentError::Combination(m)) if m.contains("text-run is incomplete")),
+        "{refused:?}"
+    );
+
+    json.as_object_mut().expect("object").remove("run_status");
+    std::fs::write(&path, json.to_string()).expect("write");
+    let refused = combine(&f, "c-2", ("text-run", "image-run"), &f.dataset, &corpus).await;
+    assert!(
+        matches!(&refused, Err(ExperimentError::Combination(m)) if m.contains("records no run status")),
+        "{refused:?}"
+    );
+    // Neither refusal saved a combined snapshot.
+    for id in ["c-1", "c-2"] {
+        assert!(
+            !f.store
+                .experiment_exists(&id.parse().expect("id"))
+                .expect("exists")
+        );
+    }
 }
 
 #[tokio::test]
@@ -621,6 +690,40 @@ async fn a_combined_search_of_an_experiment_must_be_that_combined_run() {
         (text_adapter.calls().len(), image_adapter.calls().len()),
         calls,
         "the refusals embedded no query"
+    );
+
+    // Regression (Antigravity A4-1): the combined evaluation applies the same check
+    // before reading any record. A snapshot missing a leg used to read as an empty
+    // index and fail as an inapplicable label instead.
+    for (snapshot, params, why) in [
+        (&text_only, FusionParams::default(), "image leg"),
+        (&leg_snapshot, FusionParams::default(), "not a combined run"),
+        (&combined, other_k, "other parameters"),
+    ] {
+        let refused = evaluate_combined(
+            &f.store,
+            Leg {
+                space: &f.text.embedding_space_id,
+                embedder: &text_adapter,
+            },
+            Leg {
+                space: &f.image.embedding_space_id,
+                embedder: &image_adapter,
+            },
+            params,
+            &f.dataset,
+            Scope::Experiment(snapshot),
+        )
+        .await;
+        assert!(
+            matches!(&refused, Err(EvalError::Search(SearchError::SnapshotMismatch { reason, .. })) if reason.contains(why)),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        (text_adapter.calls().len(), image_adapter.calls().len()),
+        calls,
+        "the refused evaluations embedded no query"
     );
 }
 

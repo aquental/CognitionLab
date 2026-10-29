@@ -232,7 +232,7 @@ None for Phase 0.
 
 ## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
 
-**Status:** 🔄 IMPLEMENTED AND VALIDATED; adversarial reviews in progress (Grok → Codex → Antigravity). Grok rounds 1–4: G4-1..G4-4 closed, G4-5 moved to `anonimizador` with the verifier, G4-6 fixed. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+**Status:** ✅ APPROVED (2026-10-29). Grok rounds 1–7, Codex rounds 1–3, and Antigravity rounds 1–2 (with the `rust-dev` plugin) are complete. The final round of each reviewer (Grok 7 at `d0d99e8`, Codex 3 at `6d42294`, Antigravity 2 at `1349cc5`) reported NO FINDINGS. 14 findings (S4-1, S4-2, G4-1..G4-6, C4-1..C4-5, A4-1): G4-5 moved to `anonimizador` with the verifier and fixed there, the rest fixed here with regression tests; see `reports/reviews/phase-4/FINDINGS.md`. The per-phase review changelog is `REVISION.md`. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
@@ -252,6 +252,7 @@ None for Phase 0.
 | `pipeline::extract_pdf`: the per-page native/OCR selection as a public function, used by ingestion and by the real-exam tests | The tests exercise the same selection as ingestion without a manifest, and without bypassing the gate through `Pipeline::extract_source` |
 | Owner-requested corpus tools (2026-10-29). `draft-manifest` measures a corpus directory: checksums, pages with a usable text layer (same rule as ingestion), and kept images. It guesses `input_type`, writes no anonymization review, refuses flagged file names because the manifest is tracked, and never uses a flagged name as a `source_id`. `draft-labels` pools the top `--depth` results of every run for every frozen query, with anchors, asset checksums, and `label = "TODO"`, which does not parse until it is judged. `scripts/anonymization-verify.py` counts the owner's terms in the name, metadata, text layer, OCR, embedded images, and raw bytes, and prints counts only. `TESTS.md` documents anonymization, building the corpus, and what an automatic anonymizer would need | The owner corpus is the main outstanding input. The drafts remove the mechanical work (checksums, ids, anchors, asset checksums) without ever recording a review or a judgment. The verifier is a separate Python script that checks independently of the pipeline code. It catches the classic failed redaction, a box drawn over text that stays in the file |
 | `extract_pdf` reports each page through an `on_page` callback as it is extracted, and its error names the failing page (Grok G4-4) | A failed source must still show how far extraction got. The refactor in `b14c7d1` had moved page reports after full success |
+| Codex round 1 (C4-1..C4-5). The snapshot records the run status, and `combine` refuses an incomplete or unrecorded leg. The remote permission check is bound to the corpus actually searched: every searched snapshot must have indexed `--manifest`, and an active scope is refused for a remote engine. Results and combined legs record `revisions_fingerprint`, and a report pairs a leg with its reported run only over the same revisions. Draft errors name no path. The README review status is accurate | PLAN §4.3 (incomplete runs never look complete), PRD §11 (per-corpus remote permission), traceability of "combined against its legs", and no identifying data in messages |
 | BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
 
 ### Implementation
@@ -300,6 +301,7 @@ None for Phase 0.
 | PRD §12 deliverables and §13 criteria walked through with evidence links | [`reports/ACCEPTANCE.md`](../ACCEPTANCE.md) |
 
 ### Validation (local, 2026-10-29)
+- **Final validation at approval** (head `1349cc5` plus documentation): fmt and clippy `-D warnings` for every feature set ok; `cargo test`: 166 unit, 17 pipeline, 8 combined, 7 experiment, 4 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38/38, 35 required). `RUN_INTEGRATION=1` integration: **17 passed**. `RUN_SAMPLE_EXAMS=1` real exams (local only): **4 passed**. The items below record the validation at earlier review rounds.
 - fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
 - `cargo test`: 166 unit (incl. 9 fusion, 2 combined-config, and 5 draft tests), 16 pipeline (incl. the G4-4 regression), 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
 - Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
@@ -314,15 +316,15 @@ None for Phase 0.
 - Synthetic regressions for the two defects:
   - `anonymization::tests::identifier_like_filenames_are_flagged`;
   - `chunking::tests::a_table_header_no_row_uses_is_kept_as_text` (a mutant dropping unused headers fails it).
-- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 4–11; regenerated after the Grok round 1 fixes).
+- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 4–11; regenerated after the Codex round 1 fixes, which record run status and revisions).
   - Text and image metrics are identical to Phases 2 and 3:
     - MiniLM (both engines): 0.333 / 0.500 / 0.409;
     - E5-base: 0.433 / 0.700 / 0.540;
     - CLIP: 0.167 / 0.300 / 0.241;
     - SigLIP: 0.167 / 0.300 / 0.270.
   - Combined:
-    - E5-base + SigLIP: 0.400 / **0.800** / 0.545, warm median 95 ms (0.367 / 0.800 / 0.508 before the chunking-rules revision r2);
-    - MiniLM + CLIP: 0.267 / 0.600 / 0.340, warm median 42 ms (0.300 / 0.600 / 0.388 before r2).
+    - E5-base + SigLIP: 0.400 / **0.800** / 0.545, warm median 88 ms (0.367 / 0.800 / 0.508 before the chunking-rules revision r2);
+    - MiniLM + CLIP: 0.267 / 0.600 / 0.340, warm median 40 ms (0.300 / 0.600 / 0.388 before r2).
   - Fusion raises Hit@3 above every leg.
   - Its P@3 and nDCG@3 are within tie-break noise. Every fused tie joins a text and an image item, and the `record_id` tie-break (PRD §6.6) decides it. The r2 rules changed every text record id without changing any chunk, and that alone moved both combined configurations.
   - The report's limitations explain this per query. A relevance-aware cross-leg tie rule would be a PRD change and is not made here.
@@ -342,7 +344,6 @@ None for Phase 0.
 PLAN §2.3 deviations: none.
 
 ### Outstanding (not claimed)
-- Adversarial reviews (Grok → Codex → Antigravity).
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - Live OpenAI run (key and `remote_allowed`).
 - Latency on an idle host.
