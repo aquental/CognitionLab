@@ -612,42 +612,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 2781.693166,
+          "duration_ms": 3058.0872499999996,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 463.61552766666665,
-          "chunks_per_second": 10.065811837997662
+          "ms_per_page": 509.6812083333333,
+          "chunks_per_second": 9.156050076726885
         },
-        "ingestion_model_load_ms": 1114.6197499999998,
+        "ingestion_model_load_ms": 1656.4478330000002,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 406.669208,
-          "mean_batch_latency_ms": 135.55640266666668,
-          "items_per_second": 68.85202874764985,
+          "total_ms": 381.957625,
+          "mean_batch_latency_ms": 127.31920833333334,
+          "items_per_second": 73.30656116630739,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 1114.6197499999998,
-          "first_operation_ms": 163.146708,
+          "model_load_ms": 1656.4478330000002,
+          "first_operation_ms": 132.006667,
           "first_operation_items": 10,
-          "total_ms": 1277.7664579999998
+          "total_ms": 1788.4545000000005
         },
         "query_side_start": {
-          "model_load_ms": 417.216042,
-          "first_query_ms": 14.37225,
-          "total_ms": 431.588292
+          "model_load_ms": 435.2424999999999,
+          "first_query_ms": 18.035125,
+          "total_ms": 453.27762499999994
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 15.957875,
-          "p95_ms": 17.260166
+          "median_ms": 17.016625,
+          "p95_ms": 26.719583
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 1673330688.0,
+          "value": 1648328704.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -1417,42 +1417,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 2725.096417,
+          "duration_ms": 2883.735958,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 454.1827361666667,
-          "chunks_per_second": 10.274865808537005
+          "ms_per_page": 480.6226596666666,
+          "chunks_per_second": 9.709626820140375
         },
-        "ingestion_model_load_ms": 2235.124,
+        "ingestion_model_load_ms": 5037.7384999999995,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 369.295583,
-          "mean_batch_latency_ms": 123.09852766666666,
-          "items_per_second": 75.82002409165018,
+          "total_ms": 419.039375,
+          "mean_batch_latency_ms": 139.67979166666666,
+          "items_per_second": 66.81949637787619,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 2235.124,
-          "first_operation_ms": 144.493708,
+          "model_load_ms": 5037.7384999999995,
+          "first_operation_ms": 159.617333,
           "first_operation_items": 10,
-          "total_ms": 2379.617708
+          "total_ms": 5197.355833
         },
         "query_side_start": {
-          "model_load_ms": 2052.870916,
-          "first_query_ms": 29.927792,
-          "total_ms": 2082.798708
+          "model_load_ms": 4064.909167,
+          "first_query_ms": 42.63025,
+          "total_ms": 4107.539417
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 30.28825,
-          "p95_ms": 32.327458
+          "median_ms": 34.327999999999996,
+          "p95_ms": 39.103958
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 5566513152.0,
+          "value": 3375054848.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -2222,42 +2222,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 3414.120459,
+          "duration_ms": 3540.08725,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 569.0200765,
-          "chunks_per_second": 8.201233769063098
+          "ms_per_page": 590.0145416666667,
+          "chunks_per_second": 7.90940957740519
         },
-        "ingestion_model_load_ms": 6949.807667,
+        "ingestion_model_load_ms": 13171.713166,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 940.326875,
-          "mean_batch_latency_ms": 313.4422916666667,
-          "items_per_second": 29.77687944949994,
+          "total_ms": 1002.526916,
+          "mean_batch_latency_ms": 334.1756386666667,
+          "items_per_second": 27.929424689880346,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 6949.807667,
-          "first_operation_ms": 355.69516699999997,
+          "model_load_ms": 13171.713166,
+          "first_operation_ms": 375.829833,
           "first_operation_items": 10,
-          "total_ms": 7305.502834
+          "total_ms": 13547.542999
         },
         "query_side_start": {
-          "model_load_ms": 5948.28125,
-          "first_query_ms": 63.301833,
-          "total_ms": 6011.583083
+          "model_load_ms": 11029.784292,
+          "first_query_ms": 381.383875,
+          "total_ms": 11411.168167
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 57.986541,
-          "p95_ms": 61.670833
+          "median_ms": 65.697292,
+          "p95_ms": 87.97049999999999
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 7439958016.0,
+          "value": 5083480064.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -3027,42 +3027,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 341.384084,
+          "duration_ms": 372.527625,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 8.787755904871066
+          "chunks_per_second": 8.05309404906549
         },
-        "ingestion_model_load_ms": 801.452875,
+        "ingestion_model_load_ms": 834.4100840000001,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 148.354374,
-          "mean_batch_latency_ms": 49.451458,
-          "items_per_second": 20.221850688406395,
+          "total_ms": 157.601667,
+          "mean_batch_latency_ms": 52.533888999999995,
+          "items_per_second": 19.03533165039428,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 801.452875,
-          "first_operation_ms": 50.25983299999999,
+          "model_load_ms": 834.4100840000001,
+          "first_operation_ms": 55.350875,
           "first_operation_items": 1,
-          "total_ms": 851.7127079999999
+          "total_ms": 889.7609590000001
         },
         "query_side_start": {
-          "model_load_ms": 653.2080420000001,
-          "first_query_ms": 43.058833,
-          "total_ms": 696.2668750000001
+          "model_load_ms": 549.325334,
+          "first_query_ms": 32.214290999999996,
+          "total_ms": 581.539625
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 34.918625,
-          "p95_ms": 39.726709
+          "median_ms": 37.575458999999995,
+          "p95_ms": 62.1115
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 700317696.0,
+          "value": 700153856.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -3705,42 +3705,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 863.802333,
+          "duration_ms": 984.551209,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 3.473016783343186
+          "chunks_per_second": 3.047073603258355
         },
-        "ingestion_model_load_ms": 2596.7079169999997,
+        "ingestion_model_load_ms": 3100.321166,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 694.311541,
-          "mean_batch_latency_ms": 231.43718033333337,
-          "items_per_second": 4.3208269240047095,
+          "total_ms": 796.092542,
+          "mean_batch_latency_ms": 265.36418066666664,
+          "items_per_second": 3.7684061107559024,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 2596.7079169999997,
-          "first_operation_ms": 237.309542,
+          "model_load_ms": 3100.321166,
+          "first_operation_ms": 264.642625,
           "first_operation_items": 1,
-          "total_ms": 2834.0174589999997
+          "total_ms": 3364.963791
         },
         "query_side_start": {
-          "model_load_ms": 548.911042,
-          "first_query_ms": 57.488,
-          "total_ms": 606.399042
+          "model_load_ms": 603.563625,
+          "first_query_ms": 66.876875,
+          "total_ms": 670.4405
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 61.034291,
-          "p95_ms": 69.775916
+          "median_ms": 69.801667,
+          "p95_ms": 97.592083
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 3542630400.0,
+          "value": 3543334912.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -4642,20 +4642,20 @@
       },
       "measurements": {
         "cold_start": {
-          "text_model_load_ms": 6030.10775,
-          "image_model_load_ms": 2599.769541,
-          "first_query_ms": 83.218125,
-          "total_ms": 8713.095416
+          "text_model_load_ms": 12888.009667,
+          "image_model_load_ms": 2911.682292,
+          "first_query_ms": 110.437791,
+          "total_ms": 15910.12975
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 90.68575,
-          "p95_ms": 96.028
+          "median_ms": 98.245917,
+          "p95_ms": 117.226041
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 6693027840.0,
+          "value": 5356732416.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -4667,7 +4667,7 @@
           "status": "measured",
           "value": 331663.0,
           "unit": "bytes",
-          "scope": "active revisions of both legs on disk"
+          "scope": "revisions of both legs pinned by the combined snapshot, on disk"
         }
       },
       "cost": {
@@ -5546,20 +5546,20 @@
       },
       "measurements": {
         "cold_start": {
-          "text_model_load_ms": 1053.058542,
-          "image_model_load_ms": 769.3322919999999,
-          "first_query_ms": 37.643457999999995,
-          "total_ms": 1860.034292
+          "text_model_load_ms": 1116.234417,
+          "image_model_load_ms": 787.766875,
+          "first_query_ms": 39.315999999999995,
+          "total_ms": 1943.317292
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 40.992708,
-          "p95_ms": 49.314499999999995
+          "median_ms": 41.589625,
+          "p95_ms": 52.404125
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 1867087872.0,
+          "value": 1867563008.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -5571,7 +5571,7 @@
           "status": "measured",
           "value": 188983.0,
           "unit": "bytes",
-          "scope": "active revisions of both legs on disk"
+          "scope": "revisions of both legs pinned by the combined snapshot, on disk"
         }
       },
       "cost": {
@@ -5603,9 +5603,9 @@
   "notes": [
     "Synthetic fixture corpus and synthetic labels only (tests/fixtures/corpus, labels-synthetic-v4): 3 PDFs (28 text chunks) and 3 images. These numbers exercise the pipeline end to end and do not measure medical retrieval quality. The owner corpus, relevance labels, and fidelity sample are outstanding.",
     "OpenAI text-embedding-3-small is not in this comparison: OPENAI_API_KEY and owner permission for remote processing (remote_allowed) are outstanding. Its adapter is implemented and covered by deterministic tests only.",
-    "Combined retrieval fuses ranks with RRF (k = 60, ranks from 1, fusion depth all); raw scores of the two models are never compared. A combined run ingests nothing: it pins the revisions of its text run and image run in its own snapshot, so 'search --mode combined --experiment <id>' reproduces it. Its index size is the sum of both legs' active indexes.",
+    "Combined retrieval fuses ranks with RRF (k = 60, ranks from 1, fusion depth all); raw scores of the two models are never compared. A combined run ingests nothing: it pins the revisions of its text run and image run in its own snapshot, so 'search --mode combined --experiment <id>' reproduces it (the search refuses a snapshot fused with other parameters or missing a leg). Its index size is the size of the revisions that snapshot pins.",
     "On this corpus, fusion raises Hit@3 above every single leg (E5-base + SigLIP 0.80 vs 0.70 text-only, 0.30 image-only) but lowers Precision@3 and nDCG@3 below the text leg alone. With disjoint lists and depth all, the fused ranks 1-2 are the two leg winners and rank 3 is one of the two runners-up, chosen by the record-id tie-break (1/62 each). The image leg ranks all three images for every query, so on the laboratory queries (q01-q04) irrelevant images take ranks 2-3 from relevant text chunks, while on the image queries (q07-q09) relevant images reach the top 3 that text-only missed. Low quality is a valid result; weighted fusion, a score floor, or a smaller image depth are not evaluated here.",
-    "Latency was measured on a shared developer machine under moderate load (load average 3-5 during the runs); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.",
+    "Latency was measured on a shared developer machine under moderate load (load average 4-11 during the runs); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.",
     "Extraction fidelity is reported for text runs only: it measures text extraction, which image runs and combined runs do not perform."
   ]
 }

@@ -123,44 +123,23 @@ fn instruments() -> Instruments<ManualClock, FixedMemory> {
 async fn fixture() -> Fixture {
     let manifest =
         LoadedManifest::load(&repo("tests/fixtures/corpus/manifest.toml")).expect("manifest");
-    let extractor =
-        FixtureExtractor::from_dir(&repo("tests/fixtures/extraction")).expect("fixtures");
     let dir = tempfile::tempdir().expect("tmp");
     let store = Arc::new(FsRecordStore::open_writer(dir.path()).expect("store"));
     let dataset =
         Dataset::load(&repo("config/evaluation/queries-v1.toml"), &repo(LABELS)).expect("dataset");
-    let mut runs = Vec::new();
-    for (id, modality, builder) in [
-        ("text-run", Modality::Text, text_builder()),
-        ("image-run", Modality::Image, image_builder()),
-    ] {
-        let mut settings = IngestSettings::new(id.parse().expect("id"));
-        settings.modality = modality;
-        let result = experiment::run(
-            Tools {
-                text: &extractor,
-                ocr: &extractor,
-                images: &extractor,
-                sleeper: &NoSleep,
-            },
-            &store,
-            async || build(&builder),
-            &instruments(),
-            ExperimentInputs {
-                manifest: &manifest,
-                settings: &settings,
-                dataset: &dataset,
-                latency_repeats: NonZeroUsize::MIN,
-                price: None,
-                fidelity: None,
-            },
-        )
-        .await
-        .expect(id);
-        runs.push(result);
-    }
-    let image = runs.pop().expect("image run");
-    let text = runs.pop().expect("text run");
+    let mut text_settings = IngestSettings::new("text-run".parse().expect("id"));
+    text_settings.modality = Modality::Text;
+    let mut image_settings = IngestSettings::new("image-run".parse().expect("id"));
+    image_settings.modality = Modality::Image;
+    let text = run_leg(&store, &manifest, &dataset, &text_settings, &text_builder()).await;
+    let image = run_leg(
+        &store,
+        &manifest,
+        &dataset,
+        &image_settings,
+        &image_builder(),
+    )
+    .await;
     Fixture {
         _dir: dir,
         store,
@@ -169,6 +148,40 @@ async fn fixture() -> Fixture {
         text,
         image,
     }
+}
+
+/// One measured single-mode run of the fixture corpus into `store`.
+#[expect(clippy::expect_used, reason = "test helper")]
+async fn run_leg(
+    store: &Arc<FsRecordStore>,
+    manifest: &LoadedManifest,
+    dataset: &Dataset,
+    settings: &IngestSettings,
+    builder: &DeterministicBuilder,
+) -> ConfigurationResult {
+    let extractor =
+        FixtureExtractor::from_dir(&repo("tests/fixtures/extraction")).expect("fixtures");
+    experiment::run(
+        Tools {
+            text: &extractor,
+            ocr: &extractor,
+            images: &extractor,
+            sleeper: &NoSleep,
+        },
+        store,
+        async || build(builder),
+        &instruments(),
+        ExperimentInputs {
+            manifest,
+            settings,
+            dataset,
+            latency_repeats: NonZeroUsize::MIN,
+            price: None,
+            fidelity: None,
+        },
+    )
+    .await
+    .expect("leg run")
 }
 
 async fn combine(
@@ -531,4 +544,185 @@ async fn the_comparison_report_sets_combined_retrieval_beside_its_legs() {
         matches!(refused, Err(ReportError::LegMismatch { leg: "text", .. })),
         "{refused:?}"
     );
+}
+
+#[tokio::test]
+async fn a_combined_search_of_an_experiment_must_be_that_combined_run() {
+    // Regression (G4-1): an experiment scope is the combined run of these legs and
+    // fusion parameters, or the search is refused before any read or embedding; a leg
+    // can never silently drop out of the fusion.
+    let f = fixture().await;
+    let corpus = f.manifest.manifest_checksum.clone();
+    combine(
+        &f,
+        "combined-run",
+        ("text-run", "image-run"),
+        &f.dataset,
+        &corpus,
+    )
+    .await
+    .expect("combined run");
+    let load = |id: &str| {
+        f.store
+            .load_experiment(&id.parse().expect("id"))
+            .expect("snapshot")
+    };
+    let combined = load("combined-run");
+    let text_adapter = text_builder().build().expect("text");
+    let image_adapter = image_builder().build().expect("image");
+    let search = async |snapshot: &embeddings_fundamentals::storage::ExperimentSnapshot,
+                        params: FusionParams| {
+        search_combined(
+            &f.store,
+            Leg {
+                space: &f.text.embedding_space_id,
+                embedder: &text_adapter,
+            },
+            Leg {
+                space: &f.image.embedding_space_id,
+                embedder: &image_adapter,
+            },
+            params,
+            "radiografia",
+            3,
+            Scope::Experiment(snapshot),
+        )
+        .await
+    };
+    search(&combined, FusionParams::default())
+        .await
+        .expect("the combined run's own parameters");
+    let calls = (text_adapter.calls().len(), image_adapter.calls().len());
+    let other_k = FusionParams {
+        k: 1,
+        ..FusionParams::default()
+    };
+    let refused = search(&combined, other_k).await;
+    assert!(
+        matches!(refused, Err(SearchError::SnapshotMismatch { ref reason, .. }) if reason.contains("other parameters")),
+        "{refused:?}"
+    );
+    let leg_snapshot = load("text-run");
+    let refused = search(&leg_snapshot, FusionParams::default()).await;
+    assert!(
+        matches!(refused, Err(SearchError::SnapshotMismatch { ref reason, .. }) if reason.contains("not a combined run")),
+        "{refused:?}"
+    );
+    let mut text_only = combined.clone();
+    text_only
+        .revisions
+        .retain(|r| r.space == f.text.embedding_space_id);
+    let refused = search(&text_only, FusionParams::default()).await;
+    assert!(
+        matches!(refused, Err(SearchError::SnapshotMismatch { ref reason, .. }) if reason.contains("image leg")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (text_adapter.calls().len(), image_adapter.calls().len()),
+        calls,
+        "the refusals embedded no query"
+    );
+}
+
+/// Bytes of the files in the revision directories that `revisions` names, read from the
+/// store layout (PLAN §4.1: `<space>/revisions/<source>/<revision>/`).
+#[expect(clippy::expect_used, reason = "test helper")]
+fn pinned_bytes(root: &Path, revisions: &[embeddings_fundamentals::storage::RevisionRef]) -> u64 {
+    revisions
+        .iter()
+        .flat_map(|r| {
+            let dir = root
+                .join(r.space.as_str())
+                .join("revisions")
+                .join(r.source_id.as_str())
+                .join(r.revision_id.as_str());
+            std::fs::read_dir(dir).expect("revision dir")
+        })
+        .map(|e| e.expect("entry").metadata().expect("metadata").len())
+        .sum()
+}
+
+#[tokio::test]
+async fn a_combined_run_measures_the_index_it_pinned_not_the_active_one() {
+    // Regression (G4-3): after a later run publishes new text revisions, a combined run
+    // over the earlier text run reports the size of the revisions it scored.
+    let f = fixture().await;
+    let mut settings = IngestSettings::new("text-run-2".parse().expect("id"));
+    settings.chunking.truncation_enabled = true;
+    let rerun = run_leg(
+        &f.store,
+        &f.manifest,
+        &f.dataset,
+        &settings,
+        &text_builder(),
+    )
+    .await;
+    assert_eq!(rerun.embedding_space_id, f.text.embedding_space_id);
+    let corpus = f.manifest.manifest_checksum.clone();
+    let result = combine(
+        &f,
+        "combined-run",
+        ("text-run", "image-run"),
+        &f.dataset,
+        &corpus,
+    )
+    .await
+    .expect("combined run");
+    let snapshot = f
+        .store
+        .load_experiment(&"combined-run".parse().expect("id"))
+        .expect("snapshot");
+    let root = f.store.root();
+    let pinned = pinned_bytes(root, &snapshot.revisions);
+    let active = f
+        .store
+        .index_size_bytes(&f.text.embedding_space_id)
+        .expect("text active")
+        + f.store
+            .index_size_bytes(&f.image.embedding_space_id)
+            .expect("image active");
+    assert_ne!(
+        pinned, active,
+        "the re-run replaced the active text revisions"
+    );
+    match result.measurements.index_size {
+        embeddings_fundamentals::measurement::Observation::Measured { value, .. } => {
+            #[expect(clippy::cast_precision_loss, reason = "a few kilobytes")]
+            let pinned = pinned as f64;
+            assert!((value - pinned).abs() < 0.5, "{value} vs pinned {pinned}");
+        }
+        other @ embeddings_fundamentals::measurement::Observation::Unavailable { .. } => {
+            panic!("index size unavailable: {other:?}")
+        }
+    }
+}
+
+#[cfg(not(any(feature = "engine-embed-anything", feature = "engine-fastembed")))]
+#[test]
+fn a_combined_search_reads_its_experiment_before_loading_any_model() {
+    // Regression (G4-2): without the engine features, building either leg's model
+    // fails with "not compiled in". Reading the snapshot first refuses a missing
+    // experiment before that.
+    let dir = tempfile::tempdir().expect("tmp");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "search",
+            "--mode",
+            "combined",
+            "--config",
+            "config/experiments/combined-e5-base-siglip.toml",
+            "--store",
+        ])
+        .arg(dir.path())
+        .args(["--experiment", "no-such-run", "--query", "radiografia"])
+        .output()
+        .expect("run search");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("not compiled in"),
+        "a model was built before the snapshot was read: {stderr}"
+    );
+    assert!(stderr.contains("no-such-run"), "stderr: {stderr}");
 }

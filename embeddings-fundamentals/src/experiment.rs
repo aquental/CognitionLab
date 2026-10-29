@@ -585,7 +585,7 @@ where
         }
     }
     fingerprints.insert(
-        "fusion".to_owned(),
+        crate::retrieval::FUSION_FINGERPRINT.to_owned(),
         Fingerprint::of(&inputs.fusion).map_err(|e| ExperimentError::Combination(e.to_string()))?,
     );
     let snapshot = ExperimentSnapshot {
@@ -650,13 +650,13 @@ where
         || Observation::unavailable("getrusage is not available on this platform"),
         |b| Observation::bytes(b, "local process memory (ru_maxrss high-water mark)"),
     );
+    // The index that was scored: the revisions the combined snapshot pins, which later
+    // publishes in either space do not change.
     let index_bytes = {
-        let (store, text, image) = (Arc::clone(store), text_space.clone(), image_space.clone());
-        tokio::task::spawn_blocking(move || {
-            Ok::<_, StoreError>(store.index_size_bytes(&text)? + store.index_size_bytes(&image)?)
-        })
-        .await
-        .map_err(|e| ExperimentError::Task(e.to_string()))??
+        let (store, pinned) = (Arc::clone(store), snapshot.revisions.clone());
+        tokio::task::spawn_blocking(move || store.revisions_size_bytes(&pinned))
+            .await
+            .map_err(|e| ExperimentError::Task(e.to_string()))??
     };
     let text_execution = text_measured.capabilities().execution;
     let image_execution = image_measured.capabilities().execution;
@@ -713,7 +713,10 @@ where
             latency_repeats: inputs.latency_repeats.get(),
             peak_local_ram,
             gpu_memory,
-            index_size: Observation::bytes(index_bytes, "active revisions of both legs on disk"),
+            index_size: Observation::bytes(
+                index_bytes,
+                "revisions of both legs pinned by the combined snapshot, on disk",
+            ),
         },
         cost: CombinedCosts {
             text_query_set: billed(&text_info, text_execution, text_usage, inputs.text_price),
