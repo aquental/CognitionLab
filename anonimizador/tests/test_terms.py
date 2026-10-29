@@ -109,3 +109,12 @@ def test_patterns_allow_a_break_after_a_separator():
     assert count_patterns(["CPF 123.456.789-\n09"]) == {"cpf": 1}
     assert count_patterns(["CEP 01310-\n100"]) == {"cep": 1}
     assert count_patterns(["CPF 123.456.789-\n0"]) == {}
+
+
+def test_adjacent_occurrences_of_a_short_term_all_count():
+    # Regression (Grok G0-28): the space after one match was the space the next needed.
+    term = Term("Zuleo")
+    assert term.count("Zuleo") == 1
+    assert term.count("Zuleo Zuleo") == 2
+    assert term.count("Zuleo Zuleo Zuleo") == 3
+    assert Term("Zulea").count("Zuleo Zuleo") == 0
