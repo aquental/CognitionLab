@@ -7,7 +7,6 @@ as an error, never as an empty place: an unread channel proves nothing (Grok G4-
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import os
 import re
@@ -17,6 +16,8 @@ import zlib
 from collections.abc import Iterator
 from concurrent.futures import Executor
 from dataclasses import dataclass
+
+from anonimizador.pdfstreams import decoded_streams
 
 # The places searched, in report order.
 CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
@@ -103,7 +104,9 @@ class Reading:
         self.texts["raw"] = raw.texts
         self.blocks["raw"] = [block.texts for block in raw.blocks]
         if raw.unread:
-            self.errors.append(f"raw: {raw.unread} stream(s) with a filter that is not read")
+            self.errors.append(f"raw: {raw.unread} stream(s) cannot be decoded")
+        if raw.unclear_images:
+            self.errors.append(f"raw: {raw.unclear_images} inline image(s) end where it is unclear")
 
     @contextlib.contextmanager
     def channel(self, name: str) -> Iterator[None]:
@@ -128,14 +131,50 @@ def png_size(path: str) -> tuple[int, int]:
     return 0, 0
 
 
-def inflate_tail(body: bytes) -> bytes | None:
-    """The zlib stream that ends a zTXt or compressed iTXt chunk, if any."""
-    for start in range(len(body)):
-        try:
-            return zlib.decompress(body[start:])
-        except zlib.error:
-            continue
-    return None
+def png_compressed_text(kind: bytes, body: bytes) -> bytes | None:
+    """The inflated text of a zTXt chunk or a compressed iTXt chunk; None for an iTXt
+    chunk stored as it is. Raises `ValueError` when it cannot be inflated."""
+    keyword_end = body.find(b"\x00")
+    if keyword_end < 0:
+        raise ValueError("no keyword")
+    if kind == b"zTXt":
+        method, text = body[keyword_end + 1 : keyword_end + 2], body[keyword_end + 2 :]
+    else:
+        flag, method = (
+            body[keyword_end + 1 : keyword_end + 2],
+            body[keyword_end + 2 : keyword_end + 3],
+        )
+        language_end = body.find(b"\x00", keyword_end + 3)
+        translated_end = body.find(b"\x00", language_end + 1) if language_end >= 0 else -1
+        if translated_end < 0:
+            raise ValueError("no translated keyword")
+        if flag == b"\x00":
+            return None
+        text = body[translated_end + 1 :]
+    if method != b"\x00":
+        raise ValueError("unknown compression")
+    inflater = zlib.decompressobj()
+    try:
+        out = inflater.decompress(text)
+    except zlib.error:
+        raise ValueError("bad zlib data") from None
+    if not inflater.eof:
+        raise ValueError("truncated zlib data")
+    return out
+
+
+def png_text(data: bytes) -> tuple[list[bytes], int]:
+    """The inflated zTXt and compressed iTXt chunks of a PNG (tEXt is already raw), and
+    how many could not be inflated: an unread place, not an empty one (Codex C0-17)."""
+    texts, unread = [], 0
+    for kind, body in png_chunks(data):
+        if kind in (b"zTXt", b"iTXt"):
+            try:
+                if (text := png_compressed_text(kind, body)) is not None:
+                    texts.append(text)
+            except ValueError:
+                unread += 1
+    return texts, unread
 
 
 def png_chunks(data: bytes) -> Iterator[tuple[bytes, bytes]]:
@@ -146,17 +185,6 @@ def png_chunks(data: bytes) -> Iterator[tuple[bytes, bytes]]:
         length, kind = struct.unpack(">I4s", data[pos : pos + 8])
         yield kind, data[pos + 8 : pos + 8 + length]
         pos += 12 + length
-
-
-def png_text_chunks(data: bytes) -> list[bytes]:
-    """Inflated zTXt and compressed iTXt chunks of a PNG (tEXt is already raw)."""
-    out = []
-    for kind, body in png_chunks(data):
-        if kind in (b"zTXt", b"iTXt"):
-            inflated = inflate_tail(body)
-            if inflated is not None:
-                out.append(inflated)
-    return out
 
 
 # Runs of UTF-16 text (EXIF and Windows metadata): letters with a NUL beside each.
@@ -217,9 +245,10 @@ PDF_STRING_OPENER = re.compile(rb"[(<]")
 PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOTALL)
 # The bytes that nest a literal string: parentheses, and escapes, which do not.
 PDF_PAREN = re.compile(rb"\\.|[()]", re.DOTALL)
-# Where a stream starts or ends: the keywords as the file structure has them, not the
-# word in a text (`(upstream)`, Codex C0-5).
-STREAM_BOUNDARY = re.compile(rb">>\s*stream(?:\r\n|\r|\n)|(?<![A-Za-z])endstream(?![A-Za-z])")
+# Where a stream starts or ends: the keywords as the file structure has them (a
+# dictionary before `stream`, `endobj` after `endstream`), not the words in a text
+# (`(upstream)`, `(endstream)`, Codex C0-5).
+STREAM_BOUNDARY = re.compile(rb">>\s*stream(?:\r\n|\r|\n)|endstream[\s\x00]*endobj")
 # The longest literal string read with deeper nesting (Grok G0-47). Binary data pairs
 # its parentheses over any length; text strings are short.
 MAX_NESTED_LITERAL = 1024
@@ -239,6 +268,7 @@ PDF_STRUCTURE = re.compile(
 # any whitespace, or (searched for) after whitespace.
 INLINE_IMAGE_END = re.compile(rb"[\s\x00]*EI(?![^\s\x00])")
 INLINE_IMAGE_EI = re.compile(rb"[\s\x00]EI(?![^\s\x00])")
+INLINE_IMAGE_START = re.compile(rb"(?<![\w/])BI[\s\x00/]")
 # The entries of an inline image's dictionary that give its samples' size.
 INLINE_IMAGE_ENTRY = re.compile(
     rb"/(?P<key>[A-Za-z]+)[\s\x00]*"
@@ -469,30 +499,36 @@ def filtered_size(data: bytes, name: bytes) -> int | None:
     return None
 
 
-def inline_image_end(blob: bytes, head: re.Match[bytes]) -> int:
-    """Where an inline image ends: after its data, when "EI" follows it, since the data
-    may hold " EI " itself (Codex C0-4). Unfiltered samples are as many bytes as the
-    dictionary gives; filtered data ends at its filter's end-of-data mark. Otherwise
-    the image ends at the first "EI", or right after `ID` if there is none."""
+def inline_image_end(blob: bytes, head: re.Match[bytes]) -> tuple[int, bool]:
+    """Where an inline image ends, and whether that is clear: after its data, when "EI"
+    follows it, since the data may hold " EI " itself (Codex C0-4). Unfiltered samples
+    are as many bytes as the dictionary gives; filtered data ends at its filter's
+    end-of-data mark. Otherwise (a color space named in the resources, a filter whose
+    end is not marked) the image ends at the first "EI", which is clear only when no
+    other "EI" follows before the next image (Codex round 2)."""
     entries = inline_image_entries(head.group())
     if b"F" in entries:
         size = filtered_size(blob[head.end() :], entries[b"F"])
     else:
         size = samples_size(entries)
     if size is not None and (end := INLINE_IMAGE_END.match(blob, head.end() + size)):
-        return end.end()
-    if end := INLINE_IMAGE_EI.search(blob, head.end()):
-        return end.end()
-    return head.end()
+        return end.end(), True
+    if not (end := INLINE_IMAGE_EI.search(blob, head.end())):
+        return head.end(), False
+    following = INLINE_IMAGE_START.search(blob, end.end())
+    later = INLINE_IMAGE_EI.search(blob, end.end(), following.start() if following else len(blob))
+    return end.end(), later is None
 
 
-def drawn_spans(blob: bytes) -> list[PdfString]:
+def drawn_spans(blob: bytes) -> tuple[list[PdfString], int]:
     """The strings of `blob` a reader may draw: not in a comment, not in an inline
     image's samples, and not in a dictionary (a marked-content property such as
     `<< /Lang (pt) >> BDC`) (Grok G0-44). Only a `<<` that a `>>` closes opens a
-    dictionary, so a stray one in binary data hides nothing (Grok G0-46)."""
+    dictionary, so a stray one in binary data hides nothing (Grok G0-46). Also how many
+    inline images end where it is not clear."""
     ends = literal_ends(blob)
     tokens: list[tuple[str, PdfString | None]] = []
+    unclear = 0
     pos = 0
     while token := PDF_STRUCTURE.search(blob, pos):
         kind = token.lastgroup or ""
@@ -503,7 +539,8 @@ def drawn_spans(blob: bytes) -> list[PdfString]:
                 tokens.append((kind, span))
                 pos = span.end
         elif kind == "inline":
-            pos = inline_image_end(blob, token)
+            pos, clear = inline_image_end(blob, token)
+            unclear += not clear
         elif kind in ("open", "close", "stream"):
             tokens.append((kind, None))
     closed = closed_dictionaries([kind for kind, _ in tokens])
@@ -514,7 +551,7 @@ def drawn_spans(blob: bytes) -> list[PdfString]:
             depth += 1 if kind == "open" else -1
         elif span and not depth:
             spans.append(span)
-    return spans
+    return spans, unclear
 
 
 def closed_dictionaries(kinds: list[str]) -> set[int]:
@@ -558,19 +595,20 @@ def gap_joint(gap: bytes) -> str:
     return ""
 
 
-def drawn_text(blob: bytes) -> str:
+def drawn_text(blob: bytes) -> tuple[str, int]:
     """The strings of `blob` as drawn, with `AMBIGUOUS` wherever they might not be one
     word. Content streams often draw a word glyph by glyph (`[(Z) -2 (u)] TJ`), and a
     short term must be a whole word (Grok G0-19); a word space is often only a move
     (Grok G0-22). Strings that are not drawn are left out, and their gap is read like
-    any other (Grok G0-44). Line breaks inside a string are dropped."""
+    any other (Grok G0-44). Line breaks inside a string are dropped. Also how many
+    inline images end where it is not clear."""
     parts = []
-    spans = drawn_spans(blob)
+    spans, unclear = drawn_spans(blob)
     for index, span in enumerate(spans):
         if index:
             parts.append(gap_joint(blob[spans[index - 1].end : span.start]))
         parts.append(re.sub(r"[\r\n]", "", decode_pdf_string(span.value)))
-    return "".join(parts)
+    return "".join(parts), unclear
 
 
 def mixed_readings(marked: str) -> str:
@@ -622,6 +660,8 @@ class PdfStringViews:
     # One string per line read as PDFDocEncoding, where it differs from Latin-1 (text
     # strings such as an old `/Author`, Codex C0-7).
     pdfdoc: str
+    # Inline images whose end is not clear: what follows them may be misread.
+    unclear_images: int = 0
 
     @property
     def for_patterns(self) -> list[str]:
@@ -637,142 +677,30 @@ def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
     (`<FEFF005A…>`) or with octal escapes (`(Jo\\343o)`), the usual forms for a non-ASCII
     name, holds none of its letters in the bytes (Grok G0-14)."""
     lines, drawn, split, mixed, inner, pdfdoc = [], [], [], [], [], []
+    unclear = 0
     for blob in blobs:
         for span in pdf_string_spans(blob):
             text = decode_pdf_string(span.value)
             lines.append(text)
             if text == span.value.decode("latin-1"):
                 pdfdoc.append(text.translate(PDFDOC))
-        marked = drawn_text(blob)
+        marked, images = drawn_text(blob)
+        unclear += images
         drawn.append(marked.replace(AMBIGUOUS, ""))
         split.append(marked.replace(AMBIGUOUS, "\n"))
         mixed.append(mixed_readings(marked))
         inner.extend(
             decode_pdf_string(unescape_literal(m)) for m in PDF_INNER_LITERAL.findall(blob)
         )
-    return PdfStringViews(
-        *("\n".join(view) for view in (lines, drawn, split, mixed, inner, pdfdoc))
-    )
-
-
-# The start of a stream's data: the keyword ends with CRLF, LF, or (accepted by
-# readers) CR alone (Grok G0-43).
-STREAM_START = re.compile(rb"stream(?:\r\n|\r|\n)")
-# The start of an object, and a stream's filters (one name or an array of names).
-OBJECT_START = re.compile(rb"\d+[\s\x00]+\d+[\s\x00]+obj(?![A-Za-z])")
-STREAM_FILTER = re.compile(rb"/Filter[\s\x00]*(/[^\s\x00/\[\]<>()]+|\[[^\]]*\])")
-FILTER_NAME = re.compile(rb"/([^\s\x00/\[\]<>()]+)")
-# How far before its data a stream's dictionary is looked for.
-STREAM_DICTIONARY_SPAN = 4096
-
-
-def lzw_decode(data: bytes) -> bytes:
-    """LZW as PDF writes it: 9 to 12-bit codes, a clear code, and the code size growing
-    one code early (`EarlyChange` 1, the default)."""
-    out = bytearray()
-    table = [bytes([i]) for i in range(256)] + [b"", b""]
-    width, buffer, buffered, previous = 9, 0, 0, b""
-    for byte in data:
-        buffer, buffered = (buffer << 8) | byte, buffered + 8
-        while buffered >= width:
-            buffered -= width
-            code = buffer >> buffered
-            buffer &= (1 << buffered) - 1
-            if code == 256:
-                del table[258:]
-                width, previous = 9, b""
-                continue
-            if code == 257:
-                return bytes(out)
-            if code < len(table):
-                entry = table[code]
-            elif code == len(table) and previous:
-                entry = previous + previous[:1]
-            else:
-                raise ValueError("bad LZW code")
-            out += entry
-            if previous:
-                table.append(previous + entry[:1])
-            previous = entry
-            if len(table) + 1 >= 1 << width and width < 12:
-                width += 1
-    return bytes(out)
-
-
-def run_length_decode(data: bytes) -> bytes:
-    out = bytearray()
-    pos = 0
-    while pos < len(data) and (length := data[pos]) != 128:
-        if length < 128:
-            out += data[pos + 1 : pos + 2 + length]
-            pos += 2 + length
-        else:
-            out += data[pos + 1 : pos + 2] * (257 - length)
-            pos += 2
-    return bytes(out)
-
-
-def flate_decode(data: bytes) -> bytes:
-    # A decompressor object ignores the bytes after the end of the compressed data.
-    return zlib.decompressobj().decompress(data)
-
-
-# The filters a stream's data can be decoded with, by full and abbreviated name.
-STREAM_DECODERS = {
-    **dict.fromkeys((b"FlateDecode", b"Fl"), flate_decode),
-    **dict.fromkeys((b"ASCIIHexDecode", b"AHx"), lambda d: hex_string(d.split(b">")[0])),
-    **dict.fromkeys(
-        (b"ASCII85Decode", b"A85"),
-        lambda d: base64.a85decode(
-            d.split(b"~>")[0].strip().removeprefix(b"<~"), ignorechars=b" \t\n\r\v\f\x00"
-        ),
-    ),
-    **dict.fromkeys((b"LZWDecode", b"LZW"), lzw_decode),
-    **dict.fromkeys((b"RunLengthDecode", b"RL"), run_length_decode),
-}
-# Image codecs: their streams are images, which `pdfimages` extracts for OCR.
-IMAGE_FILTERS = frozenset(b"DCTDecode DCT JPXDecode JBIG2Decode CCITTFaxDecode CCF".split())
-
-
-def stream_filters(data: bytes, keyword: int) -> list[bytes]:
-    """The filters of the stream whose keyword starts at `keyword`, from the dictionary
-    before it (within its object)."""
-    window = data[max(0, keyword - STREAM_DICTIONARY_SPAN) : keyword]
-    objects = list(OBJECT_START.finditer(window))
-    window = window[objects[-1].end() :] if objects else window
-    filters = list(STREAM_FILTER.finditer(window))
-    return FILTER_NAME.findall(filters[-1].group(1)) if filters else []
+    views = ("\n".join(view) for view in (lines, drawn, split, mixed, inner, pdfdoc))
+    return PdfStringViews(*views, unclear_images=unclear)
 
 
 def raw_blobs(data: bytes) -> tuple[list[bytes], int]:
-    """The file bytes, every stream decoded, and PNG compressed text; and how many
-    streams have a filter that is not read. Every stream is tried as zlib data, its
-    dictionary or not; a chain of other filters (`[/ASCII85Decode /FlateDecode]`) is
-    decoded as the dictionary gives it (Codex C0-3). Image codecs are left to the
-    image channel; any other filter (`Crypt`, an unknown one) is counted as unread."""
-    blobs, unread = [data], 0
-    for match in STREAM_START.finditer(data):
-        start = match.end()
-        end = data.find(b"endstream", start)
-        if end < 0:
-            continue
-        body = data[start:end]
-        filters = stream_filters(data, match.start())
-        chain = IMAGE_FILTERS.isdisjoint(filters) and any(
-            STREAM_DECODERS.get(f) is not flate_decode for f in filters
-        )
-        if chain and not all(f in STREAM_DECODERS for f in filters):
-            unread += 1
-        elif chain:
-            with contextlib.suppress(ValueError, zlib.error):
-                decoded = body
-                for name in filters:
-                    decoded = STREAM_DECODERS[name](decoded)
-                blobs.append(decoded)
-        with contextlib.suppress(zlib.error):
-            blobs.append(flate_decode(body))
-    blobs.extend(png_text_chunks(data))
-    return blobs, unread
+    """The file bytes, every stream decoded through its filters (`pdfstreams`), and PNG
+    compressed text; and how many streams could not be decoded."""
+    streams, unread = decoded_streams(data)
+    return [data, *streams, *png_text(data)[0]], unread
 
 
 @dataclass(frozen=True)
@@ -798,8 +726,9 @@ class RawReading:
     joins: list[str]
     # PDF strings fully joined: searched for text patterns.
     drawn: list[str]
-    # Streams with a filter that is not read.
+    # Streams that cannot be decoded, and inline images whose end is not clear.
     unread: int = 0
+    unclear_images: int = 0
 
     @property
     def texts(self) -> list[str]:
@@ -824,7 +753,8 @@ def raw_readings(data: bytes) -> RawReading:
     ]
     joins = "\n".join(view.mixed for view in views)
     drawn = "\n".join(view.drawn for view in views)
-    return RawReading(blocks, strings, [joins], [drawn], unread)
+    unclear = sum(view.unclear_images for view in views)
+    return RawReading(blocks, strings, [joins], [drawn], unread, unclear)
 
 
 def raw_texts(data: bytes) -> list[str]:
@@ -842,14 +772,8 @@ def image_metadata(data: bytes) -> list[str]:
 def image_metadata_blocks(data: bytes) -> list[list[str]]:
     """Metadata blocks of an image, each read every way: PNG text and EXIF chunks;
     JPEG APPn and COM segments (EXIF, XMP, IPTC, comments)."""
-    blobs = []
-    for kind, body in png_chunks(data):
-        if kind in (b"tEXt", b"iTXt", b"eXIf"):
-            blobs.append(body)
-        if kind in (b"zTXt", b"iTXt"):
-            inflated = inflate_tail(body)
-            if inflated is not None:
-                blobs.append(inflated)
+    blobs = [body for kind, body in png_chunks(data) if kind in (b"tEXt", b"iTXt", b"eXIf")]
+    blobs.extend(png_text(data)[0])
     if data[:2] == b"\xff\xd8":
         pos = 2
         while pos + 4 <= len(data) and data[pos] == 0xFF:
@@ -907,16 +831,67 @@ def read_pdf(
     return reading
 
 
+# Channels per PNG color type, and the bit depths each allows.
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+# The seven passes of Adam7 interlacing: first column and row, column and row steps.
+ADAM7 = (
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+)
+
+
+def png_pixel_bytes(width: int, height: int, color: int, depth: int, interlaced: bool) -> int:
+    """The size of a PNG's filtered pixel data: each row of each pass, with its filter
+    byte."""
+    passes = ADAM7 if interlaced else ((0, 0, 1, 1),)
+    total = 0
+    for x, y, dx, dy in passes:
+        columns, rows = -(-(width - x) // dx), -(-(height - y) // dy)
+        if columns > 0 and rows > 0:
+            total += rows * (1 + -(-(columns * PNG_CHANNELS[color] * depth) // 8))
+    return total
+
+
 def png_is_whole(data: bytes) -> bool:
-    """A PNG signature, a header first, image data, and an end chunk within the bytes."""
-    kinds = []
-    pos = 8
-    for kind, body in png_chunks(data):
-        pos += 12 + len(body)
-        if pos > len(data):
+    """A PNG signature; chunks within the bytes, with their checksums; a valid header
+    first and an end chunk last; a palette when the colors need one; and image data
+    that inflates to exactly the pixels the header gives (Codex C0-9)."""
+    if data[:8] != PNG_SIGNATURE:
+        return False
+    chunks, pos = [], 8
+    while pos + 12 <= len(data) and (not chunks or chunks[-1][0] != b"IEND"):
+        length, kind = struct.unpack(">I4s", data[pos : pos + 8])
+        end = pos + 12 + length
+        if end > len(data):
             return False
-        kinds.append(kind)
-    return bool(kinds) and kinds[0] == b"IHDR" and b"IDAT" in kinds and kinds[-1] == b"IEND"
+        body = data[pos + 8 : end - 4]
+        if zlib.crc32(kind + body) != struct.unpack(">I", data[end - 4 : end])[0]:
+            return False
+        chunks.append((kind, body))
+        pos = end
+    kinds = [kind for kind, _ in chunks]
+    if not kinds or kinds[0] != b"IHDR" or kinds[-1] != b"IEND" or len(chunks[0][1]) != 13:
+        return False
+    width, height, depth, color, method, filtering, interlace = struct.unpack(
+        ">IIBBBBB", chunks[0][1]
+    )
+    if not (width and height) or depth not in PNG_DEPTHS.get(color, ()):
+        return False
+    if method or filtering or interlace > 1 or (color == 3 and b"PLTE" not in kinds):
+        return False
+    expected = png_pixel_bytes(width, height, color, depth, bool(interlace))
+    inflater = zlib.decompressobj()
+    try:
+        pixels = inflater.decompress(b"".join(b for k, b in chunks if k == b"IDAT"), expected + 1)
+    except zlib.error:
+        return False
+    return inflater.eof and len(pixels) == expected
 
 
 def jpeg_is_whole(data: bytes) -> bool:
@@ -951,6 +926,8 @@ def read_image(path: str, name: str, lang: str, use_ocr: bool, timeout: int) -> 
         data = f.read()
     if not (png_is_whole(data) or jpeg_is_whole(data)):
         reading.errors.append("file: not a whole PNG or JPEG image")
+    if unread := png_text(data)[1]:
+        reading.errors.append(f"metadata: {unread} compressed PNG text chunk(s) cannot be read")
     reading.texts["name"] = [name]
     reading.blocks["metadata"] = image_metadata_blocks(data)
     reading.texts["metadata"] = [text for block in reading.blocks["metadata"] for text in block]
@@ -964,5 +941,8 @@ def read_image(path: str, name: str, lang: str, use_ocr: bool, timeout: int) -> 
 def missing_languages(langs: str, timeout: int) -> list[int]:
     """The positions (from 1) of the tesseract languages of `langs` (`por+eng`) with no
     installed data."""
-    installed = set(run(["tesseract", "--list-langs"], timeout).split())
+    # One language per line after a header that names the data directory, a path
+    # (Codex C0-1): only the language lines count.
+    lines = run(["tesseract", "--list-langs"], timeout).splitlines()
+    installed = {line.strip() for line in lines if not line.startswith("List of")}
     return [n for n, lang in enumerate(langs.split("+"), start=1) if lang not in installed]
