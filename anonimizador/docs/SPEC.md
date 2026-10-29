@@ -32,6 +32,8 @@ Count each term in six places: the file name, the metadata, the text layer, the 
 - Numbers are matched by their digits.
 - A term found in the file but not on the page is flagged, because it is text under a drawn box.
 - Identifier patterns are counted as hints.
+- A place that cannot be read is an error, never an empty place. This covers a failed or timed-out tool, an encrypted PDF, missing OCR language data, and pages that did not render. The file is reported `ERROR` with the place and the tool, never the path, and the run exits 2 (Grok G4-5).
+- The file name is the path relative to the directory searched, so directory names are searched too (Grok G4-6).
 
 ### R3. Locate text
 - Read the native text with positions on the page (`pdftotext -bbox-layout`, or a PDF library's word boxes).

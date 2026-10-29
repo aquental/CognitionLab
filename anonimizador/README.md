@@ -57,14 +57,16 @@ anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)
 ```
 
 How to read the report:
-- **Files** are named by position. Pass `--show-names` to print their paths.
+- **Files** are named by position. Pass `--show-names` to print their names as the corpus records them: the path relative to the directory searched, directories included. Directory names are searched too, because a manifest records the whole relative path.
 - **Terms** are named by their position among the terms in the file, so `term 1` is the first term listed.
 - **Matching** ignores case and accents. Long terms are matched without spaces or punctuation, so OCR spacing errors and line breaks do not hide them. Numbers are matched by their digits: `123.456.789-09` and `12345678909` are the same term.
 - **The hint** marks the classic failed redaction: a box drawn over text that is still in the file.
 - **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints. They fail the check only with `--strict-patterns`.
 - **Safety:** the verifier refuses a terms file that git could commit.
 
-Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error or a missing tool. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR.
+- **ERROR** marks a file in which a place could not be read: a tool failed or timed out, a PDF is encrypted, or pages did not render. The `unreadable:` lines name the place and the tool, never the file. An unread place proves nothing, so such a file is never reported `ok`.
+
+Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error, a missing tool or OCR language, or a file with an unreadable place. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR. `--timeout` (default 600 s) bounds each tool run.
 
 ## Development
 
