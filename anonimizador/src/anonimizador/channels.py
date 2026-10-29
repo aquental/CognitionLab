@@ -189,26 +189,24 @@ PDF_HEX_STRING = re.compile(rb"<([0-9A-Fa-f\s]{2,})>")
 # because a "(" in binary data can start a long false string.
 PDF_INNER_LITERAL = re.compile(rb"\(((?:\\.|[^\\()])*)\)", re.DOTALL)
 PDF_STRING_OPENER = re.compile(rb"[(<]")
-# A literal string whose balanced parentheses nest one level deep, so
-# `(Concei\\347\\343o (mae))` is one string (Grok G0-20). Deeper nesting is rare, and a
-# regular expression keeps binary streams fast to scan.
+# A literal string whose balanced parentheses nest one level deep, as nearly every one
+# does (Grok G0-20). A regular expression keeps binary data fast to scan, and a "(" in
+# it starts no long false string.
 PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOTALL)
-# Each alternation starts with a lookahead on its first bytes, which lets the regular
-# expression engine skip the other bytes fast.
-PDF_STRING = re.compile(
-    rb"(?=[(<])(?:(?P<literal>"
-    + PDF_LITERAL.pattern
-    + rb")|(?P<hex>"
-    + PDF_HEX_STRING.pattern
-    + rb"))",
-    re.DOTALL,
-)
-# The strings of PDF bytes and what surrounds them: comments (whose "(" starts no
-# string), dictionary delimiters, and the stream keywords, at which binary data that
-# looked like an open dictionary ends.
+# The bytes that nest a literal string: parentheses, and escapes, which do not.
+PDF_PAREN = re.compile(rb"\\.|[()]", re.DOTALL)
+# The longest literal string read with deeper nesting (Grok G0-47). Binary data pairs
+# its parentheses over any length; text strings are short.
+MAX_NESTED_LITERAL = 1024
+# What surrounds the strings of PDF bytes: comments (whose "(" starts no string),
+# dictionary delimiters, stream keywords (at which binary data that looked like an open
+# dictionary ends), the samples of an inline image (`ID` ... `EI`, binary data), and
+# string openers. The lookahead on the first bytes lets the regular expression engine
+# skip the other bytes fast.
 PDF_STRUCTURE = re.compile(
-    rb"(?=[%<>(es])(?:(?P<comment>%[^\r\n]*)|(?P<open><<)|(?P<close>>>)"
-    rb"|(?P<stream>(?:end)?stream\b)|" + PDF_STRING.pattern + rb")",
+    rb"(?=[%<>(esI])(?:(?P<comment>%[^\r\n]*)|(?P<open><<)|(?P<close>>>)"
+    rb"|(?P<stream>(?:end)?stream\b)|(?P<inline>(?<![\w/])ID[\s\x00].*?[\s\x00]EI(?![^\s\x00]))"
+    rb"|(?P<string>[(<]))",
     re.DOTALL,
 )
 # The tokens between two strings of a content stream: whitespace, array brackets,
@@ -285,33 +283,114 @@ class PdfString:
     value: bytes
 
 
-def string_of(token: re.Match[bytes]) -> PdfString:
-    body = token.group()[1:-1]
-    value = unescape_literal(body) if token.lastgroup == "literal" else hex_string(body)
-    return PdfString(token.start(), token.end(), value)
+def literal_ends(blob: bytes) -> dict[int, int]:
+    """Where the literal string that each "(" of `blob` opens ends, for those that close,
+    with balanced parentheses at any depth. One pass with a stack keeps binary data, full
+    of unbalanced parentheses, fast to scan."""
+    ends: dict[int, int] = {}
+    opens = []
+    for token in PDF_PAREN.finditer(blob):
+        if token.group() == b"(":
+            opens.append(token.start())
+        elif token.group() == b")" and opens:
+            ends[opens.pop()] = token.end()
+    return ends
+
+
+def string_at(blob: bytes, start: int) -> PdfString | None:
+    """The string that starts at `start` ("(" or "<"), if one does. A literal's balanced
+    parentheses belong to it one level deep, as in `(Concei\\347\\343o (mae))` (Grok
+    G0-20)."""
+    if literal := PDF_LITERAL.match(blob, start):
+        return PdfString(start, literal.end(), unescape_literal(literal.group(1)))
+    if hexed := PDF_HEX_STRING.match(blob, start):
+        return PdfString(start, hexed.end(), hex_string(hexed.group(1)))
+    return None
+
+
+def nested_literal(blob: bytes, start: int, ends: dict[int, int]) -> PdfString | None:
+    """The literal string at `start` whose parentheses nest deeper than `PDF_LITERAL`
+    reads, as in `(Zul\\351o (obs (2)))` (Grok G0-47): up to `MAX_NESTED_LITERAL` bytes,
+    and within one stream, since binary data pairs its parentheses over any length."""
+    end = ends.get(start, 0)
+    if not start < end <= start + MAX_NESTED_LITERAL or b"stream" in blob[start:end]:
+        return None
+    return PdfString(start, end, unescape_literal(blob[start + 1 : end - 1]))
 
 
 def pdf_string_spans(blob: bytes) -> list[PdfString]:
-    """The hex and literal strings of `blob`, in order."""
-    return [string_of(token) for token in PDF_STRING.finditer(blob)]
+    """The hex and literal strings of `blob`, in order. A deeper nested literal does not
+    hide the strings in it, so a false one in binary data hides nothing: it holds only
+    its text outside them, which is then read once."""
+    ends = literal_ends(blob)
+    spans, nested = [], []
+    pos = 0
+    while opener := PDF_STRING_OPENER.search(blob, pos):
+        pos = opener.start() + 1
+        if span := string_at(blob, opener.start()):
+            spans.append(span)
+            pos = span.end
+        elif span := nested_literal(blob, opener.start(), ends):
+            nested.append(span)
+    inner = sorted([*spans, *nested], key=lambda span: span.start)
+    outer = [outer_text(blob, literal, inner) for literal in nested]
+    return sorted([*spans, *outer], key=lambda span: span.start)
+
+
+def outer_text(blob: bytes, literal: PdfString, spans: list[PdfString]) -> PdfString:
+    """`literal` without the strings in it, each gap on its own line."""
+    pieces = []
+    pos = literal.start + 1
+    for span in spans:
+        if pos <= span.start and span.end < literal.end:
+            pieces.append(blob[pos : span.start])
+            pos = span.end
+    pieces.append(blob[pos : literal.end - 1])
+    return PdfString(literal.start, literal.end, unescape_literal(b"\n".join(pieces)))
 
 
 def drawn_spans(blob: bytes) -> list[PdfString]:
-    """The strings of `blob` a reader may draw: not in a comment, and not in a dictionary
-    (a marked-content property such as `<< /Lang (pt) >> BDC`) (Grok G0-44)."""
+    """The strings of `blob` a reader may draw: not in a comment, not in an inline
+    image's samples, and not in a dictionary (a marked-content property such as
+    `<< /Lang (pt) >> BDC`) (Grok G0-44). Only a `<<` that a `>>` closes opens a
+    dictionary, so a stray one in binary data hides nothing (Grok G0-46)."""
+    ends = literal_ends(blob)
+    tokens: list[tuple[str, PdfString | None]] = []
+    pos = 0
+    while token := PDF_STRUCTURE.search(blob, pos):
+        kind = token.lastgroup or ""
+        pos = token.end()
+        if kind == "string":
+            start = token.start()
+            if span := string_at(blob, start) or nested_literal(blob, start, ends):
+                tokens.append((kind, span))
+                pos = span.end
+        elif kind in ("open", "close", "stream"):
+            tokens.append((kind, None))
+    closed = closed_dictionaries([kind for kind, _ in tokens])
     spans = []
     depth = 0
-    for token in PDF_STRUCTURE.finditer(blob):
-        kind = token.lastgroup
-        if kind == "open":
-            depth += 1
-        elif kind == "close":
-            depth = max(0, depth - 1)
-        elif kind == "stream":
-            depth = 0
-        elif kind != "comment" and not depth:
-            spans.append(string_of(token))
+    for index, (kind, span) in enumerate(tokens):
+        if index in closed:
+            depth += 1 if kind == "open" else -1
+        elif span and not depth:
+            spans.append(span)
     return spans
+
+
+def closed_dictionaries(kinds: list[str]) -> set[int]:
+    """The positions in `kinds` of the `open` and `close` delimiters that pair up; a
+    stream keyword drops the delimiters still open."""
+    opens: list[int] = []
+    closed = set()
+    for index, kind in enumerate(kinds):
+        if kind == "open":
+            opens.append(index)
+        elif kind == "close" and opens:
+            closed.update((opens.pop(), index))
+        elif kind == "stream":
+            opens.clear()
+    return closed
 
 
 # Marks a boundary between strings that only the fonts' widths could settle.
