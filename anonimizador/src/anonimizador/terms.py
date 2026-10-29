@@ -126,11 +126,16 @@ class Term:
         return 0
 
 
-def count_patterns(texts: list[str]) -> dict[str, int]:
-    """The largest count of each pattern over `texts`, zero counts left out."""
+def count_patterns(texts: list[str], joins: list[str] | tuple[str, ...] = ()) -> dict[str, int]:
+    """The largest count of each pattern over `texts`, zero counts left out. In `joins`
+    (readings that hold one occurrence in several overlapping joins, see
+    `channels.mixed_readings`), distinct matches are counted."""
     counts = {}
     for name, pattern in PATTERNS.items():
-        n = max((len(pattern.findall(fold(t))) for t in texts), default=0)
+        n = max(
+            max((len(pattern.findall(fold(t))) for t in texts), default=0),
+            max((len(set(pattern.findall(fold(t)))) for t in joins), default=0),
+        )
         if n:
             counts[name] = n
     return counts

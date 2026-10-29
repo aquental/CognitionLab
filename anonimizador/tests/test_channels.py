@@ -157,8 +157,8 @@ def test_a_word_drawn_glyph_by_glyph_is_whole_in_raw_bytes():
     assert raw_count("Zulea", kerned) == 0
     assert raw_count("Rosa", b"[(R) 5 (o) 5 (s) 5 (a)] TJ") == 1
     assert raw_count("Fulano", b"[(F)(u)(l)(a)(n)(o)] TJ") == 1
-    # Strings of separate drawings stay separate words.
-    assert raw_count("Zuleo", b"(Zu) Tj ET BT /F1 9 Tf (leo) Tj") == 0
+    # Strings of another text object may still be the same word (Grok G0-38).
+    assert raw_count("Zuleo", b"(Zu) Tj ET BT /F1 9 Tf (leo) Tj") == 1
 
 
 def test_a_literal_with_balanced_parentheses_is_one_string():
@@ -212,16 +212,16 @@ def test_text_state_and_same_baseline_keep_a_word_whole():
         b"BT (Zu) Tj (leo) ' (Assunto) Tj ET",
     ):
         assert raw_count("Zuleo", moved) == 1, moved
-    # Another drawing is not the same word.
-    assert raw_count("Zuleo", b"BT (Zu) Tj ET BT (leo) Tj ET") == 0
-    assert raw_count("Zuleo", b"BT (Zu) Tj ET 0 0 m 9 9 l S BT (leo) Tj ET") == 0
+    # Only bytes that are no content-stream syntax (another stream's binary data)
+    # separate strings for sure.
+    assert raw_count("Zuleo", b"BT (Zu) Tj ET \x00\x9c\xff BT (leo) Tj ET") == 0
 
 
 def test_a_number_drawn_glyph_by_glyph_is_a_pattern_hint():
     # Regression (Grok G0-23): patterns saw one string per line only.
     def hints(data: bytes) -> dict[str, int]:
         views = pdf_string_views([data])
-        return count_patterns([views.lines, views.drawn])
+        return count_patterns(views.for_patterns, [views.mixed])
 
     for data in (
         b"BT [(123)(.)(456)(.)(789)(-)(09)] TJ ET",
@@ -310,7 +310,7 @@ def test_two_byte_strings_without_a_mark_are_read_as_utf16():
         assert raw_count("Zulea", data) == 0, data
     hexed = "123.456.789-09".encode("utf-16-be").hex().encode()
     views = pdf_string_views([b"BT <" + hexed + b"> Tj ET"])
-    assert count_patterns([views.lines, views.drawn]) == {"cpf": 1}
+    assert count_patterns(views.for_patterns, [views.mixed]) == {"cpf": 1}
 
 
 def test_any_move_is_ambiguous_without_state():
@@ -345,7 +345,8 @@ def test_numbers_across_ambiguous_moves_are_pattern_hints():
     # Regression (Grok G0-34, G0-35): a CPF kerned and followed by a moved number, or
     # drawn a group at a time, was whole in no reading searched for patterns.
     def hints(data: bytes) -> dict[str, int]:
-        return count_patterns(pdf_string_views([data]).for_patterns)
+        views = pdf_string_views([data])
+        return count_patterns(views.for_patterns, [views.mixed])
 
     kerned = b"BT 1 0 0 1 72 700 Tm [(123) -2 (.) -2 (456) -2 (.) -2 (789) -2 (-) -2 (09)] TJ"
     groups = b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj"
@@ -355,3 +356,33 @@ def test_numbers_across_ambiguous_moves_are_pattern_hints():
         assert hints(data + b" 30 0 Td (99) Tj ET") == {"cpf": 1}, data
     # A digit short, with nothing after it, is no CPF in any reading.
     assert hints(groups.replace(b"(09)", b"(0)") + b" ET") == {}
+
+
+def test_any_operator_between_strings_is_ambiguous():
+    # Regression (Grok G0-38): ET/BT, q, and marked content ended the word for sure,
+    # though pdftotext reads such strings as one word.
+    for data in (
+        b"BT /F1 12 Tf 72 700 Td (Zu) Tj ET BT /F1 12 Tf 84 700 Td (leo) Tj ET",
+        b"BT (Zu) Tj q (leo) Tj Q ET",
+        b"BT (Zu) Tj /Span BMC (leo) Tj EMC ET",
+        b"BT (Zu) Tj /Span <</MCID 3>> BDC (leo) Tj EMC ET",
+    ):
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
+        stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
+        assert raw_count("Zuleo", stream) == 1, data
+
+
+def test_a_long_gap_keeps_the_open_array_and_stays_ambiguous():
+    # Regression (Grok G0-37): a gap over 256 bytes was a break that also dropped the
+    # TJ array it opened, so a word-space adjustment inside it glued two words.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    filler = b"1 0 obj << /Type /Catalog >> endobj\n" * 20
+    array = b"BT [(Z) -2 (u) -2 (l) -2 (e) -2 (o) -300 (A) -2 (s) -2 (s) -2 (u) -2 (n)"
+    array += b" -2 (t) -2 (o)] TJ ET"
+    data = page + filler + b"9 0 obj << >> stream\n" + array + b"\nendstream endobj\n"
+    assert raw_count("Zuleo", data) == 1
+    assert raw_count("Zulea", data) == 0
+    cpf = b"BT [(123) -2 (.) -2 (456) -2 (.) -2 (789) -2 (-) -2 (09) -300 (99)] TJ ET"
+    views = pdf_string_views([page + filler + cpf])
+    assert count_patterns(views.for_patterns, [views.mixed]) == {"cpf": 1}

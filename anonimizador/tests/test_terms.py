@@ -118,3 +118,12 @@ def test_adjacent_occurrences_of_a_short_term_all_count():
     assert term.count("Zuleo Zuleo") == 2
     assert term.count("Zuleo Zuleo Zuleo") == 3
     assert Term("Zulea").count("Zuleo Zuleo") == 0
+
+
+def test_joins_count_each_distinct_pattern_match_once():
+    # One occurrence sits in several overlapping joins (found while fixing Grok G0-38).
+    joins = ["123.456.789-09A\n123.456.789-09Ab\n123.456.789-09Abc"]
+    assert count_patterns([], joins) == {"cpf": 1}
+    assert count_patterns([], ["123.456.789-09A\n987.654.321-00B"]) == {"cpf": 2}
+    # The other readings still count repeats.
+    assert count_patterns(["123.456.789-09 e 123.456.789-09"], joins) == {"cpf": 2}
