@@ -3,6 +3,7 @@ import struct
 import time
 import zlib
 
+from anonimizador import channels
 from anonimizador.channels import (
     AMBIGUOUS,
     Reading,
@@ -662,6 +663,12 @@ def test_an_image_that_is_not_whole_is_an_error_without_ocr(tmp_path):
         "m.png": png([IHDR, idat, (b"IEND", b"")]).replace(
             b"IEND\xaeB`\x82", b"IEND\x00\x00\x00\x00"
         ),
+        # A row filter type above 4; JPEG frame and scan headers with no fields.
+        "o.png": png(
+            [IHDR, (b"IDAT", zlib.compress(b"\x05" + b"\x00" * (30 * 121 - 1))), (b"IEND", b"")]
+        ),
+        "p.jpg": b"\xff\xd8\xff\xc0\x00\x02\xff\xda\x00\x02\x12\xff\xd9",
+        "q.jpg": JPEG_START + b"\xff\xda\x00\x02\x12\x34\xff\xd9",
         "n.png": png(
             [
                 (b"IHDR", struct.pack(">IIBBBBB", 40, 30, 8, 3, 0, 0, 0)),
@@ -894,3 +901,47 @@ def test_an_inline_image_whose_end_cannot_be_told_makes_the_raw_bytes_unread():
     two = head + b"\x01%" + text + b"\n" + head + b"\x02%" + text
     assert raw_readings(two).unclear_images == 0
     assert raw_readings(head + b"\x01\x02 no end").unclear_images == 1
+
+
+def test_malformed_stream_dictionaries_are_unread_never_a_crash(monkeypatch, tmp_path):
+    # Found with the probes in Codex round 3's log (the round stopped at its usage limit
+    # before a report), each reproduced here: a filter that is no name, numbers too long
+    # to convert or to index with, data without its end-of-data mark, a dictionary
+    # nested deep, and a header written inside a string.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    content = b"BT (Zu) Tj (leo) Tj ET\n"
+    a85 = base64.a85encode(zlib.compress(content)) + b"~>"
+
+    def stream(entries: bytes, body: bytes) -> bytes:
+        return page + b"9 0 obj << " + entries + b" >> stream\n" + body + b"\nendstream endobj\n"
+
+    for data, unread, found in (
+        (stream(b"/Filter << /A 1 >>", b"x"), 1, 0),
+        (stream(b"/Filter [[/A]]", b"x"), 1, 0),
+        # No header: a dictionary nothing can read, before data that is no zlib stream.
+        (b"9" * 4301 + b" 0 obj << /Filter /Fl >> stream\nx\nendstream", 1, 0),
+        (stream(b"/Filter /Fl /Length 99999999999999999999999", zlib.compress(content)), 0, 1),
+        (
+            stream(
+                b"/Filter /Fl /DecodeParms << /Predictor 12 /Columns 9999999999999999999999 >>",
+                zlib.compress(content),
+            ),
+            1,
+            1,
+        ),
+        # A literal run holds the text as it is: the bytes and the partial output count.
+        (stream(b"/Filter /RL", b"\x16" + content), 1, 2),
+        (stream(b"/Filter /LZW", lzw_encode(content)[:-2]), 1, 1),
+        (stream(b"/Filter /AHx", content.hex().encode()), 1, 1),
+        (stream(b"/Filter /A85", base64.a85encode(content)), 1, 1),
+        (stream(b"/Filter [/A85 /Fl] /X " + b"<< /Y " * 33 + b"1" + b" >>" * 33, a85), 0, 1),
+        (stream(b"/Filter [/A85 /Fl] /X " + b"<< /Y " * 999 + b"1" + b" >>" * 999, a85), 1, 0),
+        (stream(b"/Filter [/A85 /Fl] /S (9 0 obj)", a85), 0, 1),
+    ):
+        raw = raw_readings(data)
+        assert (raw.unread, raw_count("Zuleo", data)) == (unread, found), data[60:120]
+    # Whatever else malformed bytes raise is the raw channel's error, not a traceback.
+    monkeypatch.setattr(channels, "raw_readings", lambda _: [][0])
+    (tmp_path / "a.jpg").write_bytes(JPEG_START + JPEG_SCAN)
+    reading = read_image(str(tmp_path / "a.jpg"), "a.jpg", "por", False, 10)
+    assert reading.errors == ["raw: the bytes cannot be parsed (IndexError)"]
