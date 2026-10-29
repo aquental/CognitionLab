@@ -1,7 +1,8 @@
 """Where an identifier can survive anonymization, and how each place is read.
 
 Every reader returns text to search, never writes outside a temporary directory, and
-runs only local tools (poppler, tesseract).
+runs only local tools (poppler, tesseract). A place that could not be read is reported
+as an error, never as an empty place: an unread channel proves nothing (Grok G4-5).
 """
 
 from __future__ import annotations
@@ -26,15 +27,57 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 Texts = dict[str, list[str]]
 
 
-def run(args: list[str], timeout: int = 600) -> str:
-    """Stdout of a tool, or "" when it fails (a failure is a missing reading, which the
-    review must cover, not a crash)."""
-    result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
-    return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else ""
+class ToolError(Exception):
+    """A tool failed or timed out. The message names the tool, never the file."""
 
 
-def ocr(image: str, lang: str) -> str:
-    return run(["tesseract", image, "-", "-l", lang], timeout=300)
+def run(args: list[str], timeout: int) -> str:
+    """Stdout of a tool. A non-zero exit, a timeout, or a tool that cannot start raises
+    `ToolError`, whose message holds no argument (arguments hold file paths)."""
+    tool = args[0]
+    try:
+        result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"{tool} timed out after {timeout} s") from None
+    except OSError as e:
+        raise ToolError(f"{tool} could not start ({e.strerror})") from None
+    if result.returncode != 0:
+        raise ToolError(f"{tool} failed (exit {result.returncode})")
+    return result.stdout.decode("utf-8", "replace")
+
+
+def ocr(image: str, lang: str, timeout: int) -> str:
+    return run(["tesseract", image, "-", "-l", lang], timeout)
+
+
+def ocr_all(images: list[str], lang: str, timeout: int, pool: Executor) -> list[str]:
+    """OCR of every image; the first failure raises `ToolError`."""
+    return list(pool.map(lambda p: ocr(p, lang, timeout), images))
+
+
+def page_count(info: str) -> int | None:
+    for line in info.splitlines():
+        if line.startswith("Pages:"):
+            with contextlib.suppress(ValueError):
+                return int(line.split(":", 1)[1])
+    return None
+
+
+class Reading:
+    """The texts of every channel of one file, and the channels that failed."""
+
+    def __init__(self) -> None:
+        self.texts: Texts = {channel: [] for channel in CHANNELS}
+        self.errors: list[str] = []
+
+    @contextlib.contextmanager
+    def channel(self, name: str) -> Iterator[None]:
+        """Records a `ToolError` raised while reading `name` as an error of that
+        channel, so the other channels are still read."""
+        try:
+            yield
+        except ToolError as e:
+            self.errors.append(f"{name}: {e}")
 
 
 def png_size(path: str) -> tuple[int, int]:
@@ -128,44 +171,57 @@ def image_metadata(data: bytes) -> list[str]:
     return decode_both(blobs)
 
 
-def read_pdf(path: str, tmp: str, lang: str, dpi: int, use_ocr: bool, pool: Executor) -> Texts:
-    """Every channel of a PDF. Page renders and embedded images go to `tmp`."""
+def read_pdf(
+    path: str, name: str, tmp: str, lang: str, dpi: int, use_ocr: bool, timeout: int, pool: Executor
+) -> Reading:
+    """Every channel of a PDF. `name` is the path as the corpus records it (relative to
+    the directory searched). Page renders and embedded images go to `tmp`."""
+    reading = Reading()
+    texts = reading.texts
+    texts["name"] = [name]
     with open(path, "rb") as f:
-        raw = raw_texts(f.read())
-    texts: Texts = {
-        "name": [os.path.basename(path)],
-        "metadata": [
-            run(["pdfinfo", "-enc", "UTF-8", path]),
-            run(["pdfinfo", "-meta", path]),
-        ],
-        "text": [run(["pdftotext", "-enc", "UTF-8", "-layout", path, "-"])],
-        "ocr": [],
-        "images": [],
-        "raw": raw,
-    }
+        texts["raw"] = raw_texts(f.read())
+    pages = None
+    with reading.channel("metadata"):
+        info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
+        pages = page_count(info)
+        texts["metadata"] = [info, run(["pdfinfo", "-meta", path], timeout)]
+    with reading.channel("text"):
+        texts["text"] = [run(["pdftotext", "-enc", "UTF-8", "-layout", path, "-"], timeout)]
     if use_ocr:
-        run(["pdftoppm", "-r", str(dpi), "-png", path, os.path.join(tmp, "page")])
-        pages = sorted(os.path.join(tmp, p) for p in os.listdir(tmp) if p.startswith("page"))
-        texts["ocr"] = list(pool.map(lambda p: ocr(p, lang), pages))
-        run(["pdfimages", "-png", path, os.path.join(tmp, "img")])
-        images = sorted(
-            os.path.join(tmp, p)
-            for p in os.listdir(tmp)
-            if p.startswith("img") and min(png_size(os.path.join(tmp, p))) >= MIN_OCR_SIDE
-        )
-        texts["images"] = list(pool.map(lambda p: ocr(p, lang), images))
-    return texts
+        with reading.channel("ocr"):
+            run(["pdftoppm", "-r", str(dpi), "-png", path, os.path.join(tmp, "page")], timeout)
+            rendered = sorted(os.path.join(tmp, p) for p in os.listdir(tmp) if p.startswith("page"))
+            if pages is None or len(rendered) != pages:
+                expected = "an unknown number of" if pages is None else str(pages)
+                raise ToolError(f"pdftoppm rendered {len(rendered)} of {expected} pages")
+            texts["ocr"] = ocr_all(rendered, lang, timeout, pool)
+        with reading.channel("images"):
+            run(["pdfimages", "-png", path, os.path.join(tmp, "img")], timeout)
+            images = sorted(
+                os.path.join(tmp, p)
+                for p in os.listdir(tmp)
+                if p.startswith("img") and min(png_size(os.path.join(tmp, p))) >= MIN_OCR_SIDE
+            )
+            texts["images"] = ocr_all(images, lang, timeout, pool)
+    return reading
 
 
-def read_image(path: str, lang: str, use_ocr: bool) -> Texts:
+def read_image(path: str, name: str, lang: str, use_ocr: bool, timeout: int) -> Reading:
     """Every channel of a PNG or JPEG file."""
+    reading = Reading()
     with open(path, "rb") as f:
         data = f.read()
-    return {
-        "name": [os.path.basename(path)],
-        "metadata": image_metadata(data),
-        "text": [],
-        "ocr": [ocr(path, lang)] if use_ocr else [],
-        "images": [],
-        "raw": raw_texts(data),
-    }
+    reading.texts["name"] = [name]
+    reading.texts["metadata"] = image_metadata(data)
+    reading.texts["raw"] = raw_texts(data)
+    if use_ocr:
+        with reading.channel("ocr"):
+            reading.texts["ocr"] = [ocr(path, lang, timeout)]
+    return reading
+
+
+def missing_languages(langs: str, timeout: int) -> list[str]:
+    """The tesseract languages of `langs` (`por+eng`) with no installed data."""
+    installed = set(run(["tesseract", "--list-langs"], timeout).split())
+    return [lang for lang in langs.split("+") if lang not in installed]

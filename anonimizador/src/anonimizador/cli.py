@@ -1,6 +1,7 @@
 """Command-line interface.
 
-Exit status: 0 nothing found, 1 something found, 2 usage error or missing tool.
+Exit status: 0 nothing found, 1 something found, 2 usage error, missing tool, or a
+channel that could not be read (a failed or timed-out tool).
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ import argparse
 import sys
 
 from anonimizador import __version__
+from anonimizador.channels import ToolError, missing_languages
 from anonimizador.terms import Term, TermsError, load_terms
 from anonimizador.verify import Options, VerifyError, collect, missing_tools, render, verify
 
@@ -38,6 +40,12 @@ def parser() -> argparse.ArgumentParser:
     v.add_argument("--lang", default="por+eng", help="tesseract languages")
     v.add_argument("--dpi", type=int, default=300, help="page render resolution")
     v.add_argument("--no-ocr", action="store_true", help="skip rendering and OCR")
+    v.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="seconds each tool run may take before its channel is reported unreadable",
+    )
     v.add_argument("--show-names", action="store_true", help="print file paths")
     v.add_argument("--strict-patterns", action="store_true", help="fail on identifier patterns too")
     return root
@@ -50,24 +58,37 @@ def run_verify(args: argparse.Namespace) -> int:
         use_ocr=not args.no_ocr,
         show_names=args.show_names,
         strict_patterns=args.strict_patterns,
+        timeout=args.timeout,
     )
     try:
         missing = missing_tools(options.use_ocr)
         if missing:
             raise VerifyError("missing tools: " + ", ".join(missing))
+        if options.use_ocr:
+            no_data = missing_languages(options.lang, options.timeout)
+            if no_data:
+                raise VerifyError("tesseract has no data for: " + ", ".join(no_data))
         terms: list[Term] = load_terms(args.terms) if args.terms else []
         files = collect(args.paths)
-    except (VerifyError, TermsError, OSError) as e:
+    except (VerifyError, TermsError, ToolError) as e:
         print(f"anonimizador verify: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except OSError as e:
+        # The message of an OSError holds the path: report its reason only.
+        print(f"anonimizador verify: {e.strerror or type(e).__name__}", file=sys.stderr)
         return EXIT_USAGE
 
     mode = "no OCR" if not options.use_ocr else f"OCR at {options.dpi} dpi ({options.lang})"
     print(f"anonimizador verify: {len(files)} file(s), {len(terms)} term(s), {mode}")
-    found = False
+    found = unreadable = False
     for result in verify(files, terms, options):
         found = found or result.failed(options.strict_patterns)
+        unreadable = unreadable or bool(result.errors)
         for line in render(result, options):
             print(line, flush=True)
+    # An unread channel means the files cannot be vouched for, whatever was found.
+    if unreadable:
+        return EXIT_USAGE
     return EXIT_FOUND if found else EXIT_OK
 
 
