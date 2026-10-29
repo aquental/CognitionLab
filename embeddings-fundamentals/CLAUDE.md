@@ -146,6 +146,8 @@ The owner added Antigravity on 2026-10-29, starting with Phase 4. It runs after 
   - validation;
   - confirmation;
   - status.
+
+  When a phase is approved, add its table to `REVISION.md` (one row per reviewer finding: reviewer, ID, severity, finding summary, solution summary).
 - **No simulation.** Never simulate a review. An unavailable reviewer blocks phase approval. The only exception is a Codex usage-quota error, recorded as an owner waiver; Grok and Antigravity are always required.
 
 ## BDD contract (PRD §5.7, PLAN §5.2)
