@@ -284,8 +284,9 @@ None for Phase 0.
 - Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule), `TESTS.md` (anonymization, owner corpus, automatic anonymizer design).
 - Corpus tools (owner request):
   - `src/drafts.rs` with the `draft-manifest` and `draft-labels` CLI commands;
-  - `scripts/anonymization-verify.py`;
-  - `scripts/make-covered-name-pdf.py`, which writes `tests/fixtures/anonymization/covered-name.pdf`.
+  - `scripts/anonymization-verify.py` and `scripts/make-covered-name-pdf.py`, which writes `tests/fixtures/anonymization/covered-name.pdf`.
+
+  At the owner's request, these two scripts and the fixture moved to the sibling Python project `../anonimizador` (branch `anonimizador/scaffold`), where the verifier became `anonimizador verify`. Its integration test moved with it, into `anonimizador/tests/`.
 
   Tests: `tests/drafts.rs` (3), `drafts::tests` (5), and 2 integration tests.
 
@@ -304,7 +305,7 @@ None for Phase 0.
 - Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
   - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
   - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
-- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. The OpenAI live test stays outstanding.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. After the verifier moved to `../anonimizador`, 17 remain here. The OpenAI live test stays outstanding.
 - `RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored` (local only, real exams): **4 passed**.
   - Every unreviewed exam is refused before any processing.
   - Every file name is flagged, and no finding reveals it.
