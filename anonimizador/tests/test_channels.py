@@ -54,3 +54,32 @@ def test_raw_bytes_include_inflated_streams_and_utf16():
     assert max(NAME.count(t) for t in raw_texts(pdf)) == 1
     utf16 = "﻿Fulano Ficticio".encode("utf-16-be")
     assert max(NAME.count(t) for t in raw_texts(b"(" + utf16 + b")")) == 1
+
+
+def test_a_short_name_in_utf16_metadata_is_a_whole_word():
+    # Regression (Grok G0-8): UTF-16 put a NUL between letters, so a term shorter than
+    # the compact length was searched as separate one-letter words and counted 0.
+    def jpeg(text: str, encoding: str) -> bytes:
+        # NUL-terminated ASCII on both sides: each byte order glues a neighbor on.
+        body = b"Exif\x00\x00UserComment\x00" + text.encode(encoding) + b"Make\x00"
+        return b"\xff\xd8\xff\xe1" + struct.pack(">H", len(body) + 2) + body + b"\xff\xda"
+
+    short = Term("Zuleo")
+    for encoding in ("utf-16-le", "utf-16-be"):
+        assert max(short.count(t) for t in image_metadata(jpeg("Zuleo", encoding))) == 1
+        assert max(short.count(t) for t in image_metadata(jpeg("Zulea", encoding))) == 0
+        assert max(short.count(t) for t in image_metadata(jpeg("Zuleotti Ito", encoding))) == 0
+        # Each occurrence counts once, whatever byte order reads it.
+        assert max(short.count(t) for t in image_metadata(jpeg("Zuleo Ito", encoding))) == 1
+    # A neighbor that both byte orders glue on at the start, then the end.
+    glued = b"\xff\xd8\xff\xe1"
+    body = b"Exif\x00\x00t\x00" + "Zuleo".encode("utf-16-le") + b"Make\x00"
+    glued += struct.pack(">H", len(body) + 2) + body + b"\xff\xda"
+    assert max(short.count(t) for t in image_metadata(glued)) == 1
+    body = b"Exif\x00\x00" + "Zuleo".encode("utf-16-le") + b"M\x00\x00"
+    glued = b"\xff\xd8\xff\xe1" + struct.pack(">H", len(body) + 2) + body + b"\xff\xda"
+    assert max(short.count(t) for t in image_metadata(glued)) == 1
+    # EXIF UserComment: an 8-byte charset code, then UTF-16.
+    body = b"Exif\x00\x00UNICODE\x00" + "Zuleo".encode("utf-16-le") + b"\x00\x00Make\x00"
+    exif = b"\xff\xd8\xff\xe1" + struct.pack(">H", len(body) + 2) + body + b"\xff\xda"
+    assert max(short.count(t) for t in image_metadata(exif)) == 1

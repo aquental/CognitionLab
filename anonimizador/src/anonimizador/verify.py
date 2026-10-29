@@ -58,10 +58,13 @@ class TermHit:
 @dataclass(frozen=True)
 class CorpusFile:
     """A file to check: where it is, and its name as the corpus records it (the path
-    relative to the directory searched, directories included)."""
+    relative to the directory searched, directories included). `aliases` are the other
+    relative paths that reach it through a symlinked directory; they are searched as
+    names too (Grok G0-7)."""
 
     path: str
     name: str
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,20 +98,40 @@ def raise_error(error: OSError) -> None:
     raise error
 
 
-def walk(top: str) -> Iterator[tuple[str, list[str]]]:
-    """Each directory under `top` with its file names, hidden entries skipped. A
-    directory that cannot be listed raises `OSError`, and symlinked directories are
-    followed, each real directory once: a skipped directory could hide an identifying
-    file behind a clean one (Grok G0-3)."""
-    seen: set[str] = set()
+def relative(path: str, top: str) -> str:
+    return os.path.relpath(path, top).replace(os.sep, "/")
+
+
+def scan(top: str) -> list[CorpusFile]:
+    """The corpus files under `top`, hidden entries skipped. A directory that cannot be
+    listed raises `OSError`, and symlinked directories are followed: a skipped
+    directory could hide an identifying file behind a clean one (Grok G0-3). Each real
+    directory is walked once, so a link loop ends; every other path that reaches it
+    becomes an alias of the files under it, so its name is still searched (Grok G0-7)."""
+    first: dict[str, str] = {}  # real directory -> the relative path it was walked by
+    links: list[tuple[str, str]] = []  # (another relative path, the walked one)
+    found: list[tuple[str, str]] = []
     for root, dirs, names in os.walk(top, onerror=raise_error, followlinks=True):
         real = os.path.realpath(root)
-        if real in seen:
+        if real in first:
+            links.append((relative(root, top), first[real]))
             dirs[:] = []
             continue
-        seen.add(real)
+        first[real] = relative(root, top)
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-        yield root, sorted(n for n in names if not n.startswith("."))
+        for name in sorted(names):
+            if not name.startswith(".") and os.path.splitext(name)[1].lower() in SUFFIXES:
+                path = os.path.join(root, name)
+                found.append((path, relative(path, top)))
+    files = []
+    for path, name in found:
+        aliases = []
+        for link, walked in links:
+            prefix = "" if walked == "." else walked + "/"
+            if name.startswith(prefix):
+                aliases.append(f"{link}/{name[len(prefix) :]}")
+        files.append(CorpusFile(path, name, tuple(aliases)))
+    return files
 
 
 def collect(paths: list[str]) -> list[CorpusFile]:
@@ -120,12 +143,8 @@ def collect(paths: list[str]) -> list[CorpusFile]:
     for position, path in enumerate(paths, start=1):
         if os.path.isdir(path):
             try:
-                for root, names in walk(path):
-                    for name in names:
-                        if os.path.splitext(name)[1].lower() in SUFFIXES:
-                            found = os.path.join(root, name)
-                            relative = os.path.relpath(found, path).replace(os.sep, "/")
-                            files.setdefault(found, CorpusFile(found, relative))
+                for file in scan(path):
+                    files.setdefault(file.path, file)
             except OSError as e:
                 # The message of an OSError holds the path: report its reason only.
                 reason = e.strerror or type(e).__name__
@@ -168,6 +187,7 @@ def check_file(
 ) -> FileResult:
     reading = read(file, options, pool)
     texts = reading.texts
+    texts["name"] = [file.name, *file.aliases]
     hits = []
     for number, term in enumerate(terms, start=1):
         counts = {}
