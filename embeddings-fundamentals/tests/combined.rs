@@ -13,7 +13,7 @@ use embeddings_fundamentals::embedding::deterministic::{
     DeterministicBuilder, DeterministicEmbedder,
 };
 use embeddings_fundamentals::embedding::{EmbeddingError, EmbeddingStrategy};
-use embeddings_fundamentals::evaluation::{Dataset, EvaluationMode};
+use embeddings_fundamentals::evaluation::{Dataset, EvalError, EvaluationMode, evaluate_combined};
 use embeddings_fundamentals::experiment::{
     self, CombinedInputs, ExperimentError, ExperimentInputs, Instruments, Tools,
 };
@@ -690,6 +690,40 @@ async fn a_combined_search_of_an_experiment_must_be_that_combined_run() {
         (text_adapter.calls().len(), image_adapter.calls().len()),
         calls,
         "the refusals embedded no query"
+    );
+
+    // Regression (Antigravity A4-1): the combined evaluation applies the same check
+    // before reading any record. A snapshot missing a leg used to read as an empty
+    // index and fail as an inapplicable label instead.
+    for (snapshot, params, why) in [
+        (&text_only, FusionParams::default(), "image leg"),
+        (&leg_snapshot, FusionParams::default(), "not a combined run"),
+        (&combined, other_k, "other parameters"),
+    ] {
+        let refused = evaluate_combined(
+            &f.store,
+            Leg {
+                space: &f.text.embedding_space_id,
+                embedder: &text_adapter,
+            },
+            Leg {
+                space: &f.image.embedding_space_id,
+                embedder: &image_adapter,
+            },
+            params,
+            &f.dataset,
+            Scope::Experiment(snapshot),
+        )
+        .await;
+        assert!(
+            matches!(&refused, Err(EvalError::Search(SearchError::SnapshotMismatch { reason, .. })) if reason.contains(why)),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        (text_adapter.calls().len(), image_adapter.calls().len()),
+        calls,
+        "the refused evaluations embedded no query"
     );
 }
 

@@ -232,7 +232,7 @@ None for Phase 0.
 
 ## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
 
-**Status:** 🔄 IMPLEMENTED AND VALIDATED; adversarial reviews in progress (Grok → Codex → Antigravity). Grok rounds 1–5: G4-1..G4-4 and G4-6 closed, G4-5 moved to `anonimizador` with the verifier; round 5 NO FINDINGS. Codex round 1: C4-1..C4-5 fixed, awaiting Codex round 2. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+**Status:** 🔄 IMPLEMENTED AND VALIDATED; adversarial reviews in progress (Grok → Codex → Antigravity). Grok rounds 1–5: G4-1..G4-4 and G4-6 closed, G4-5 moved to `anonimizador` with the verifier; round 5 NO FINDINGS. Codex rounds 1–2: C4-1..C4-5 closed. Antigravity round 1: A4-1 fixed; the earlier reviewers re-check it. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
