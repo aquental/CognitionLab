@@ -49,4 +49,19 @@ Test commands are in [`README.md`](README.md#tests). Scenario names refer to `te
 | Failure injection proves bounded retries, atomic revision updates, invalid-vector rejection, and explicit incomplete runs | Met | `rel01.feature`: "Recover from a transient embedding failure within the limit", "Stop retrying and continue independent sources", "A failed replacement preserves the committed revision", and "Reject invalid embedding vectors"; incomplete runs: `the_experiment_command_reports_a_failed_labeled_source_with_exit_2` and `tests/experiment.rs` |
 | Real adapter integration evidence accompanies deterministic BDD; unavailable or unauthorized remote runs remain outstanding | Met; OpenAI live outstanding | `RUN_INTEGRATION=1 … --test integration -- --include-ignored`: 16 passed on the final state (real poppler and Tesseract, EmbedAnything MiniLM, FastEmbed MiniLM and E5, CLIP, SigLIP, the combined CLI chain). `openai_live_embeddings_rank_sensibly` is outstanding (no key or permission) |
 
-Low retrieval quality is a valid result (PRD §13). On the synthetic corpus, combined retrieval raises Hit@3 and lowers Precision@3 and nDCG@3 relative to the best text leg; [`phase-4/comparison.md`](phase-4/comparison.md) explains why.
+Low retrieval quality is a valid result (PRD §13). On the synthetic corpus, combined retrieval raises Hit@3 above every leg. Its Precision@3 and nDCG@3 depend on how the `record_id` tie-break orders the text and image items at equal fused scores, so they are within tie-break noise; [`phase-4/comparison.md`](phase-4/comparison.md) explains why.
+
+## Local evidence on real documents (never committed)
+
+The owner placed real sample exams in `tests/sample-exams/`. The directory is git-ignored and never sent to reviewers or remote engines (see `CLAUDE.md`). `RUN_SAMPLE_EXAMS=1 cargo test --test sample_exams -- --include-ignored` runs four local, property-based tests over them:
+
+- the anonymization gate refuses every unreviewed exam before any processing;
+- every file name is flagged for review, without the name being revealed;
+- extraction is deterministic, and chunking drops no token and respects every budget;
+- kept images are stored without metadata.
+
+These tests found two defects, both fixed with synthetic regression tests:
+- upper-case and free-form file names were not flagged;
+- a table header that no data row used was dropped from the chunks.
+
+They are not retrieval-quality evidence: the exams have no anonymization review and no relevance labels.

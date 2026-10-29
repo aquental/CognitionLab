@@ -61,7 +61,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "85fc9e8f38471b73",
+            "record_id": "9d8f04d82186f137",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-1",
             "modality": "text",
@@ -139,7 +139,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "f063927cebf35b66",
+            "record_id": "0b7d3be19ecdee1b",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-0",
             "modality": "text",
@@ -217,7 +217,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "2929193a795cb624",
+            "record_id": "9dfdbb3573523686",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-1",
             "modality": "text",
@@ -295,7 +295,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "b83be5d1fcfdfb8a",
+            "record_id": "d3a892c107a6a336",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-3",
             "modality": "text",
@@ -339,32 +339,32 @@
           },
           {
             "rank": 3,
-            "record_id": "34d1f9238c0603d5",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-image-0",
-            "modality": "image",
-            "page_number": 1,
-            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
-            "chunk_text": null,
+            "record_id": "299bf7e79411e081",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-3",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nTriglicerídeos | 120 | mg/dL | < 150",
             "score": 0.016129032,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "label": 2,
+            "labeled": true,
+            "note": "Triglycerides row",
             "fusion": {
               "fused_score": 0.016129032258064516,
-              "text": null,
-              "image": {
+              "text": {
                 "rank": 2,
-                "score": 0.009449439
-              }
+                "score": 0.8599719
+              },
+              "image": null
             }
           }
         ],
         "fewer_than_k": false,
         "metrics": {
-          "precision_at_3": 0.3333333333333333,
+          "precision_at_3": 0.6666666666666666,
           "hit_at_3": 1.0,
-          "ndcg_at_3": 0.4692787260227565
+          "ndcg_at_3": 0.7039180890341348
         }
       },
       {
@@ -373,28 +373,6 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
-            "source_id": "lab-searchable-001",
-            "chunk_id": "lab-searchable-001-p1-text-0",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "LABORATORIO FICTICIO DE ANALISES - LAUDO SINTETICO\nPaciente: [ANONIMIZADO] Registro: [ANONIMIZADO]",
-            "score": 0.016393442,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.7998504
-              },
-              "image": null
-            }
-          },
-          {
-            "rank": 2,
             "record_id": "5193e87b9126c7b3",
             "source_id": "chest-001",
             "chunk_id": "chest-001-p1-image-0",
@@ -416,8 +394,30 @@
             }
           },
           {
+            "rank": 2,
+            "record_id": "7a8e7baf220b0cef",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-0",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "LABORATORIO FICTICIO DE ANALISES - LAUDO SINTETICO\nPaciente: [ANONIMIZADO] Registro: [ANONIMIZADO]",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.7998504
+              },
+              "image": null
+            }
+          },
+          {
             "rank": 3,
-            "record_id": "b50268e1c529b420",
+            "record_id": "eb747daa0f0709ec",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-0",
             "modality": "text",
@@ -451,7 +451,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
+            "record_id": "7a8e7baf220b0cef",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-0",
             "modality": "text",
@@ -529,28 +529,6 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
-            "source_id": "lab-searchable-001",
-            "chunk_id": "lab-searchable-001-p1-text-0",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "LABORATORIO FICTICIO DE ANALISES - LAUDO SINTETICO\nPaciente: [ANONIMIZADO] Registro: [ANONIMIZADO]",
-            "score": 0.016393442,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.84807056
-              },
-              "image": null
-            }
-          },
-          {
-            "rank": 2,
             "record_id": "5193e87b9126c7b3",
             "source_id": "chest-001",
             "chunk_id": "chest-001-p1-image-0",
@@ -572,8 +550,30 @@
             }
           },
           {
+            "rank": 2,
+            "record_id": "7a8e7baf220b0cef",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-0",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "LABORATORIO FICTICIO DE ANALISES - LAUDO SINTETICO\nPaciente: [ANONIMIZADO] Registro: [ANONIMIZADO]",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.84807056
+              },
+              "image": null
+            }
+          },
+          {
             "rank": 3,
-            "record_id": "b50268e1c529b420",
+            "record_id": "eb747daa0f0709ec",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-0",
             "modality": "text",
@@ -598,7 +598,7 @@
         "metrics": {
           "precision_at_3": 0.3333333333333333,
           "hit_at_3": 1.0,
-          "ndcg_at_3": 0.6309297535714574
+          "ndcg_at_3": 1.0
         }
       },
       {
@@ -607,11 +607,11 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "5ae3489783a9a3fb",
+            "record_id": "331da5726a03a7c5",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-text-3",
+            "chunk_id": "us-mixed-003-p2-text-3",
             "modality": "text",
-            "page_number": 1,
+            "page_number": 2,
             "asset_uri": null,
             "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
             "score": 0.016393442,
@@ -685,13 +685,13 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "047fd1406418e876",
+            "record_id": "93c2841fadff6884",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-0",
+            "chunk_id": "us-mixed-003-p1-text-0",
             "modality": "text",
-            "page_number": 2,
+            "page_number": 1,
             "asset_uri": null,
-            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL - SINTETICO\nPaciente: [ANONIMIZADO]",
             "score": 0.016393442,
             "label": 0,
             "labeled": false,
@@ -763,28 +763,6 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "17b87e09759fdad5",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-1",
-            "modality": "text",
-            "page_number": 2,
-            "asset_uri": null,
-            "chunk_text": "Técnica\nExame realizado com transdutor convexo de 3,5 MHz, em jejum de 8 horas.",
-            "score": 0.016393442,
-            "label": 2,
-            "labeled": true,
-            "note": "Technique section (OCR page)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.8404061
-              },
-              "image": null
-            }
-          },
-          {
-            "rank": 2,
             "record_id": "5193e87b9126c7b3",
             "source_id": "chest-001",
             "chunk_id": "chest-001-p1-image-0",
@@ -806,18 +784,40 @@
             }
           },
           {
-            "rank": 3,
-            "record_id": "7506309d7d2dfbde",
+            "rank": 2,
+            "record_id": "6557e58c9357edc0",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-1",
             "modality": "text",
             "page_number": 1,
             "asset_uri": null,
             "chunk_text": "Técnica\nExame realizado com transdutor convexo de 3,5 MHz, em jejum de 8 horas.",
-            "score": 0.016129032,
+            "score": 0.016393442,
             "label": 2,
             "labeled": true,
             "note": "Technique section (transducer and preparation)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.8404061
+              },
+              "image": null
+            }
+          },
+          {
+            "rank": 3,
+            "record_id": "f3e862efe3e774bc",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-1",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Técnica\nExame realizado com transdutor convexo de 3,5 MHz, em jejum de 8 horas.",
+            "score": 0.016129032,
+            "label": 2,
+            "labeled": true,
+            "note": "Technique section (OCR page)",
             "fusion": {
               "fused_score": 0.016129032258064516,
               "text": {
@@ -832,14 +832,14 @@
         "metrics": {
           "precision_at_3": 0.6666666666666666,
           "hit_at_3": 1.0,
-          "ndcg_at_3": 0.9197207891481876
+          "ndcg_at_3": 0.6934264036172708
         }
       }
     ],
     "metrics": {
-      "precision_at_3": 0.3666666666666666,
+      "precision_at_3": 0.39999999999999997,
       "hit_at_3": 0.8,
-      "ndcg_at_3": 0.5075387923082204
+      "ndcg_at_3": 0.5452803146991207
     },
     "fusion": {
       "method": "rrf",
@@ -849,20 +849,20 @@
   },
   "measurements": {
     "cold_start": {
-      "text_model_load_ms": 12888.009667,
-      "image_model_load_ms": 2911.682292,
-      "first_query_ms": 110.43779099999999,
-      "total_ms": 15910.12975
+      "text_model_load_ms": 7359.477833999999,
+      "image_model_load_ms": 2686.999584,
+      "first_query_ms": 87.497375,
+      "total_ms": 10133.974793
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 98.245917,
-      "p95_ms": 117.22604100000001
+      "median_ms": 94.641084,
+      "p95_ms": 104.40724999999999
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 5356732416.0,
+      "value": 6357270528.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

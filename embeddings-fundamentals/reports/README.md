@@ -36,6 +36,12 @@ RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-f
   --test integration -- --include-ignored    # real poppler/tesseract and real local models
 ```
 
+Local only, when the owner's real sample exams are present in `tests/sample-exams/` (git-ignored; never committed or sent anywhere, see `CLAUDE.md`):
+
+```bash
+RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored
+```
+
 The BDD run writes `reports/bdd/cucumber.json`, which CI uploads as the `bdd-report` artifact. It fails unless every scenario that the PRD requires up to the milestone in `config/acceptance.toml` ran and passed.
 
 ## Reproducing the final comparison

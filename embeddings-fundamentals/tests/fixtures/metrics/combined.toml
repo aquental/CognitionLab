@@ -8,6 +8,9 @@
 # id of the two leg runners-up (both 1/62). Every fused tie therefore joins a text and
 # an image result, and the record-id tie-break decides it.
 #
+# Re-derived 2026-10-29 after the chunking rules changed to structure-aware-v1/r2 (text
+# revisions, and so text record ids, changed; no chunk text of this corpus changed).
+#
 # Record ids are hashes of (revision, chunk, space) and are inputs of the derivation,
 # read from the fixture index; `records` pins them per rank, so a change of corpus,
 # extraction, chunking, or either space fails with the changed record named instead of
@@ -16,77 +19,77 @@
 # (equal leg scores are ordered by record id inside each leg as well).
 #
 # Images: chest = 9933..., us-mixed = c9f3..., abd-us = ed63....
-# q01 text 7a05 (lab-scanned p1 hemoglobina, 2), a9cc (lab-searchable p1, 2); image
-#     9933 (chest, 0, every image scores 0) then c9f3 -> 7a05 < 9933, then
-#     min(a9cc, c9f3) = a9cc -> [2, 0, 2].
-# q02 text 3e28 (2), ac6d (2); image 9933 (0), c9f3 -> 3e28, 9933, then ac6d < c9f3
+# q01 text 6511 (lab-searchable p1 hemoglobina, 2), a805 (lab-scanned p1, 2); image
+#     9933 (chest, 0, every image scores 0) then c9f3 -> 6511 < 9933, then
+#     min(a805, c9f3) = a805 -> [2, 0, 2].
+# q02 text 3fbf (2), 62a4 (2); image 9933 (0), c9f3 -> 3fbf, 9933, then 62a4 < c9f3
 #     -> [2, 0, 2].
-# q03 text 3f18 (2), 734c (2); image 9933 (0), c9f3 -> 3f18, 9933, then 734c
+# q03 text a354 (2), e239 (2); image 9933 (0), c9f3 (0) -> 9933 < a354, then
+#     min(e239, c9f3) = c9f3 -> [0, 2, 0].
+# q04 text 4f9f (2), 7041 (2); image 9933 (0), c9f3 -> 4f9f, 9933, then 7041
 #     -> [2, 0, 2].
-# q04 text 1ae8 (2), 1e0d (2); image 9933 (0), c9f3 -> 1ae8, 9933, then 1e0d
-#     -> [2, 0, 2].
-# q05 text e783 (conclusion, 1), f074 (1); image c9f3 (us-mixed 0.7071, 0), 9933 (0)
-#     -> c9f3 < e783, then min(f074, 9933) = 9933 -> [0, 1, 0].
-# q06 text 0119 (findings, 2), 8106 (2); image c9f3 (0), 9933 -> 0119, c9f3, then
-#     8106 < 9933 -> [2, 0, 2].
-# q07 text 1dc2 (unlabeled, 0), 2fad (0); image 9933 (chest, 2), c9f3 -> 1dc2, 9933,
-#     then 2fad < c9f3 -> [0, 2, 0].
-# q08 text d8ff (US title, 1), ead4 (1); image ed63 (abd-us, 2), c9f3 (us-mixed, 2)
-#     -> d8ff < ed63, then min(ead4, c9f3) = c9f3 -> [1, 2, 2].
-# q09 text d8ff (0), ead4 (0); image c9f3 (us-mixed, 2), ed63 (abd-us, 1) -> c9f3,
-#     d8ff, then ead4 < ed63 -> [2, 0, 0].
-# q10 text 0103 (técnica, 2), 3199 (2); image 9933 (0), c9f3 -> 0103, 9933, then
-#     3199 < c9f3 -> [2, 0, 2].
+# q05 text d86f (conclusion, 1), eb27 (1); image c9f3 (us-mixed 0.7071, 0), 9933 (0)
+#     -> c9f3 < d86f, then min(eb27, 9933) = 9933 -> [0, 1, 0].
+# q06 text 2ca7 (findings, 2), 2ee5 (2); image c9f3 (0), 9933 -> 2ca7, c9f3, then
+#     2ee5 < 9933 -> [2, 0, 2].
+# q07 text 335a (unlabeled, 0), 5e31 (0); image 9933 (chest, 2), c9f3 -> 335a, 9933,
+#     then 5e31 < c9f3 -> [0, 2, 0].
+# q08 text 24a2 (US title, 1), 3700 (1); image ed63 (abd-us, 2), c9f3 (us-mixed, 2)
+#     -> 24a2 < ed63, then min(3700, c9f3) = 3700 -> [1, 2, 1].
+# q09 text 24a2 (0), 3700 (0); image c9f3 (us-mixed, 2), ed63 (abd-us, 1) -> 24a2,
+#     c9f3, then 3700 < ed63 -> [0, 2, 0].
+# q10 text 7aba (técnica, 2), 9877 (2); image 9933 (0), c9f3 -> 7aba, 9933, then
+#     9877 < c9f3 -> [2, 0, 2].
 
 [[query]]
 id = "q01"
 ranks = [2, 0, 2]
-records = ["7a05d43e38f72162", "99332e1293b1aad5", "a9cc1af2f3b6752a"]
+records = ["65119039aea6f1b5", "99332e1293b1aad5", "a8052ef8237a0d70"]
 
 [[query]]
 id = "q02"
 ranks = [2, 0, 2]
-records = ["3e280ceebb60e0bf", "99332e1293b1aad5", "ac6d59bc082a9d35"]
+records = ["3fbfbf97f5d8283d", "99332e1293b1aad5", "62a4d68a4c9d67c9"]
 
 [[query]]
 id = "q03"
-ranks = [2, 0, 2]
-records = ["3f185fcbe71d67fb", "99332e1293b1aad5", "734c1f32ded5b0d7"]
+ranks = [0, 2, 0]
+records = ["99332e1293b1aad5", "a354292cc356b003", "c9f3aa4e974f0ab5"]
 
 [[query]]
 id = "q04"
 ranks = [2, 0, 2]
-records = ["1ae84ac3d3c04a73", "99332e1293b1aad5", "1e0d5705c3a8b268"]
+records = ["4f9fa38bfd5dee6a", "99332e1293b1aad5", "704163b53c1b6c98"]
 
 [[query]]
 id = "q05"
 ranks = [0, 1, 0]
-records = ["c9f3aa4e974f0ab5", "e7831497002b4d7a", "99332e1293b1aad5"]
+records = ["c9f3aa4e974f0ab5", "d86ff2460b0d1300", "99332e1293b1aad5"]
 
 [[query]]
 id = "q06"
 ranks = [2, 0, 2]
-records = ["0119648578032a31", "c9f3aa4e974f0ab5", "810661c4207692c2"]
+records = ["2ca7976c9e731319", "c9f3aa4e974f0ab5", "2ee5833f5982c029"]
 
 [[query]]
 id = "q07"
 ranks = [0, 2, 0]
-records = ["1dc216fd15f4b0dc", "99332e1293b1aad5", "2fad607368246426"]
+records = ["335a159392414d00", "99332e1293b1aad5", "5e314fd6ab3122f1"]
 
 [[query]]
 id = "q08"
-ranks = [1, 2, 2]
-records = ["d8ff395f6621ddc6", "ed63f163f253779e", "c9f3aa4e974f0ab5"]
+ranks = [1, 2, 1]
+records = ["24a2abf4b8631775", "ed63f163f253779e", "3700e429e41a622f"]
 
 [[query]]
 id = "q09"
-ranks = [2, 0, 0]
-records = ["c9f3aa4e974f0ab5", "d8ff395f6621ddc6", "ead4f3ca50dd40ef"]
+ranks = [0, 2, 0]
+records = ["24a2abf4b8631775", "c9f3aa4e974f0ab5", "3700e429e41a622f"]
 
 [[query]]
 id = "q10"
 ranks = [2, 0, 2]
-records = ["0103bcad43367a34", "99332e1293b1aad5", "31990e967dd3c7fc"]
+records = ["7aba5cbd08068db0", "99332e1293b1aad5", "9877124237bf899f"]
 
 # ---- generated by scripts/precompute-metrics.py; do not edit below ----
 
@@ -104,9 +107,9 @@ ndcg_at_3 = 0.9197207891481876
 
 [[expected]]
 query = "q03"
-precision_at_3 = 0.6666666666666666
+precision_at_3 = 0.3333333333333333
 hit_at_3 = 1.0
-ndcg_at_3 = 0.9197207891481876
+ndcg_at_3 = 0.3868528072345416
 
 [[expected]]
 query = "q04"
@@ -136,13 +139,13 @@ ndcg_at_3 = 0.6309297535714574
 query = "q08"
 precision_at_3 = 1.0
 hit_at_3 = 1.0
-ndcg_at_3 = 0.8145672023038535
+ndcg_at_3 = 0.6291344046077069
 
 [[expected]]
 query = "q09"
 precision_at_3 = 0.3333333333333333
 hit_at_3 = 1.0
-ndcg_at_3 = 0.8262346571285599
+ndcg_at_3 = 0.52129602861432
 
 [[expected]]
 query = "q10"
@@ -151,6 +154,6 @@ hit_at_3 = 1.0
 ndcg_at_3 = 0.9197207891481876
 
 [macro]
-precision_at_3 = 0.6
+precision_at_3 = 0.5666666666666667
 hit_at_3 = 1.0
-ndcg_at_3 = 0.7691248717133439
+ndcg_at_3 = 0.6668009309009407
