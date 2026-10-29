@@ -7,8 +7,10 @@ channel that could not be read (a failed or timed-out tool).
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Callable
+from typing import NoReturn
 
 from anonimizador import __version__
 from anonimizador.channels import ToolError, missing_languages
@@ -37,10 +39,27 @@ def bounded_int(maximum: int) -> Callable[[str], int]:
 
 # One day per tool run; 2400 dpi is beyond any scan.
 MAX_TIMEOUT, MAX_DPI = 86_400, 2_400
+# A value quoted in an argparse message (`invalid choice: 'x'`).
+QUOTED = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
+# Messages that end with the arguments themselves.
+ARGUMENT_LISTS = ("unrecognized arguments", "ambiguous option")
+
+
+class Parser(argparse.ArgumentParser):
+    """A parser whose usage errors never print an argument: a rejected argument can be a
+    path or a term (Codex C0-1)."""
+
+    def error(self, message: str) -> NoReturn:
+        for prefix in ARGUMENT_LISTS:
+            if message.startswith(prefix):
+                message = prefix
+        message = QUOTED.sub("(value not shown)", message)
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, f"{self.prog}: error: {message}\n")
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(
+    root = Parser(
         prog="anonimizador",
         description="Local tools to anonymize medical PDFs and images (counts only, never values).",
     )
@@ -89,7 +108,9 @@ def run_verify(args: argparse.Namespace) -> int:
         if options.use_ocr:
             no_data = missing_languages(options.lang, options.timeout)
             if no_data:
-                raise VerifyError("tesseract has no data for: " + ", ".join(no_data))
+                # Named by position: a mistyped --lang can be anything (Codex C0-1).
+                positions = ", ".join(str(n) for n in no_data)
+                raise VerifyError(f"tesseract has no data for --lang language(s) {positions}")
         terms: list[Term] = load_terms(args.terms) if args.terms else []
         files = collect(args.paths)
     except (VerifyError, TermsError, ToolError) as e:
