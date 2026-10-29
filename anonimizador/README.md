@@ -44,7 +44,7 @@ The verifier searches six places in each PDF, PNG, or JPEG:
 | `text` | The PDF text layer (`pdftotext`) |
 | `ocr` | What the rendered pages show (`pdftoppm` + `tesseract`), or what an image file shows |
 | `images` | What each image embedded in a PDF shows (`pdfimages` + `tesseract`); only icons, under 32 pixels on both sides, are skipped |
-| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text, with PDF strings decoded (hex, octal escapes, UTF-16). Terms shorter than 4 letters are not searched here, because binary data is full of short letter runs. |
+| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text, with PDF strings decoded (hex, octal escapes, nested parentheses, UTF-16), and the pieces of a word drawn glyph by glyph joined. Terms shorter than 4 letters are not searched here, because binary data is full of short letter runs. |
 
 ```text
 anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)
@@ -62,7 +62,7 @@ How to read the report:
 - **Terms** are named by their position among the terms in the file, so `term 1` is the first term listed.
 - **Matching** ignores case and accents. Long terms are matched without spaces or punctuation, so OCR spacing errors and line breaks do not hide them. Numbers are matched by their digits: `123.456.789-09`, `12345678909`, and `CPF 123.456.789-09` are the same term. Any term with 5 digits or more is matched by its digits, and digits up to 3 characters apart (spaces, punctuation, parentheses, line breaks) are one number, so `(11) 98765-4321` and a number broken across lines are found. Every page and embedded image counts, and a term split across a page break is found. UTF-16 metadata (EXIF, Windows tags) is decoded, so a short name stored in it is found. Raw bytes are searched for terms of 4 letters or more; shorter terms match binary data by chance, so list a patient's full name, not only a 3-letter first name.
 - **The hint** marks the classic failed redaction: a box drawn over text that is still in the file.
-- **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints, searched in the file name too, and across page breaks. They fail the check only with `--strict-patterns`.
+- **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints, searched in the file name, across page breaks, and in the PDF strings of old objects too. They fail the check only with `--strict-patterns`.
 - **Safety:** the verifier refuses a terms file that git could commit. The terms file must be UTF-8 text.
 
 - **ERROR** marks a file in which a place could not be read: a tool failed or timed out, a PDF is encrypted, or pages did not render. The `unreadable:` lines name the place and the tool, never the file. An unread place proves nothing, so such a file is never reported `ok`.

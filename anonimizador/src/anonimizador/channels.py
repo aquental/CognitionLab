@@ -15,6 +15,7 @@ import subprocess
 import zlib
 from collections.abc import Iterator
 from concurrent.futures import Executor
+from dataclasses import dataclass
 
 # The places searched, in report order.
 CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
@@ -76,6 +77,9 @@ class Reading:
     def __init__(self) -> None:
         self.texts: Texts = {channel: [] for channel in CHANNELS}
         self.errors: list[str] = []
+        # The decoded PDF strings, searched for patterns: an identifier left in an old
+        # object reaches no other pattern channel (Grok G0-21).
+        self.strings: list[str] = []
 
     @contextlib.contextmanager
     def channel(self, name: str) -> Iterator[None]:
@@ -175,8 +179,18 @@ def decode_both(blobs: list[bytes]) -> list[str]:
     return texts
 
 
-PDF_HEX_STRING = re.compile(rb"<([0-9A-Fa-f\s]{4,})>")
-PDF_LITERAL_STRING = re.compile(rb"\(((?:\\.|[^\\()])*)\)", re.DOTALL)
+PDF_HEX_STRING = re.compile(rb"<([0-9A-Fa-f\s]{2,})>")
+# A literal string without nested parentheses: read as well as the full parse below,
+# because a "(" in binary data can start a long false string.
+PDF_INNER_LITERAL = re.compile(rb"\(((?:\\.|[^\\()])*)\)", re.DOTALL)
+PDF_STRING_OPENER = re.compile(rb"[(<]")
+# A literal string whose balanced parentheses nest one level deep, so
+# `(Concei\\347\\343o (mae))` is one string (Grok G0-20). Deeper nesting is rare, and a
+# regular expression keeps binary streams fast to scan.
+PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOTALL)
+# What may stand between two pieces of one drawn text: numbers (kerning, positions),
+# array brackets, and text-showing and positioning operators.
+TEXT_GLUE = re.compile(rb"[\s\d.+\-\[\]]*(?:(?:Tj|TJ|Td|TD|T\*|')[\s\d.+\-\[\]]*)*")
 PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
 
 
@@ -213,19 +227,72 @@ def decode_pdf_string(raw: bytes) -> str:
     return raw.decode("latin-1")
 
 
-def pdf_strings(blob: bytes) -> str:
-    """Every PDF string in `blob`, decoded, one per line. A name stored as a hex string
+@dataclass(frozen=True)
+class PdfString:
+    """One string of a PDF: where it is in the bytes, and its bytes."""
+
+    start: int
+    end: int
+    value: bytes
+
+
+def pdf_string_spans(blob: bytes) -> list[PdfString]:
+    """The hex and literal strings of `blob`, in order."""
+    spans = []
+    pos = 0
+    while opener := PDF_STRING_OPENER.search(blob, pos):
+        start = opener.start()
+        pos = start + 1
+        if blob[start] == ord("("):
+            if literal := PDF_LITERAL.match(blob, start):
+                spans.append(PdfString(start, literal.end(), unescape_literal(literal.group(1))))
+                pos = literal.end()
+        elif hexed := PDF_HEX_STRING.match(blob, start):
+            spans.append(PdfString(start, hexed.end(), hex_string(hexed.group(1))))
+            pos = hexed.end()
+    return spans
+
+
+def glued(blob: bytes, spans: list[PdfString]) -> str:
+    """The strings of `blob` with the pieces of one drawn text joined: content streams
+    often draw a word glyph by glyph (`[(Z) -2 (u) -2 (l)] TJ`), and a short term must
+    be a whole word (Grok G0-19). Line breaks inside a string are dropped too."""
+    parts = []
+    for previous, span in zip([None, *spans], spans, strict=False):
+        if previous is not None and not TEXT_GLUE.fullmatch(blob, previous.end, span.start):
+            parts.append("\n")
+        parts.append(re.sub(r"[\r\n]", "", decode_pdf_string(span.value)))
+    return "".join(parts)
+
+
+@dataclass(frozen=True)
+class PdfStringViews:
+    """The PDF strings of some bytes, read three ways."""
+
+    # One string per line: also searched for patterns (Grok G0-21).
+    lines: str
+    glued: str
+    # Innermost literals only, robust to a false "(" in binary data.
+    inner: str
+
+
+def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
+    """Every PDF string in `blobs`, decoded. A name stored as a hex string
     (`<FEFF005A…>`) or with octal escapes (`(Jo\\343o)`), the usual forms for a non-ASCII
     name, holds none of its letters in the bytes (Grok G0-14)."""
-    strings = [hex_string(m) for m in PDF_HEX_STRING.findall(blob)]
-    strings += [unescape_literal(m) for m in PDF_LITERAL_STRING.findall(blob)]
-    return "\n".join(decode_pdf_string(s) for s in strings)
+    lines, joined, inner = [], [], []
+    for blob in blobs:
+        spans = pdf_string_spans(blob)
+        lines.extend(decode_pdf_string(span.value) for span in spans)
+        joined.append(glued(blob, spans))
+        inner.extend(
+            decode_pdf_string(unescape_literal(m)) for m in PDF_INNER_LITERAL.findall(blob)
+        )
+    return PdfStringViews("\n".join(lines), "\n".join(joined), "\n".join(inner))
 
 
-def raw_texts(data: bytes) -> list[str]:
-    """The file bytes and every zlib stream in it, decoded the ways text is stored:
-    leftover incremental updates, uncompressed content streams, XMP packets, PNG text,
-    and PDF strings (hex and escaped literals)."""
+def raw_blobs(data: bytes) -> list[bytes]:
+    """The file bytes, every zlib stream in it, and PNG compressed text."""
     blobs = [data]
     for match in re.finditer(rb"stream\r?\n", data):
         start = match.end()
@@ -235,12 +302,26 @@ def raw_texts(data: bytes) -> list[str]:
         with contextlib.suppress(zlib.error):
             blobs.append(zlib.decompressobj().decompress(data[start:end]))
     blobs.extend(png_text_chunks(data))
+    return blobs
+
+
+def raw_readings(data: bytes) -> tuple[list[str], str]:
+    """The raw texts of a file, and its PDF strings one per line (for patterns)."""
+    blobs = raw_blobs(data)
     texts = decode_both(blobs)
     texts.extend(
         blob.decode("utf-16-be", "ignore") for blob in blobs if blob.count(b"\x00") > len(blob) // 4
     )
-    texts.append("\n".join(pdf_strings(blob) for blob in blobs))
-    return texts
+    strings = pdf_string_views(blobs)
+    texts.extend((strings.lines, strings.glued, strings.inner))
+    return texts, strings.lines
+
+
+def raw_texts(data: bytes) -> list[str]:
+    """The file bytes and every zlib stream in it, decoded the ways text is stored:
+    leftover incremental updates, uncompressed content streams, XMP packets, PNG text,
+    and PDF strings (hex and escaped literals)."""
+    return raw_readings(data)[0]
 
 
 def image_metadata(data: bytes) -> list[str]:
@@ -282,7 +363,8 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        texts["raw"] = raw_texts(f.read())
+        texts["raw"], strings = raw_readings(f.read())
+    reading.strings = [strings]
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)

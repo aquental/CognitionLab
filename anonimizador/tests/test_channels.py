@@ -1,8 +1,9 @@
 import struct
+import time
 import zlib
 
 from anonimizador.channels import image_metadata, png_size, raw_texts, unescape_literal, worth_ocr
-from anonimizador.terms import Term
+from anonimizador.terms import Term, count_patterns
 
 NAME = Term("Fulano Ficticio")
 
@@ -127,3 +128,45 @@ def test_a_thin_image_is_read_and_an_icon_is_not():
     assert worth_ocr((20, 400))
     assert not worth_ocr((16, 16))
     assert not worth_ocr((31, 31))
+
+
+def test_a_word_drawn_glyph_by_glyph_is_whole_in_raw_bytes():
+    # Regression (Grok G0-19): content streams often draw a word as several strings,
+    # and each piece was its own word, so a term under 6 letters counted 0.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    kerned = b"BT [(Z) -2 (u) -2 (l) -2 (e) -2 (o)] TJ ET"
+    assert count("Zuleo", b"(Z)(u)(l)(e)(o)") == 1
+    assert count("Zuleo", kerned) == 1
+    assert count("Zuleo", b"BT [<5A> -2 <75> -2 <6C> <65> <6F>] TJ ET") == 1
+    assert count("Zuleo", b"BT (Zu) Tj 4 0 Td (leo) Tj ET") == 1
+    assert count("Zuleo", b"(Zu\nleo)") == 1
+    stream = zlib.compress(kerned)
+    assert count("Zuleo", b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
+    assert count("Zulea", kerned) == 0
+    assert count("Rosa", b"[(R) 5 (o) 5 (s) 5 (a)] TJ") == 1
+    assert count("Fulano", b"[(F)(u)(l)(a)(n)(o)] TJ") == 1
+    # Strings of separate drawings stay separate words.
+    assert count("Zuleo", b"(Zu) Tj ET BT /F1 9 Tf (leo) Tj") == 0
+
+
+def test_a_literal_with_balanced_parentheses_is_one_string():
+    # Regression (Grok G0-20): the string stopped at the first parenthesis, so the
+    # escapes before it were never decoded.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    assert count("Zuleição", b"<< /Author (Zulei\\347\\343o (mae)) >>") == 1
+    assert count("Zuleição", b"<< /Author (Zulei\\347\\343a (mae)) >>") == 0
+    assert count("Fulano", b"<< /Author (Ful\\343no (Dr)) >>") == 1
+    utf16 = b"(\\376\\377\\000Z\\000u\\000l\\000e\\000o (Dr))"
+    assert count("Zuleo", b"<< /Author " + utf16 + b" >>") == 1
+
+
+def test_a_long_run_without_at_sign_is_fast_to_search():
+    # The e-mail pattern was quadratic on a long run of word characters, which decoded
+    # binary strings hold (found while fixing Grok G0-21).
+    started = time.perf_counter()
+    assert count_patterns(["a" * 200_000 + " b@c.com"]) == {"email": 1}
+    assert time.perf_counter() - started < 2
