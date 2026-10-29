@@ -37,3 +37,7 @@ The owner asked for a local anonymization verifier, generators for the manifest 
 - `scripts/make-covered-name-pdf.py` writes the synthetic fixture `tests/fixtures/anonymization/covered-name.pdf`, a name hidden under a drawn box.
 - `src/drafts.rs`, with the CLI commands `draft-manifest` and `draft-labels`.
 - Tests: `tests/drafts.rs` (3), `drafts::tests` (5, including a proptest that every proposed anchor is found by the evaluator), and 2 integration tests.
+
+### Privacy note (before Grok round 4)
+
+The package check counts words from the real exams' file names, without printing them. It found that a synthetic test name added in `b14c7d1` (`anonymization::tests`) used a generic exam-type word that also occurs in a real exam's file name. The word is a procedure name, not a personal identifier. Under the owner's rule that nothing derived from the exams is committed, it was replaced with a neutral word before the round 4 package was built. `b14c7d1` is already pushed, so the word remains in that commit's history. Rewriting published history is left to the owner. No other word from the exam file names appears in the package except generic vocabulary that the repository already used before the exams existed.
