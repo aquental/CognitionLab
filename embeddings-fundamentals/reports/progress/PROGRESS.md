@@ -18,6 +18,7 @@ This file lets work resume without repeating completed steps. Each phase lists i
 |---|---|---|
 | Grok | `grok --permission-mode plan --no-subagents --disable-web-search --prompt-file <pkg>` (1.0.70) | Headless and read-only; the package is inlined and no tool use is allowed |
 | Codex | `codex exec -s read-only -C embeddings-fundamentals <prompt>` (codex-cli 0.165.0, ChatGPT login) | A separate process with a read-only sandbox |
+| Antigravity | `agy --print --mode plan` (Antigravity CLI), told to use the `rust-dev` plugin | A separate process in read-only plan mode. Added by the owner on 2026-10-29, from Phase 4, as the third reviewer after Grok and Codex (see `CLAUDE.md`) |
 
 ## Phase 0 — Scaffolding & BDD harness
 
@@ -228,3 +229,122 @@ None for Phase 0.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - Image latency on an idle host (the last run had a load average of about 6 on 8 CPUs).
 - PDF soft masks with `/Matte` or a non-default `/Decode` (not visible in `pdfimages` output; C3-6 residual).
+
+## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
+
+**Status:** ✅ APPROVED (2026-10-29). Grok rounds 1–7, Codex rounds 1–3, and Antigravity rounds 1–2 (with the `rust-dev` plugin) are complete. The final round of each reviewer (Grok 7 at `d0d99e8`, Codex 3 at `6d42294`, Antigravity 2 at `1349cc5`) reported NO FINDINGS. 14 findings (S4-1, S4-2, G4-1..G4-6, C4-1..C4-5, A4-1): G4-5 moved to `anonimizador` with the verifier and fixed there, the rest fixed here with regression tests; see `reports/reviews/phase-4/FINDINGS.md`. The per-phase review changelog is `REVISION.md`. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+
+### Decisions and PLAN changes, with justification
+| Decision | Justification |
+|---|---|
+| `fusion::rrf` over item keys: score = Σ 1/(k + rank), ranks from 1, each list's top `depth` (default `"all"`), a repeated item counts once at its best rank, contributions summed in ascending rank order, ties broken by ascending key (`record_id`) | PRD §5.3/§6.6. Summing in rank order makes two items with the same ranks in different lists bit-identical, so the tie-break, not float rounding, decides them |
+| `FusionParams { method = "rrf", k = 60, depth = "all" \| n }` is a versioned config value. It is recorded in every combined evaluation (`EvaluationReport.fusion`) and combined result, and fingerprinted in the combined snapshot. It is not part of the evaluation fingerprint | PRD §6.6 requires depth to be recorded. The evaluation fingerprint covers the frozen dataset and metrics, which must stay equal across the three modes for them to be comparable |
+| Combined search runs each leg in its own space with its own query model (`Leg { space, embedder }`). Both spaces and the image leg's text-to-image capability are checked before any store read or query embedding. The legs run concurrently (`tokio::try_join!`) | PRD §6.6: each leg's query vector must match its own index space; unsupported combinations are refused before processing |
+| A combined result keeps its fused rank and score (`score` as `f32`, the exact `fusion.fused_score` as `f64`) and its rank and cosine score in each leg (`fusion.text`, `fusion.image`) | Traceability: a fused ranking must show where each item came from, without comparing raw scores |
+| A combined configuration file (`config/experiments/combined-*.toml`) names a text configuration and an image configuration plus `[fusion]`. Loading checks the roles: the text leg must be a text model over a text run, the image leg a cross-modal model over an image run (exit 3 otherwise) | PRD §6.6: a combined configuration is an ordered pair of spaces plus fusion parameters |
+| `combine` ingests nothing. It loads the snapshots of a text run and an image run, refuses a pair that indexed another corpus or was evaluated with other frozen queries or labels, and refuses a leg whose snapshot pins nothing in its model's space. It then saves a create-only snapshot pinning both legs' revisions and measures fused retrieval over it | Reuses the evidence of the single-mode runs instead of re-ingesting, and the combined id alone reproduces the run (`search --mode combined --experiment <id>`) |
+| Combined cold start = both model loads + the first fused query in a fresh process; warm latency covers both legs and the fusion; index size is the size of the revisions the combined snapshot pins (Grok G4-3); query cost is reported per leg | PRD §9.4 definitions applied to a two-model configuration; costs of different providers are not summed into one number |
+| `ComparisonReport::with_combined` adds combined results to a report. It refuses another corpus, query set, labels, evaluation fingerprint, or machine, and refuses a leg experiment the report shows in another space. The extraction-fingerprint rule now compares only configurations in the same mode | A text run and an image run extract different things, so their extraction fingerprints differ by design. The old rule refused every three-mode report |
+| A combined search scoped to an experiment refuses a snapshot that is not the combined run of its legs and fusion parameters: fusion fingerprint and a pinned revision in each leg's space (`check_combined_snapshot`, exit 3). The CLI reads the snapshot and checks the fusion fingerprint before loading any model (Grok G4-1, G4-2) | The combined id must reproduce the run it names; a different `k` or a missing leg would otherwise change or silently shrink the fused ranking |
+| Owner's real sample exams (`tests/sample-exams/`, git-ignored, added 2026-10-29) enter only local, opt-in, property-based tests (`tests/sample_exams.rs`, `RUN_SAMPLE_EXAMS=1`). Messages name a document by index, never by file name, and nothing derived from them is committed or sent to a reviewer; reviewers run from a clean worktree of the committed branch (`CLAUDE.md`) | PRD §11: real documents without an anonymization review must not be indexed, reported, or shared. The tests check the pipeline's behavior on real layouts without persisting anything |
+| `anonymization::filename_findings` also flags upper-case word sequences (with one-letter particles) and every free-form file name (anything beyond lower-case ASCII letters, digits, `-`, `_`, `.`) | Found by the real exams: none of the 12 real file names, mostly upper-case personal names, was flagged. A finding only asks the reviewer to look, so a conservative rule is safe. The blocking gate is unchanged: without a recorded review a source is refused |
+| Chunking rules `structure-aware-v1/r2` (`chunking::RULES_ID`, part of the chunking fingerprint): a table header that no row uses (a multi-column line without digits followed by text, a heading, a blank line, another header, or the end of the page) is kept as a paragraph | Found by the real exams: 24 such lines on 9 of the 12 documents were silently dropped from every chunk. The rules id enters the fingerprint, so revisions chunked by the old rules are not reused as "unchanged". The synthetic corpus has no such line: its chunks are unchanged, but every text revision id (and so every text record id) changed |
+| `pipeline::extract_pdf`: the per-page native/OCR selection as a public function, used by ingestion and by the real-exam tests | The tests exercise the same selection as ingestion without a manifest, and without bypassing the gate through `Pipeline::extract_source` |
+| Owner-requested corpus tools (2026-10-29). `draft-manifest` measures a corpus directory: checksums, pages with a usable text layer (same rule as ingestion), and kept images. It guesses `input_type`, writes no anonymization review, refuses flagged file names because the manifest is tracked, and never uses a flagged name as a `source_id`. `draft-labels` pools the top `--depth` results of every run for every frozen query, with anchors, asset checksums, and `label = "TODO"`, which does not parse until it is judged. `scripts/anonymization-verify.py` counts the owner's terms in the name, metadata, text layer, OCR, embedded images, and raw bytes, and prints counts only. `TESTS.md` documents anonymization, building the corpus, and what an automatic anonymizer would need | The owner corpus is the main outstanding input. The drafts remove the mechanical work (checksums, ids, anchors, asset checksums) without ever recording a review or a judgment. The verifier is a separate Python script that checks independently of the pipeline code. It catches the classic failed redaction, a box drawn over text that stays in the file |
+| `extract_pdf` reports each page through an `on_page` callback as it is extracted, and its error names the failing page (Grok G4-4) | A failed source must still show how far extraction got. The refactor in `b14c7d1` had moved page reports after full success |
+| Codex round 1 (C4-1..C4-5). The snapshot records the run status, and `combine` refuses an incomplete or unrecorded leg. The remote permission check is bound to the corpus actually searched: every searched snapshot must have indexed `--manifest`, and an active scope is refused for a remote engine. Results and combined legs record `revisions_fingerprint`, and a report pairs a leg with its reported run only over the same revisions. Draft errors name no path. The README review status is accurate | PLAN §4.3 (incomplete runs never look complete), PRD §11 (per-corpus remote permission), traceability of "combined against its legs", and no identifying data in messages |
+| BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
+
+### Implementation
+- `src/fusion.rs`: `rrf`, `FusionParams`, `FusionMethod`, `FusionDepth` (`"all"` or a positive count), unit tests and proptests:
+  - overlapping items accumulate;
+  - descending score with key tie-break;
+  - scaling raw scores leaves the fusion unchanged;
+  - list order does not matter.
+- `src/retrieval.rs`: `FusionTrace`, `LegTrace`, `SearchHit.fusion`, `fuse`, `Leg`, `search_combined`.
+- `src/evaluation.rs`: `evaluate_combined` (checks text labels against the text index and image labels against the image index); `ResultEntry.fusion`; `EvaluationReport.fusion`.
+- `src/experiment.rs`: `run_combined`, `CombinedInputs`, `ExperimentError::Combination`.
+- `src/report.rs`:
+  - result types: `CombinedResult`, `LegConfiguration`, `CombinedStart`, `CombinedMeasurements`, `CombinedCosts`;
+  - `with_combined`;
+  - Markdown sections: "Combined configurations", "Retrieval modes compared", "Combined retrieval against its legs", "Combined efficiency", and per-query fused top 3 with leg ranks.
+- `src/config.rs`: `CombinedConfigFile`, `CombinedConfig::load` with role checks.
+- `src/cli.rs`: `combine`, `search --mode combined`, `report --combined`. Remote permission is checked for every remote leg.
+- Configs: `combined-e5-base-siglip.toml`, `combined-minilm-clip.toml`, `combined-deterministic.toml`.
+- BDD milestone 4: `us03` Combined example and "Fuse rankings without comparing incompatible raw scores". Fixtures: `combined.ranks.toml` (hand-derived, with record ids) and `combined.toml` (`scripts/precompute-metrics.py`).
+- Tests: `tests/combined.rs` (7) covers:
+  - a combined run pins both legs and matches the hand-derived metrics;
+  - the refusals: swapped legs, another corpus, other labels, a missing leg, a reused id;
+  - search guards before any read or embedding;
+  - the three-mode report and its refusals;
+  - a combined search scoped to an experiment must be that combined run (G4-1);
+  - the snapshot is read before any model loads (G4-2);
+  - the index size is that of the pinned revisions (G4-3).
+
+  The integration test `the_cli_runs_combined_retrieval_over_real_text_and_image_runs` runs real MiniLM + CLIP through the CLI.
+- Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule), `TESTS.md` (anonymization, owner corpus, automatic anonymizer design).
+- Corpus tools (owner request):
+  - `src/drafts.rs` with the `draft-manifest` and `draft-labels` CLI commands;
+  - `scripts/anonymization-verify.py` and `scripts/make-covered-name-pdf.py`, which writes `tests/fixtures/anonymization/covered-name.pdf`.
+
+  At the owner's request, these two scripts and the fixture moved to the sibling Python project `../anonimizador` (branch `anonimizador/scaffold`), where the verifier became `anonimizador verify`. Its integration test moved with it, into `anonimizador/tests/`.
+
+  Tests: `tests/drafts.rs` (3), `drafts::tests` (5), and 2 integration tests.
+
+### Acceptance criteria (PLAN Phase 4 exit)
+| Criterion | Evidence |
+|---|---|
+| All `@m1`–`@m4` pass | `bdd inventory: milestone 4, 35 required, 38 executed`; 38 scenarios / 241 steps passed |
+| `fusion::rrf` with the specified score, order, tie-break, and proptests | `fusion::tests` (9); BDD "Fuse rankings without comparing incompatible raw scores" |
+| `retrieval::combined` | `search_combined`; `tests/combined.rs`; real CLI integration |
+| Final comparison report, reproduction, saved configs, limitations | [`reports/phase-4/comparison.md`](../phase-4/comparison.md); [`reports/README.md`](../README.md); `config/experiments/`; the limitations section of the report |
+| PRD §12 deliverables and §13 criteria walked through with evidence links | [`reports/ACCEPTANCE.md`](../ACCEPTANCE.md) |
+
+### Validation (local, 2026-10-29)
+- **Final validation at approval** (head `1349cc5` plus documentation): fmt and clippy `-D warnings` for every feature set ok; `cargo test`: 166 unit, 17 pipeline, 8 combined, 7 experiment, 4 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38/38, 35 required). `RUN_INTEGRATION=1` integration: **17 passed**. `RUN_SAMPLE_EXAMS=1` real exams (local only): **4 passed**. The items below record the validation at earlier review rounds.
+- fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
+- `cargo test`: 166 unit (incl. 9 fusion, 2 combined-config, and 5 draft tests), 16 pipeline (incl. the G4-4 regression), 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
+- Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
+  - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
+  - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. After the verifier moved to `../anonimizador`, 17 remain here. The OpenAI live test stays outstanding.
+- `RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored` (local only, real exams): **4 passed**.
+  - Every unreviewed exam is refused before any processing.
+  - Every file name is flagged, and no finding reveals it.
+  - Coverage: 12 documents, 45 pages (39 native, 6 OCR), 739 chunks. Extraction is deterministic; no token is lost without a budget; budgets 16/64/512 are respected with and without truncation.
+  - Images: 348 listed, 94 kept, 27 prepared, all PNGs with only IHDR/IDAT/IEND.
+- Synthetic regressions for the two defects:
+  - `anonymization::tests::identifier_like_filenames_are_flagged`;
+  - `chunking::tests::a_table_header_no_row_uses_is_kept_as_text` (a mutant dropping unused headers fails it).
+- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 4–11; regenerated after the Codex round 1 fixes, which record run status and revisions).
+  - Text and image metrics are identical to Phases 2 and 3:
+    - MiniLM (both engines): 0.333 / 0.500 / 0.409;
+    - E5-base: 0.433 / 0.700 / 0.540;
+    - CLIP: 0.167 / 0.300 / 0.241;
+    - SigLIP: 0.167 / 0.300 / 0.270.
+  - Combined:
+    - E5-base + SigLIP: 0.400 / **0.800** / 0.545, warm median 88 ms (0.367 / 0.800 / 0.508 before the chunking-rules revision r2);
+    - MiniLM + CLIP: 0.267 / 0.600 / 0.340, warm median 40 ms (0.300 / 0.600 / 0.388 before r2).
+  - Fusion raises Hit@3 above every leg.
+  - Its P@3 and nDCG@3 are within tie-break noise. Every fused tie joins a text and an image item, and the `record_id` tie-break (PRD §6.6) decides it. The r2 rules changed every text record id without changing any chunk, and that alone moved both combined configurations.
+  - The report's limitations explain this per query. A relevance-aware cross-leg tie rule would be a PRD change and is not made here.
+
+### rust-skills applied
+- `num-float-compare`: `total_cmp`, and float ordering in tests through `total_cmp`.
+- `num-cast-try-from`: `#[expect]` with reasons on the bounded casts.
+- `async-join-parallel`/`async-try-join`: the two legs run concurrently.
+- `async-spawn-blocking`: snapshot load and save, and index size, on the blocking pool.
+- `type-enum-states`: `FusionMethod`, `FusionDepth`, `SearchMode::Combined`.
+- `serde-try-from-validate`: `FusionDepth` from `"all"` or a positive count.
+- `serde-deny-unknown-fields`: fusion and combined configs.
+- `serde-default-compat` / `serde-skip-empty`: new optional report fields keep the Phase 2/3 JSON readable.
+- `api-parse-dont-validate`: `CombinedConfig::load` checks roles at the boundary.
+- `test-proptest-properties`.
+
+PLAN §2.3 deviations: none.
+
+### Outstanding (not claimed)
+- Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
+- Live OpenAI run (key and `remote_allowed`).
+- Latency on an idle host.
+

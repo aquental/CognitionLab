@@ -220,6 +220,61 @@ pub fn check_eligibility(manifest: &LoadedManifest) -> Result<(), ValidationErro
     }
 }
 
+/// A PDF extraction failure, with the page it happened on.
+#[derive(Debug, thiserror::Error)]
+pub enum PdfExtractionError {
+    /// The page count could not be read; no page was extracted.
+    #[error(transparent)]
+    PageCount(crate::extraction::ExtractionError),
+    /// A page could not be extracted; every earlier page was.
+    #[error("page {page}: {source}")]
+    Page {
+        /// 1-based page that failed.
+        page: NonZeroU32,
+        /// Native extraction or OCR error.
+        #[source]
+        source: crate::extraction::ExtractionError,
+    },
+}
+
+/// Extracts every page of a PDF the way ingestion does: the native text layer when it is
+/// usable (`ExtractionConfig::native_text_is_usable`), otherwise OCR of that page. It
+/// reads no manifest and applies no eligibility gate: callers run the gate first.
+/// `on_page` sees each page as soon as it is extracted, so a caller keeps the pages
+/// that preceded a failure.
+///
+/// # Errors
+///
+/// Returns [`PdfExtractionError::PageCount`] when the page count fails and
+/// [`PdfExtractionError::Page`] for the first page whose native extraction or OCR
+/// fails.
+pub async fn extract_pdf<T: TextExtractor, O: OcrEngine>(
+    text: &T,
+    ocr: &O,
+    path: &std::path::Path,
+    config: &ExtractionConfig,
+    mut on_page: impl FnMut(&PageText) + Send,
+) -> Result<Vec<PageText>, PdfExtractionError> {
+    let count = text
+        .page_count(path)
+        .await
+        .map_err(PdfExtractionError::PageCount)?;
+    let mut pages = Vec::new();
+    for n in 1..=count.get() {
+        let page = NonZeroU32::new(n).unwrap_or(NonZeroU32::MIN);
+        let at = |source| PdfExtractionError::Page { page, source };
+        let native = text.extract_page(path, page).await.map_err(at)?;
+        let extracted = if config.native_text_is_usable(&native.text()) {
+            native
+        } else {
+            ocr.ocr_page(path, page).await.map_err(at)?
+        };
+        on_page(&extracted);
+        pages.push(extracted);
+    }
+    Ok(pages)
+}
+
 /// Per-page extraction outcome.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PageReport {
@@ -361,6 +416,7 @@ struct ExtractionFingerprintInput<'a> {
 #[derive(Serialize)]
 struct ChunkingFingerprintInput<'a> {
     config: &'a ChunkingConfig,
+    rules: &'static str,
     tokenizer: &'a str,
     budget: Option<usize>,
 }
@@ -514,6 +570,7 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                     })?,
                     Fingerprint::of(&ChunkingFingerprintInput {
                         config: &settings.chunking,
+                        rules: crate::chunking::RULES_ID,
                         tokenizer: self.embedder.token_counter().id(),
                         budget,
                     })?,
@@ -572,6 +629,7 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
             .collect(),
             corpus_checksum: manifest.manifest_checksum.clone(),
             evaluation,
+            run_status: Some(run_status),
         };
         self.on_store(move |s| s.save_experiment(&snapshot)).await?;
         let report = RunReport {
@@ -626,36 +684,19 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
         config: &ExtractionConfig,
         report: &mut SourceReport,
     ) -> Result<Vec<PageText>, String> {
-        let count = self
-            .text
-            .page_count(path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut pages = Vec::new();
-        for n in 1..=count.get() {
-            let page = NonZeroU32::new(n).unwrap_or(NonZeroU32::MIN);
-            let native = self
-                .text
-                .extract_page(path, page)
-                .await
-                .map_err(|e| e.to_string())?;
-            let text = if config.native_text_is_usable(&native.text()) {
-                native
-            } else {
-                self.ocr
-                    .ocr_page(path, page)
-                    .await
-                    .map_err(|e| e.to_string())?
-            };
-            report.pages.push(PageReport {
-                page: n,
+        // Each page is reported as it is extracted, so a failed source still shows how
+        // far extraction got.
+        let pages = &mut report.pages;
+        extract_pdf(self.text, self.ocr, path, config, |text| {
+            pages.push(PageReport {
+                page: text.page.get(),
                 method: text.method,
                 unreadable: text.is_blank(),
                 confidence: text.confidence,
             });
-            pages.push(text);
-        }
-        Ok(pages)
+        })
+        .await
+        .map_err(|e| e.to_string())
     }
 
     async fn process_source(&self, ctx: &SourceContext<'_>) -> SourceReport {

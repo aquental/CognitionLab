@@ -17,7 +17,12 @@
 //! 4. repeat every frozen query `latency_repeats` times for warm latency (nearest-rank
 //!    median and p95 over the pooled samples);
 //! 5. read peak local RAM, the index size, and fidelity over the indexed records.
+//!
+//! A combined experiment ([`run_combined`], PRD §6.6) ingests nothing: it pairs the
+//! snapshots of a text run and an image run, pins both in a snapshot of its own, and
+//! measures fused retrieval over them.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -27,22 +32,28 @@ use crate::cost::{Billed, PriceTable, estimate};
 use crate::domain::{Execution, Modality, RunStatus, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
 use crate::evaluation::{
-    Dataset, EvalError, EvaluationReport, check_image_labels, check_text_labels, evaluate_images,
-    evaluate_text,
+    Dataset, EvalError, EvaluationReport, check_image_labels, check_text_labels, evaluate_combined,
+    evaluate_images, evaluate_text,
 };
 use crate::extraction::images::ImageExtractor;
 use crate::extraction::{OcrEngine, TextExtractor};
 use crate::fidelity::{self, LoadedSample};
+use crate::fusion::FusionParams;
+use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint};
 use crate::measurement::{
     Clock, Hardware, LatencyStats, MeasuredEmbedder, MemoryProbe, Observation, millis,
 };
 use crate::pipeline::{IngestSettings, Pipeline, RunReport, Sleeper, ValidationError};
 use crate::report::{
-    ColdStart, ConfigurationResult, Costs, EvaluationNotRun, EvaluationNotRunStatus, Fingerprints,
-    IncompleteExperiment, IngestionMeasurement, Measurements, QuerySideStart, Reliability,
+    ColdStart, CombinedCosts, CombinedMeasurements, CombinedResult, CombinedStart,
+    ConfigurationResult, Costs, EvaluationNotRun, EvaluationNotRunStatus, Fingerprints,
+    IncompleteExperiment, IngestionMeasurement, LegConfiguration, Measurements, QuerySideStart,
+    Reliability,
 };
-use crate::retrieval::{Scope, SearchError, SearchHit, read_records, search_images, search_text};
-use crate::storage::EvaluationProvenance;
+use crate::retrieval::{
+    Leg, Scope, SearchError, SearchHit, read_records, search_combined, search_images, search_text,
+};
+use crate::storage::{EvaluationProvenance, ExperimentSnapshot, RevisionRef};
 use crate::storage::{FsRecordStore, StoreError};
 
 /// Inputs of one measured experiment.
@@ -112,6 +123,9 @@ pub enum ExperimentError {
     /// A blocking task failed.
     #[error("store task failed: {0}")]
     Task(String),
+    /// The leg experiments of a combined run cannot be paired.
+    #[error("cannot combine: {0}")]
+    Combination(String),
     /// The ingestion was incomplete and the query side failed (for example a frozen
     /// label points into a failed source, or the query adapter did not load), so the
     /// evaluation could not run. Carries the ingestion outcome to report (exit 2).
@@ -244,6 +258,8 @@ where
                 .map_err(|e| ExperimentError::Task(e.to_string()))??
         };
         let scope = Scope::Experiment(&snapshot);
+        let revisions_fingerprint = crate::storage::revisions_fingerprint(&snapshot.revisions)
+            .map_err(|e| ExperimentError::Task(e.to_string()))?;
         let space = info.embedding_space_id.clone();
         let modality = inputs.settings.modality;
         // Labels are checked against the pinned snapshot before any query-side work.
@@ -341,6 +357,7 @@ where
             embedding_space_id: space,
             batch_size: inputs.settings.batch_size.get(),
             corpus_checksum: report.corpus_checksum.clone(),
+            revisions: Some(revisions_fingerprint),
             fingerprints: Fingerprints {
                 extraction: report.extraction_fingerprint.clone(),
                 chunking: report.chunking_fingerprint.clone(),
@@ -425,4 +442,328 @@ fn reliability(report: &RunReport, failed_batches: usize) -> Reliability {
 )]
 const fn count_f64(n: usize) -> f64 {
     n as f64
+}
+
+/// Inputs of one combined experiment.
+#[derive(Debug, Clone, Copy)]
+pub struct CombinedInputs<'a> {
+    /// Id of the combined run; its snapshot pins both legs' revisions.
+    pub experiment_id: &'a ExperimentId,
+    /// Text run whose snapshot the text leg searches.
+    pub text_experiment: &'a ExperimentId,
+    /// Image run whose snapshot the image leg searches.
+    pub image_experiment: &'a ExperimentId,
+    /// Checksum of the corpus manifest both runs must have indexed.
+    pub corpus_checksum: &'a Checksum,
+    /// Frozen queries and labels both runs must have been evaluated with.
+    pub dataset: &'a Dataset,
+    /// Fusion parameters.
+    pub fusion: FusionParams,
+    /// Warm repetitions of every frozen query.
+    pub latency_repeats: NonZeroUsize,
+    /// Price table of the text leg's provider, when billed.
+    pub text_price: Option<&'a PriceTable>,
+    /// Price table of the image leg's provider, when billed.
+    pub image_price: Option<&'a PriceTable>,
+}
+
+/// Runs one measured combined experiment (PRD §6.6, §9.4).
+///
+/// 1. Loads both leg snapshots and refuses a pair that indexed another corpus or was
+///    evaluated with other frozen queries or labels;
+/// 2. loads both query models (the fresh process's cold start) and refuses a leg whose
+///    snapshot pins no revision of its model's space;
+/// 3. saves a create-only snapshot pinning the text leg's revisions in the text space
+///    and the image leg's revisions in the image space, so the combined run is
+///    reproducible by its own id;
+/// 4. runs the first fused query (discarded warm-up), one evaluation pass (its usage is
+///    the query-set cost of each leg), and `latency_repeats` warm passes of fused
+///    queries;
+/// 5. reads peak local RAM and both legs' index sizes.
+///
+/// # Errors
+///
+/// Returns [`ExperimentError::Combination`] for a pair that cannot be combined,
+/// [`ExperimentError::Build`] when a model cannot be loaded, [`ExperimentError::Store`]
+/// when a snapshot is missing or the combined id is taken, and the evaluation or
+/// search errors of the passes.
+pub async fn run_combined<C, M>(
+    store: &Arc<FsRecordStore>,
+    build_text: impl AsyncFn() -> Result<Arc<dyn EmbeddingStrategy>, BuildError>,
+    build_image: impl AsyncFn() -> Result<Arc<dyn EmbeddingStrategy>, BuildError>,
+    instruments: &Instruments<C, M>,
+    inputs: CombinedInputs<'_>,
+) -> Result<CombinedResult, ExperimentError>
+where
+    C: Clock + 'static,
+    M: MemoryProbe,
+{
+    let clock = &instruments.clock;
+    let first_query = inputs
+        .dataset
+        .queries
+        .value
+        .queries
+        .first()
+        .ok_or(ExperimentError::NoQueries)?;
+
+    // 1. Leg snapshots.
+    let (text_snapshot, image_snapshot) = {
+        let (store, text, image) = (
+            Arc::clone(store),
+            inputs.text_experiment.clone(),
+            inputs.image_experiment.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            Ok::<_, StoreError>((
+                store.load_experiment(&text)?,
+                store.load_experiment(&image)?,
+            ))
+        })
+        .await
+        .map_err(|e| ExperimentError::Task(e.to_string()))??
+    };
+    let provenance = EvaluationProvenance {
+        query_set_version: inputs.dataset.queries.value.version.clone(),
+        query_set_checksum: inputs.dataset.queries.checksum.clone(),
+        labels_version: inputs.dataset.labels.value.version.clone(),
+        labels_checksum: inputs.dataset.labels.checksum.clone(),
+    };
+    for snapshot in [&text_snapshot, &image_snapshot] {
+        let id = &snapshot.experiment_id;
+        if &snapshot.corpus_checksum != inputs.corpus_checksum {
+            return Err(ExperimentError::Combination(format!(
+                "experiment {id} indexed corpus {}, not {}",
+                snapshot.corpus_checksum, inputs.corpus_checksum
+            )));
+        }
+        if snapshot.evaluation.as_ref() != Some(&provenance) {
+            return Err(ExperimentError::Combination(format!(
+                "experiment {id} was not evaluated with query set {} and labels {}",
+                provenance.query_set_checksum, provenance.labels_checksum
+            )));
+        }
+        // An incomplete leg would make the combined evidence look complete (Codex
+        // C4-1); a snapshot that does not say is refused too.
+        match snapshot.run_status {
+            Some(RunStatus::Succeeded) => {}
+            Some(RunStatus::Incomplete) => {
+                return Err(ExperimentError::Combination(format!(
+                    "experiment {id} is incomplete: a required source failed"
+                )));
+            }
+            None => {
+                return Err(ExperimentError::Combination(format!(
+                    "experiment {id} records no run status (written before it was recorded); run it again"
+                )));
+            }
+        }
+    }
+
+    // 2. Both query models: the cold start of this fresh process.
+    let started = clock.now();
+    let text_adapter = build_text().await?;
+    let text_model_load_ms = millis(clock.now().saturating_sub(started));
+    let started = clock.now();
+    let image_adapter = build_image().await?;
+    let image_model_load_ms = millis(clock.now().saturating_sub(started));
+    let text_info = text_adapter.model_info().clone();
+    let image_info = image_adapter.model_info().clone();
+    let (text_space, image_space) = (
+        text_info.embedding_space_id.clone(),
+        image_info.embedding_space_id.clone(),
+    );
+    let pinned = |snapshot: &ExperimentSnapshot, space: &EmbeddingSpaceId| -> Vec<RevisionRef> {
+        snapshot
+            .revisions
+            .iter()
+            .filter(|r| &r.space == space)
+            .cloned()
+            .collect()
+    };
+    let text_revisions = pinned(&text_snapshot, &text_space);
+    let image_revisions = pinned(&image_snapshot, &image_space);
+    for (snapshot, space, revisions) in [
+        (&text_snapshot, &text_space, &text_revisions),
+        (&image_snapshot, &image_space, &image_revisions),
+    ] {
+        if revisions.is_empty() {
+            return Err(ExperimentError::Combination(format!(
+                "experiment {} pins no revision in space {space} of its leg's model",
+                snapshot.experiment_id
+            )));
+        }
+    }
+
+    let fingerprint_of = |revisions: &[RevisionRef]| {
+        crate::storage::revisions_fingerprint(revisions)
+            .map_err(|e| ExperimentError::Combination(e.to_string()))
+    };
+    let text_revisions_fingerprint = fingerprint_of(&text_revisions)?;
+    let image_revisions_fingerprint = fingerprint_of(&image_revisions)?;
+
+    // 3. The combined snapshot.
+    let mut fingerprints = BTreeMap::new();
+    for (leg, snapshot) in [("text", &text_snapshot), ("image", &image_snapshot)] {
+        for (name, fingerprint) in &snapshot.fingerprints {
+            fingerprints.insert(format!("{leg}.{name}"), fingerprint.clone());
+        }
+    }
+    fingerprints.insert(
+        crate::retrieval::FUSION_FINGERPRINT.to_owned(),
+        Fingerprint::of(&inputs.fusion).map_err(|e| ExperimentError::Combination(e.to_string()))?,
+    );
+    let snapshot = ExperimentSnapshot {
+        experiment_id: inputs.experiment_id.clone(),
+        revisions: text_revisions.into_iter().chain(image_revisions).collect(),
+        fingerprints,
+        corpus_checksum: inputs.corpus_checksum.clone(),
+        evaluation: Some(provenance),
+        run_status: Some(RunStatus::Succeeded),
+    };
+    {
+        let (store, snapshot) = (Arc::clone(store), snapshot.clone());
+        tokio::task::spawn_blocking(move || store.save_experiment(&snapshot))
+            .await
+            .map_err(|e| ExperimentError::Task(e.to_string()))??;
+    }
+    let scope = Scope::Experiment(&snapshot);
+
+    // 4. Warm-up, evaluation, warm latency.
+    let text_measured = MeasuredEmbedder::new(text_adapter, Arc::clone(clock));
+    let image_measured = MeasuredEmbedder::new(image_adapter, Arc::clone(clock));
+    let (text_calls, image_calls) = (text_measured.calls(), image_measured.calls());
+    let text_leg = Leg {
+        space: &text_space,
+        embedder: &text_measured,
+    };
+    let image_leg = Leg {
+        space: &image_space,
+        embedder: &image_measured,
+    };
+    let fused = async |query: &str| {
+        search_combined(store, text_leg, image_leg, inputs.fusion, query, 3, scope).await
+    };
+    let started = clock.now();
+    fused(&first_query.text).await?;
+    let first_query_ms = millis(clock.now().saturating_sub(started));
+    text_calls.clear();
+    image_calls.clear();
+    let evaluation = evaluate_combined(
+        store,
+        text_leg,
+        image_leg,
+        inputs.fusion,
+        inputs.dataset,
+        scope,
+    )
+    .await?;
+    let text_usage = text_calls.summary(InputKind::Query).usage_tokens;
+    let image_usage = image_calls.summary(InputKind::Query).usage_tokens;
+    let mut samples = Vec::new();
+    for _ in 0..inputs.latency_repeats.get() {
+        for query in &inputs.dataset.queries.value.queries {
+            let started = clock.now();
+            fused(&query.text).await?;
+            samples.push(millis(clock.now().saturating_sub(started)));
+        }
+    }
+    let warm_query_latency =
+        LatencyStats::from_samples(&samples).ok_or(ExperimentError::NoQueries)?;
+
+    // 5. Resources and cost.
+    let peak_local_ram = instruments.memory.peak_rss_bytes().map_or_else(
+        || Observation::unavailable("getrusage is not available on this platform"),
+        |b| Observation::bytes(b, "local process memory (ru_maxrss high-water mark)"),
+    );
+    // The index that was scored: the revisions the combined snapshot pins, which later
+    // publishes in either space do not change.
+    let index_bytes = {
+        let (store, pinned) = (Arc::clone(store), snapshot.revisions.clone());
+        tokio::task::spawn_blocking(move || store.revisions_size_bytes(&pinned))
+            .await
+            .map_err(|e| ExperimentError::Task(e.to_string()))??
+    };
+    let text_execution = text_measured.capabilities().execution;
+    let image_execution = image_measured.capabilities().execution;
+    let gpu_memory = Observation::unavailable(
+        if text_execution == Execution::Local && image_execution == Execution::Local {
+            "inference runs on the local CPU; no GPU is used"
+        } else {
+            "a remote leg's GPU memory is not observable; local legs run on the CPU"
+        },
+    );
+    let leg = |experiment: &ExperimentId,
+               info: &crate::embedding::ModelInfo,
+               execution: Execution,
+               revisions: &Fingerprint|
+     -> LegConfiguration {
+        LegConfiguration {
+            experiment_id: experiment.clone(),
+            revisions: Some(revisions.clone()),
+            engine: info.engine,
+            engine_version: info.engine_version.clone(),
+            model_id: info.model_id.clone(),
+            model_revision: info.model_revision.clone(),
+            dimensions: info.dimensions.get(),
+            prefix_policy: info.prefix_policy,
+            execution,
+            embedding_space_id: info.embedding_space_id.clone(),
+        }
+    };
+    let billed = |info: &crate::embedding::ModelInfo, execution, usage, price| {
+        estimate(
+            execution,
+            Billed {
+                engine: info.engine,
+                model_id: &info.model_id,
+            },
+            usage,
+            price,
+        )
+    };
+    Ok(CombinedResult {
+        hardware: instruments.hardware.clone(),
+        experiment_id: inputs.experiment_id.clone(),
+        corpus_checksum: inputs.corpus_checksum.clone(),
+        text: leg(
+            inputs.text_experiment,
+            &text_info,
+            text_execution,
+            &text_revisions_fingerprint,
+        ),
+        image: leg(
+            inputs.image_experiment,
+            &image_info,
+            image_execution,
+            &image_revisions_fingerprint,
+        ),
+        fusion: inputs.fusion,
+        evaluation,
+        measurements: CombinedMeasurements {
+            cold_start: CombinedStart {
+                text_model_load_ms,
+                image_model_load_ms,
+                first_query_ms,
+                total_ms: text_model_load_ms + image_model_load_ms + first_query_ms,
+            },
+            warm_query_latency,
+            latency_repeats: inputs.latency_repeats.get(),
+            peak_local_ram,
+            gpu_memory,
+            index_size: Observation::bytes(
+                index_bytes,
+                "revisions of both legs pinned by the combined snapshot, on disk",
+            ),
+        },
+        cost: CombinedCosts {
+            text_query_set: billed(&text_info, text_execution, text_usage, inputs.text_price),
+            image_query_set: billed(
+                &image_info,
+                image_execution,
+                image_usage,
+                inputs.image_price,
+            ),
+        },
+    })
 }
