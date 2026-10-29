@@ -24,7 +24,6 @@ Always use the **`rust-dev`** plugin when implementing, modifying, refactoring, 
   - `spec/prompt/execute.md` — Phase execution workflow, engineering rules, and mandatory sequential adversarial review protocol.
   - `reports/progress/PROGRESS.md` & `reports/ACCEPTANCE.md` — Actual implementation status, phase decisions, validation evidence, and outstanding blockers.
 - **Implementation status**: Phases 0 through 4 (`milestone = 4` in `config/acceptance.toml`) are implemented in `src/` and `tests/`, with 35 required PRD scenarios (38 total with harness scenarios) passing on the **synthetic fixture corpus** (`tests/fixtures/corpus/`).
-  - *Note*: `README.md` still reflects an earlier Phase 1 snapshot in its status banner; check `reports/README.md`, `reports/ACCEPTANCE.md`, and `reports/progress/PROGRESS.md` for the latest Phase 4 evidence.
   - **Outstanding owner inputs** (never claim these as completed): real anonymized owner corpus (`corpus/`), frozen relevance labels and extraction-fidelity sample for that corpus, and live OpenAI runs (`OPENAI_API_KEY` + `remote_allowed = true`).
 
 ---
