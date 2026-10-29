@@ -124,8 +124,20 @@ async fn a_flagged_file_name_never_becomes_a_source_id() {
     )
     .expect("copy");
     std::fs::write(dir.path().join("notes.txt"), "not a corpus file").expect("write");
+    // Regression (Grok G4-6): a name in a directory is flagged like one in a file name,
+    // because the manifest records the whole relative path.
+    let nested = dir.path().join("sub").join("BELTRANO DA SILVA");
+    std::fs::create_dir_all(&nested).expect("mkdir");
+    std::fs::copy(
+        repo("tests/fixtures/corpus/chest-001.png"),
+        nested.join("chest-002.png"),
+    )
+    .expect("copy");
     let files = drafts::corpus_files(dir.path()).expect("files");
-    assert_eq!(files, ["FULANO DE TAL.png"]);
+    assert_eq!(
+        files,
+        ["FULANO DE TAL.png", "sub/BELTRANO DA SILVA/chest-002.png"]
+    );
     let extractor = fixtures();
     let draft = drafts::draft_manifest(
         &extractor,
@@ -138,11 +150,25 @@ async fn a_flagged_file_name_never_becomes_a_source_id() {
     )
     .await
     .expect("draft");
-    let source = &draft.sources[0];
-    assert!(source.name_flagged());
-    assert_eq!(source.source_id.as_str(), "source-001");
-    // Findings name patterns, never the matched text.
-    assert!(source.findings.iter().all(|f| !f.detail.contains("FULANO")));
+    for (i, source) in draft.sources.iter().enumerate() {
+        assert!(source.name_flagged(), "source {i}");
+        assert_eq!(source.source_id.as_str(), format!("source-00{}", i + 1));
+        // Findings name patterns, never the matched text.
+        assert!(
+            source
+                .findings
+                .iter()
+                .all(|f| !f.detail.contains("FULANO") && !f.detail.contains("BELTRANO"))
+        );
+    }
+    assert!(
+        draft.sources[1]
+            .findings
+            .iter()
+            .any(|f| f.detail.starts_with("directory name")),
+        "{:?}",
+        draft.sources[1].findings
+    );
 }
 
 #[derive(serde::Deserialize)]
