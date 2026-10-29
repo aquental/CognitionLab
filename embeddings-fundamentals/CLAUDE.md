@@ -67,6 +67,19 @@ The engine adapters sit behind Cargo features (`engine-embed-anything`, `engine-
 
 External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `tesseract` with `por` data (`brew install tesseract tesseract-lang`), both installed here.
 
+### Real sample exams (`tests/sample-exams/`): never leave this machine
+
+The owner keeps **real medical exams, with patient names in file names and content,** in `tests/sample-exams/`. The directory is git-ignored (`/embeddings-fundamentals/tests/sample-exams/` in the root `.gitignore`), and the following rules apply even so:
+
+- **No commits.** Never commit, push, or upload these files, or anything derived from them: extracted text, OCR output, images, renders, records, vectors, file names, or per-document numbers that identify a file. Stage only explicit paths (`git add <path>`), never `git add -A` or `git add .`, and check `git diff --cached --name-only` before every commit.
+- **No external services.** Never send these files or their content to reviewers (Grok, Codex, Antigravity) or to any remote engine (`remote_allowed` stays false for them). Run reviewers from a clean worktree of the committed branch (`git worktree add --detach <dir> <commit>`), which does not contain the directory.
+- **Local tests only.**
+  - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
+  - They work on temporary copies only and never persist outputs in the repository.
+  - Their assertion and log messages name a document by its index or checksum prefix, never by file name, and never print its text.
+  - They assert properties (the anonymization gate refuses the files, extraction and chunking invariants hold), never document-specific values.
+- **No reading into notes.** Do not read their content into conversation notes, reports, or memory. Aggregate counts (pages, characters, images) are fine.
+
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
 ## Architecture (PLAN §1–§4; Phases 1–4 implemented: corpus, extraction, chunking, store, pipeline, text/image/combined retrieval, RRF fusion, evaluation, measurement, CLI)
