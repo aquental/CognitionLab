@@ -1,0 +1,1 @@
+The review package was truncated, so I am reading the rest of the inlined phase diff before judging the C3-4 and C3-7 closures.The comparison report is not the code under review. I am locating the scratch-directory guard, mask capture, and the surrounding production changes.NO FINDINGS
