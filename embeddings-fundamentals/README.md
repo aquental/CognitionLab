@@ -114,7 +114,7 @@ A comparison is only useful if its inputs and index state can be trusted. The ac
 
 The **Cucumber for Rust** suite maps the PRD's Gherkin scenarios to `#[given]`, `#[when]`, and `#[then]` steps: 38 scenarios, covering all 35 required ones. Deterministic fixtures exercise orchestration and failure recovery. Separate integration runs test the real extraction tools and embedding models (17 tests). Passing simulated provider responses does not count as evidence of real model quality or of a working provider integration. That is why the live OpenAI run is listed as outstanding.
 
-Phases 0–3 each passed an independent adversarial review loop by Grok and Codex. Phase 4 adds Antigravity as a third reviewer, and its review loop is **still in progress**: see `reports/reviews/phase-4/FINDINGS.md` and `reports/progress/PROGRESS.md`. Every finding so far was either fixed with a regression test or refuted with evidence. The raw reports and the tracked findings are in `reports/reviews/`.
+Each phase passed an independent adversarial review loop: Grok and Codex for Phases 0–3, and Grok, Codex, and Antigravity for Phase 4. `REVISION.md` lists every finding per phase with its resolution. Every finding so far was either fixed with a regression test or refuted with evidence. The raw reports and the tracked findings are in `reports/reviews/`.
 
 ## Roadmap and current evidence
 
@@ -158,6 +158,7 @@ embeddings-fundamentals/
 ├── examples/gen_fixtures.rs
 ├── config/                 # Acceptance milestone, saved experiment configurations, frozen queries and labels
 ├── reports/                # Final comparison, acceptance evidence, reproduction, progress, reviews
+├── REVISION.md             # Adversarial review changelog: every finding per phase and its resolution
 └── spec/                   # PRD, PLAN, execution prompt
 ```
 

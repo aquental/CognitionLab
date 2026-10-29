@@ -79,7 +79,7 @@ NO FINDINGS. C4-1..C4-5 are confirmed closed. Next: Antigravity.
 
 | ID | Reviewer | Severity | Description | Resolution / refutation | Files | Validation evidence | Reviewer confirmation | Status |
 |---|---|---|---|---|---|---|---|---|
-| A4-1 | Antigravity | medium | `evaluate_combined` checked the leg spaces and the text-to-image capability, but not the combined snapshot, before reading records. A snapshot missing a leg read as an empty index, so the run failed as an inapplicable label instead of a snapshot mismatch. A wrong fusion fingerprint was refused only at the first query, so with no query it was never refused | Valid. `evaluate_combined` runs `check_combined_snapshot` for an experiment scope before any record is read. The `# Errors` section says so | `src/evaluation.rs` | `tests/combined.rs::a_combined_search_of_an_experiment_must_be_that_combined_run`: a snapshot missing the image leg, a leg-only snapshot, and another `k` all give `EvalError::Search(SnapshotMismatch)`, and no query is embedded. A mutant without the check fails | pending (Antigravity round 2) | fixed |
+| A4-1 | Antigravity | medium | `evaluate_combined` checked the leg spaces and the text-to-image capability, but not the combined snapshot, before reading records. A snapshot missing a leg read as an empty index, so the run failed as an inapplicable label instead of a snapshot mismatch. A wrong fusion fingerprint was refused only at the first query, so with no query it was never refused | Valid. `evaluate_combined` runs `check_combined_snapshot` for an experiment scope before any record is read. The `# Errors` section says so | `src/evaluation.rs` | `tests/combined.rs::a_combined_search_of_an_experiment_must_be_that_combined_run`: a snapshot missing the image leg, a leg-only snapshot, and another `k` all give `EvalError::Search(SnapshotMismatch)`, and no query is embedded. A mutant without the check fails | Antigravity round 2 (`1349cc5`): closure confirmed, NO FINDINGS | closed |
 
 ## Grok round 7 (`grok-round7.md`, reviewed `d0d99e8`)
 
@@ -88,3 +88,11 @@ NO FINDINGS. Grok re-reviewed the whole phase after the A4-1 fix changed behavio
 ## Codex round 3 (`codex-round3.md`, reviewed `6d42294`)
 
 NO FINDINGS. Codex re-reviewed the whole phase after the A4-1 fix. Next: Antigravity round 2, to confirm A4-1.
+
+## Antigravity round 2 (`agy-round2.md`, reviewed `1349cc5`, with the `rust-dev` plugin)
+
+A4-1 is confirmed closed, and NO FINDINGS. Grok round 7, Codex round 3, and Antigravity round 2 all reported NO FINDINGS on the same behavior, so the Phase 4 review loop is complete.
+
+## Outcome
+
+Phase 4 is approved. 14 findings: S4-1 and S4-2 (found by the real-exam tests), G4-1..G4-6, C4-1..C4-5, and A4-1. G4-5 was moved to `anonimizador` with the verifier and fixed there. The others were fixed here with regression tests, and every reviewer finding was confirmed closed by its reviewer.

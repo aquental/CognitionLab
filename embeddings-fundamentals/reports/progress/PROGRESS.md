@@ -232,7 +232,7 @@ None for Phase 0.
 
 ## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
 
-**Status:** 🔄 IMPLEMENTED AND VALIDATED; adversarial reviews in progress (Grok → Codex → Antigravity). Grok rounds 1–5: G4-1..G4-4 and G4-6 closed, G4-5 moved to `anonimizador` with the verifier; round 5 NO FINDINGS. Codex rounds 1–2: C4-1..C4-5 closed. Antigravity round 1: A4-1 fixed; the earlier reviewers re-check it. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+**Status:** ✅ APPROVED (2026-10-29). Grok rounds 1–7, Codex rounds 1–3, and Antigravity rounds 1–2 (with the `rust-dev` plugin) are complete. The final round of each reviewer (Grok 7 at `d0d99e8`, Codex 3 at `6d42294`, Antigravity 2 at `1349cc5`) reported NO FINDINGS. 14 findings (S4-1, S4-2, G4-1..G4-6, C4-1..C4-5, A4-1): G4-5 moved to `anonimizador` with the verifier and fixed there, the rest fixed here with regression tests; see `reports/reviews/phase-4/FINDINGS.md`. The per-phase review changelog is `REVISION.md`. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
@@ -301,6 +301,7 @@ None for Phase 0.
 | PRD §12 deliverables and §13 criteria walked through with evidence links | [`reports/ACCEPTANCE.md`](../ACCEPTANCE.md) |
 
 ### Validation (local, 2026-10-29)
+- **Final validation at approval** (head `1349cc5` plus documentation): fmt and clippy `-D warnings` for every feature set ok; `cargo test`: 166 unit, 17 pipeline, 8 combined, 7 experiment, 4 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38/38, 35 required). `RUN_INTEGRATION=1` integration: **17 passed**. `RUN_SAMPLE_EXAMS=1` real exams (local only): **4 passed**. The items below record the validation at earlier review rounds.
 - fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
 - `cargo test`: 166 unit (incl. 9 fusion, 2 combined-config, and 5 draft tests), 16 pipeline (incl. the G4-4 regression), 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
 - Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
@@ -343,7 +344,6 @@ None for Phase 0.
 PLAN §2.3 deviations: none.
 
 ### Outstanding (not claimed)
-- Adversarial reviews (Grok → Codex → Antigravity).
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - Live OpenAI run (key and `remote_allowed`).
 - Latency on an idle host.
