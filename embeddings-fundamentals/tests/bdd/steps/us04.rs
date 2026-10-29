@@ -22,7 +22,7 @@ use embeddings_fundamentals::retrieval::{Scope, search_vector};
 use super::eval_fixture::{self, repo};
 use crate::{LabWorld, SpaceOf};
 
-const LABELS: &str = "config/evaluation/labels-synthetic-v3.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v4.toml";
 
 /// Token limit of the fixed pipeline configuration shared by every contract run, so
 /// the chunking budget does not change with the selected engine.

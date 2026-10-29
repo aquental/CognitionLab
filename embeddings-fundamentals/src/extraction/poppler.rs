@@ -35,6 +35,26 @@ async fn run(tool: &'static str, args: &[&std::ffi::OsStr]) -> Result<Output, Ex
     Ok(output)
 }
 
+/// Runs `work` in a fresh temporary directory that is created and removed on the
+/// blocking pool (PLAN §2.3): `TempDir`'s recursive removal is synchronous file I/O and
+/// must not run on a runtime worker, on success or on failure.
+async fn in_scratch<T>(
+    work: impl AsyncFnOnce(&Path) -> Result<T, ExtractionError>,
+) -> Result<T, ExtractionError> {
+    let blocking_failed = |e: tokio::task::JoinError| ExtractionError::Io(std::io::Error::other(e));
+    let scratch = tokio::task::spawn_blocking(tempfile::tempdir)
+        .await
+        .map_err(blocking_failed)??;
+    let outcome = work(scratch.path()).await;
+    let removed = tokio::task::spawn_blocking(move || scratch.close())
+        .await
+        .map_err(blocking_failed)
+        .and_then(|r| r.map_err(ExtractionError::Io));
+    let value = outcome?;
+    removed?;
+    Ok(value)
+}
+
 async fn version(tool: &'static str, flag: &str) -> String {
     match Command::new(tool)
         .arg(flag)
@@ -184,41 +204,43 @@ impl OcrEngine for TesseractOcr {
     }
 
     async fn ocr_page(&self, pdf: &Path, page: NonZeroU32) -> Result<PageText, ExtractionError> {
-        let scratch = tempfile::tempdir()?;
-        let prefix = scratch.path().join("page");
-        let (n, dpi) = (page.to_string(), self.config.ocr_dpi.to_string());
-        let render: [&std::ffi::OsStr; 11] = [
-            "-q".as_ref(),
-            "-png".as_ref(),
-            "-singlefile".as_ref(),
-            "-r".as_ref(),
-            dpi.as_ref(),
-            "-f".as_ref(),
-            n.as_ref(),
-            "-l".as_ref(),
-            n.as_ref(),
-            pdf.as_os_str(),
-            prefix.as_os_str(),
-        ];
-        run("pdftoppm", &render).await?;
-        let png = prefix.with_extension("png");
-        let psm = self.config.ocr_psm.to_string();
-        let ocr: [&std::ffi::OsStr; 7] = [
-            png.as_os_str(),
-            "-".as_ref(),
-            "-l".as_ref(),
-            self.config.ocr_lang.as_ref(),
-            "--psm".as_ref(),
-            psm.as_ref(),
-            "tsv".as_ref(),
-        ];
-        let output = run("tesseract", &ocr).await?;
-        tsv::parse(
-            &String::from_utf8_lossy(&output.stdout),
-            page,
-            self.config.ocr_dpi,
-            &self.engine,
-        )
+        in_scratch(async |scratch| {
+            let prefix = scratch.join("page");
+            let (n, dpi) = (page.to_string(), self.config.ocr_dpi.to_string());
+            let render: [&std::ffi::OsStr; 11] = [
+                "-q".as_ref(),
+                "-png".as_ref(),
+                "-singlefile".as_ref(),
+                "-r".as_ref(),
+                dpi.as_ref(),
+                "-f".as_ref(),
+                n.as_ref(),
+                "-l".as_ref(),
+                n.as_ref(),
+                pdf.as_os_str(),
+                prefix.as_os_str(),
+            ];
+            run("pdftoppm", &render).await?;
+            let png = prefix.with_extension("png");
+            let psm = self.config.ocr_psm.to_string();
+            let ocr: [&std::ffi::OsStr; 7] = [
+                png.as_os_str(),
+                "-".as_ref(),
+                "-l".as_ref(),
+                self.config.ocr_lang.as_ref(),
+                "--psm".as_ref(),
+                psm.as_ref(),
+                "tsv".as_ref(),
+            ];
+            let output = run("tesseract", &ocr).await?;
+            tsv::parse(
+                &String::from_utf8_lossy(&output.stdout),
+                page,
+                self.config.ocr_dpi,
+                &self.engine,
+            )
+        })
+        .await
     }
 }
 
@@ -252,34 +274,68 @@ impl ImageExtractor for PopplerImageExtractor {
         pdf: &Path,
         image: &ImageInfo,
     ) -> Result<Vec<u8>, ExtractionError> {
-        let scratch = tempfile::tempdir()?;
-        let root = scratch.path().join("img");
-        let n = image.page.to_string();
-        let args: [&std::ffi::OsStr; 8] = [
-            "-png".as_ref(),
-            "-p".as_ref(),
-            "-f".as_ref(),
-            n.as_ref(),
-            "-l".as_ref(),
-            n.as_ref(),
-            pdf.as_os_str(),
-            root.as_os_str(),
-        ];
-        run("pdfimages", &args).await?;
-        // With -p and one page, files are named <root>-<page:03>-<position:03>.png.
-        let file = scratch.path().join(format!(
-            "img-{:03}-{:03}.png",
-            image.page.get(),
-            image.position_on_page
-        ));
-        tokio::fs::read(&file)
-            .await
-            .map_err(|_| ExtractionError::Tool {
+        in_scratch(async |scratch| {
+            let root = scratch.join("img");
+            let n = image.page.to_string();
+            let args: [&std::ffi::OsStr; 8] = [
+                "-png".as_ref(),
+                "-p".as_ref(),
+                "-f".as_ref(),
+                n.as_ref(),
+                "-l".as_ref(),
+                n.as_ref(),
+                pdf.as_os_str(),
+                root.as_os_str(),
+            ];
+            run("pdfimages", &args).await?;
+            // With -p and one page, files are named <root>-<page:03>-<position:03>.png.
+            let file = scratch.join(format!(
+                "img-{:03}-{:03}.png",
+                image.page.get(),
+                image.position_on_page
+            ));
+            tokio::fs::read(&file)
+                .await
+                .map_err(|_| ExtractionError::Tool {
+                    tool: "pdfimages",
+                    reason: format!(
+                        "image {} of page {} was not written",
+                        image.position_on_page, image.page
+                    ),
+                })
+        })
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scratch_directories_are_removed_on_success_and_failure() {
+        let mut seen = Vec::new();
+        let value = in_scratch(async |dir| {
+            tokio::fs::write(dir.join("img-001-000.png"), b"x").await?;
+            seen.push(dir.to_owned());
+            Ok(7)
+        })
+        .await
+        .expect("success");
+        assert_eq!(value, 7);
+        let failed: Result<(), _> = in_scratch(async |dir| {
+            tokio::fs::write(dir.join("partial"), b"x").await?;
+            seen.push(dir.to_owned());
+            Err(ExtractionError::Tool {
                 tool: "pdfimages",
-                reason: format!(
-                    "image {} of page {} was not written",
-                    image.position_on_page, image.page
-                ),
+                reason: "injected".into(),
             })
+        })
+        .await;
+        assert!(matches!(failed, Err(ExtractionError::Tool { .. })));
+        assert_eq!(seen.len(), 2);
+        for dir in &seen {
+            assert!(!dir.exists(), "{} was not removed", dir.display());
+        }
     }
 }

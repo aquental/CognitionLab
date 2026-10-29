@@ -147,7 +147,7 @@ async fn a_failed_labeled_source_is_reported_as_incomplete_without_an_evaluation
     let outcome = run_experiment(
         512,
         "labeled-source-fails",
-        "config/evaluation/labels-synthetic-v3.toml",
+        "config/evaluation/labels-synthetic-v4.toml",
         Some("lab-searchable-001"),
         false,
     )
@@ -205,7 +205,7 @@ async fn an_incomplete_run_is_reported_even_when_the_query_side_would_fail() {
     let outcome = run_experiment(
         512,
         "query-side-fails",
-        "config/evaluation/labels-synthetic-v3.toml",
+        "config/evaluation/labels-synthetic-v4.toml",
         Some("lab-searchable-001"),
         true,
     )
@@ -298,7 +298,7 @@ async fn an_image_run_is_evaluated_image_only_through_the_text_query_path() {
     let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let dataset = Dataset::load(
         &repo("config/evaluation/queries-v1.toml"),
-        &repo("config/evaluation/labels-synthetic-v3.toml"),
+        &repo("config/evaluation/labels-synthetic-v4.toml"),
     )
     .expect("dataset");
     let mut settings = IngestSettings::new("image-run".parse().expect("id"));

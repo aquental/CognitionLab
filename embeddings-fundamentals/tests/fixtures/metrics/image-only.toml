@@ -1,6 +1,6 @@
 # Hand-derived labels of the top three image-only results per frozen query, for the
 # deterministic image index of tests/fixtures/evaluation/image-keywords.toml (the three
-# synthetic images) and config/evaluation/labels-synthetic-v3.toml.
+# synthetic images) and config/evaluation/labels-synthetic-v4.toml.
 #
 # Image vectors (normalized): chest = e0; abd-us = (e1+e2)/sqrt2; us-mixed = (e1+e3)/sqrt2.
 # q07 "radiografia" -> e0: chest 1.0 (label 2); abd-us 0, us-mixed 0 (label 0, 0)

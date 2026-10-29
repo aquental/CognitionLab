@@ -724,3 +724,76 @@ async fn a_text_run_and_an_image_run_of_one_source_keep_two_active_revisions() {
     assert_eq!(images.len(), 1);
     assert!(images.iter().all(|r| r.modality == Modality::Image));
 }
+
+#[tokio::test]
+async fn a_deleted_or_altered_asset_is_rebuilt_on_the_next_image_run() {
+    // Regression (C3-1): an intact records file is not enough; the assets its records
+    // reference must be intact too, or the unchanged source is rebuilt.
+    let manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    let mut manifest_two = manifest.clone();
+    manifest_two
+        .manifest
+        .sources
+        .retain(|s| ["chest-001", "abd-us-001"].contains(&s.source_id.as_str()));
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let embedder = Arc::new(
+        DeterministicEmbedder::builder()
+            .text_to_image()
+            .build()
+            .expect("adapter"),
+    );
+    let space = embedder.model_info().embedding_space_id.clone();
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &extractor,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder,
+    };
+    let mut settings = IngestSettings::new("assets-1".parse().expect("id"));
+    settings.modality = Modality::Image;
+    pipeline
+        .ingest(&manifest_two, &settings)
+        .await
+        .expect("run");
+    let records = store.active_records(&space).expect("records");
+    let uri_of = |id: &str| {
+        records
+            .iter()
+            .find(|r| r.source_id.as_str() == id)
+            .and_then(|r| r.asset_uri.clone())
+            .expect("asset uri")
+    };
+    let (chest, abd) = (uri_of("chest-001"), uri_of("abd-us-001"));
+    std::fs::remove_file(store.asset_path(&chest).expect("path")).expect("delete");
+    std::fs::write(store.asset_path(&abd).expect("path"), b"not the image").expect("corrupt");
+    assert!(store.read_asset(&chest).is_err() && store.read_asset(&abd).is_err());
+
+    settings.experiment_id = "assets-2".parse().expect("id");
+    let again = pipeline
+        .ingest(&manifest_two, &settings)
+        .await
+        .expect("run");
+    for source in &again.sources {
+        assert_eq!(source.status, SourceStatus::Succeeded, "{source:?}");
+        assert!(
+            !source.unchanged,
+            "{}: damaged assets were accepted",
+            source.source_id
+        );
+    }
+    store.read_asset(&chest).expect("deleted asset rewritten");
+    store.read_asset(&abd).expect("altered asset rewritten");
+    // Same revisions (unchanged inputs), now with intact assets: the next run skips.
+    assert_eq!(store.active_records(&space).expect("records"), records);
+    settings.experiment_id = "assets-3".parse().expect("id");
+    let third = pipeline
+        .ingest(&manifest_two, &settings)
+        .await
+        .expect("run");
+    assert!(third.sources.iter().all(|s| s.unchanged), "{third:?}");
+}

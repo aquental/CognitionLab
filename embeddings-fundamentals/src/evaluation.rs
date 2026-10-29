@@ -108,6 +108,12 @@ pub struct Label {
     /// evaluated; an image label is scored only when its chunk names that original.
     #[serde(default)]
     pub anchor: Option<String>,
+    /// Image items: SHA-256 of the stored asset the label was written for, required when
+    /// images are evaluated. A file name and a PDF image number do not identify pixels
+    /// across source revisions; an image label is scored only when its chunk's asset has
+    /// this content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_checksum: Option<Checksum>,
     /// 0 = irrelevant, 1 = partially relevant, 2 = directly relevant.
     pub label: u8,
     /// Why the item is (ir)relevant.
@@ -604,21 +610,36 @@ fn check_hit_applies(label: &Label, hit: &SearchHit) -> Result<(), EvalError> {
             }
         }
         Modality::Image => {
-            image_anchor_matches(label, hit.original.as_deref()).map_err(not_applicable)
+            image_anchor_matches(label, hit.original.as_deref(), hit.asset_uri.as_deref())
+                .map_err(not_applicable)
         }
     }
 }
 
-/// An image label applies when its anchor names the record's original image.
-fn image_anchor_matches(label: &Label, original: Option<&str>) -> Result<(), &'static str> {
+/// An image label applies when its anchor names the record's original image and its
+/// asset checksum is the content of the record's stored asset.
+fn image_anchor_matches(
+    label: &Label,
+    original: Option<&str>,
+    asset_uri: Option<&str>,
+) -> Result<(), &'static str> {
     let Some(anchor) = label.anchor.as_deref() else {
         return Err("an image label needs an anchor naming its original image");
     };
-    if original == Some(anchor) {
-        Ok(())
-    } else {
-        Err("the image at this chunk id is another original (extraction or filtering changed)")
+    let Some(checksum) = label.asset_checksum.as_ref() else {
+        return Err("an image label needs the asset checksum of the image it judges");
+    };
+    if original != Some(anchor) {
+        return Err(
+            "the image at this chunk id is another original (extraction or filtering changed)",
+        );
     }
+    if asset_uri != Some(crate::storage::asset_uri(checksum).as_str()) {
+        return Err(
+            "the image at this chunk id has other content (the original or its preparation changed)",
+        );
+    }
+    Ok(())
 }
 
 /// Refuses image labels that do not apply to `records` (the evaluated image index):
@@ -628,16 +649,19 @@ fn image_anchor_matches(label: &Label, original: Option<&str>) -> Result<(), &'s
 ///
 /// Returns [`EvalError::LabelNotApplicable`] for the first label that does not apply.
 pub fn check_image_labels(dataset: &Dataset, records: &[Record]) -> Result<(), EvalError> {
-    let originals: BTreeMap<&ChunkId, Option<String>> = records
+    let originals: BTreeMap<&ChunkId, (Option<String>, Option<&str>)> = records
         .iter()
         .filter(|r| r.modality == Modality::Image)
         .map(|r| {
             (
                 &r.chunk_id,
-                r.metadata
-                    .original_asset
-                    .as_ref()
-                    .map(crate::record::OriginalAsset::reference),
+                (
+                    r.metadata
+                        .original_asset
+                        .as_ref()
+                        .map(crate::record::OriginalAsset::reference),
+                    r.asset_uri.as_deref(),
+                ),
             )
         })
         .collect();
@@ -650,10 +674,10 @@ pub fn check_image_labels(dataset: &Dataset, records: &[Record]) -> Result<(), E
             item: l.item.clone(),
             reason: reason.to_owned(),
         };
-        let Some(original) = originals.get(&l.item) else {
+        let Some((original, asset)) = originals.get(&l.item) else {
             return Err(not_applicable("the image is not in the evaluated index"));
         };
-        image_anchor_matches(l, original.as_deref()).map_err(not_applicable)?;
+        image_anchor_matches(l, original.as_deref(), *asset).map_err(not_applicable)?;
     }
     Ok(())
 }
@@ -807,6 +831,7 @@ mod tests {
             query: query.parse().expect("query"),
             item: item.parse().expect("item"),
             anchor: Some("hemoglobina".into()),
+            asset_checksum: None,
             label: value,
             note: "n".into(),
         }
@@ -1015,6 +1040,7 @@ mod tests {
             width: 256,
             height: 192,
         });
+        r.asset_uri = Some(crate::storage::asset_uri(&Checksum::of_bytes(b"pixels")));
         r
     }
 
@@ -1023,6 +1049,7 @@ mod tests {
             query: "q1".parse().expect("query"),
             item: "s-p1-image-0".parse().expect("item"),
             anchor: anchor.map(str::to_owned),
+            asset_checksum: Some(Checksum::of_bytes(b"pixels")),
             label: 2,
             note: "n".into(),
         }
@@ -1055,6 +1082,45 @@ mod tests {
     }
 
     #[test]
+    fn image_labels_apply_only_to_the_content_they_judged() {
+        // Regression (C3-5): the same original reference with other pixels is refused.
+        let anchored = dataset_with(vec![image_label(Some("us-mixed-003.pdf#page=1&image=0"))]);
+        let mut replaced = image_record("s-p1-image-0", Some(0));
+        replaced.asset_uri = Some(crate::storage::asset_uri(&Checksum::of_bytes(
+            b"other pixels",
+        )));
+        let refused = check_image_labels(&anchored, &[replaced]);
+        assert!(
+            matches!(&refused, Err(EvalError::LabelNotApplicable { reason, .. }) if reason.contains("other content")),
+            "{refused:?}"
+        );
+        // A label without the checksum cannot be checked, so it is refused.
+        let mut unchecked = image_label(Some("us-mixed-003.pdf#page=1&image=0"));
+        unchecked.asset_checksum = None;
+        assert!(matches!(
+            check_image_labels(
+                &dataset_with(vec![unchecked]),
+                &[image_record("s-p1-image-0", Some(0))]
+            ),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+        // The same check guards a judged hit in the public `evaluate`.
+        let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
+        let mut h = hit("s-p1-image-0", "");
+        h.modality = Modality::Image;
+        h.chunk_text = None;
+        h.original = Some("us-mixed-003.pdf#page=1&image=0".into());
+        h.asset_uri = Some(crate::storage::asset_uri(&Checksum::of_bytes(
+            b"other pixels",
+        )));
+        let rankings = BTreeMap::from([("q1".parse().expect("id"), vec![h])]);
+        assert!(matches!(
+            evaluate(EvaluationMode::ImageOnly, &anchored, vec![space], &rankings),
+            Err(EvalError::LabelNotApplicable { .. })
+        ));
+    }
+
+    #[test]
     fn public_evaluate_refuses_an_image_hit_from_another_original() {
         let dataset = dataset_with(vec![image_label(Some("us-mixed-003.pdf#page=1&image=0"))]);
         let space: EmbeddingSpaceId = format!("space-{}", "0".repeat(32)).parse().expect("space");
@@ -1063,6 +1129,7 @@ mod tests {
             h.modality = Modality::Image;
             h.chunk_text = None;
             h.original = Some(format!("us-mixed-003.pdf#page=1&image={num}"));
+            h.asset_uri = Some(crate::storage::asset_uri(&Checksum::of_bytes(b"pixels")));
             BTreeMap::from([("q1".parse().expect("id"), vec![h])])
         };
         assert!(matches!(
@@ -1117,7 +1184,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/evaluation");
         let dataset = Dataset::load(
             &root.join("queries-v1.toml"),
-            &root.join("labels-synthetic-v3.toml"),
+            &root.join("labels-synthetic-v4.toml"),
         )
         .expect("dataset");
         assert_eq!(dataset.queries.value.queries.len(), 10);

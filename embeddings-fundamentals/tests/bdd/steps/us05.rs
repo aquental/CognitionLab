@@ -21,7 +21,7 @@ use serde_json::Value;
 use super::eval_fixture::{self, repo};
 use crate::{LabWorld, fixture};
 
-const LABELS: &str = "config/evaluation/labels-synthetic-v3.toml";
+const LABELS: &str = "config/evaluation/labels-synthetic-v4.toml";
 const PRICE: &str = "prices/test-price-v1.toml";
 
 fn number(value: &Value, path: &str) -> Result<f64> {
