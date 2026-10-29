@@ -2,7 +2,7 @@
 
 This guide covers how to turn anonymized real documents into an evaluable corpus: the manifest, the relevance labels, and the fidelity sample.
 
-Anonymizing the documents is the job of the sibling project [`../anonimizador`](../anonimizador). It holds the procedure, the `anonimizador verify` tool, and the design of the automatic anonymizer.
+Anonymizing the documents is the job of the sibling project [`../anonimizador`](../anonimizador), on branch `anonimizador/scaffold` until it merges. It holds the procedure, the `anonimizador verify` tool, and the design of the automatic anonymizer.
 
 The commands that run the test suites are in [`reports/README.md`](reports/README.md#tests).
 

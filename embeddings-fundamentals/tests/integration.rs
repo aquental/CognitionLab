@@ -992,6 +992,16 @@ fn the_cli_drafts_the_synthetic_manifest_with_real_tools() {
     assert!(stderr.contains("sources 1 (in path order)"), "{stderr}");
     assert!(!stderr.contains("FULANO"), "{stderr}");
     assert!(output.stdout.is_empty());
+    // A name in a directory is refused the same way (Grok G4-6).
+    let nested = tempfile::tempdir().expect("tmp");
+    let folder = nested.path().join("BELTRANO DA SILVA");
+    std::fs::create_dir(&folder).expect("mkdir");
+    std::fs::copy(corpus("lab-searchable-001.pdf"), folder.join("lab-001.pdf")).expect("copy");
+    let output = draft(nested.path(), &[]);
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("BELTRANO"), "{stderr}");
+    assert!(output.stdout.is_empty());
     let output = draft(dir.path(), &["--allow-flagged-names"]);
     assert!(output.status.success());
     let drafted: embeddings_fundamentals::corpus::Manifest =
