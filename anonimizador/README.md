@@ -44,7 +44,7 @@ The verifier searches six places in each PDF, PNG, or JPEG:
 | `text` | The PDF text layer (`pdftotext`) |
 | `ocr` | What the rendered pages show (`pdftoppm` + `tesseract`), or what an image file shows |
 | `images` | What each image embedded in a PDF shows (`pdfimages` + `tesseract`); only icons, under 32 pixels on both sides, are skipped |
-| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text, with PDF strings decoded (hex, octal escapes, nested parentheses, UTF-16), and the pieces of a word drawn glyph by glyph joined (word spaces and line moves kept). Terms shorter than 4 letters are not searched here, because binary data is full of short letter runs. |
+| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text, with PDF strings decoded (hex, octal escapes, nested parentheses, UTF-16), and the pieces of text drawn glyph by glyph read every way their moves allow, since a move between glyphs can be positioning, a word space, or a new line. Terms shorter than 4 letters are not searched here, because binary data is full of short letter runs. |
 
 ```text
 anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)

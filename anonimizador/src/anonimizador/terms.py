@@ -103,6 +103,11 @@ class Term:
         object.__setattr__(self, "word_pattern", re.compile(f"(?={re.escape(self.words)})"))
 
     @property
+    def whole_word(self) -> bool:
+        """Matched as whole words: neither a number nor long enough for its compact form."""
+        return not self.numeric and self.compact is None
+
+    @property
     def searchable_in_binary(self) -> bool:
         """Terms shorter than `RAW_MIN_LENGTH` are not searched in raw bytes: binary
         data is full of short letter runs."""

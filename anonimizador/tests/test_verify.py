@@ -10,7 +10,7 @@ from conftest import check_report_privacy
 from make_covered_name_pdf import build_pdf
 
 from anonimizador import verify
-from anonimizador.channels import Reading, raw_readings, raw_texts
+from anonimizador.channels import Reading, raw_readings
 from anonimizador.verify import CorpusFile, Options, VerifyError, check_file, collect
 
 TERM = "Fulano Ficticio"
@@ -145,7 +145,7 @@ def test_a_short_name_left_only_in_raw_bytes_is_found(monkeypatch):
         b"%PDF-1.4\n1 0 obj << >> stream\n" + stream + b"endstream\n",
     ):
         reading = Reading()
-        reading.texts["raw"] = raw_texts(data)
+        reading.texts["raw"], reading.strings, reading.raw_word_texts = raw_readings(data)
         monkeypatch.setattr(verify, "read", lambda *_, r=reading: r)
         file = CorpusFile("x.pdf", "x.pdf")
         for term, expected in (("Zuleo", [1]), ("Zulea", [])):
@@ -188,7 +188,7 @@ def test_patterns_are_searched_in_names_and_across_pages(monkeypatch):
 
 def strict_result(monkeypatch, data: bytes):
     reading = Reading()
-    reading.texts["raw"], reading.strings = raw_readings(data)
+    reading.texts["raw"], reading.strings, reading.raw_word_texts = raw_readings(data)
     monkeypatch.setattr(verify, "read", lambda *_: reading)
     options = Options(use_ocr=False, strict_patterns=True)
     return check_file(1, CorpusFile("x.pdf", "x.pdf"), [], options, None), options
@@ -219,3 +219,16 @@ def test_a_clean_page_gains_no_pattern_from_its_strings(monkeypatch):
     result, options = strict_result(monkeypatch, clean)
     assert result.hints == {}
     assert result.status(options.strict_patterns) == "ok"
+
+
+def test_check_file_searches_the_joins_of_ambiguous_moves(monkeypatch):
+    # Regression (Grok G0-29), through check_file: only a join of the first two pieces
+    # makes the short word whole, and that join counts once.
+    stream = b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj "
+    stream += b"1 0 0 1 200 700 Tm (Assunto) Tj ET"
+    reading = Reading()
+    reading.texts["raw"], reading.strings, reading.raw_word_texts = raw_readings(stream)
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    terms = [verify.Term("Zuleo"), verify.Term("Zulea"), verify.Term("Assunto")]
+    result = check_file(1, CorpusFile("x.pdf", "x.pdf"), terms, Options(use_ocr=False), None)
+    assert {hit.number: hit.counts["raw"] for hit in result.hits} == {1: 1, 3: 1}

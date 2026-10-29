@@ -8,6 +8,7 @@ from anonimizador.channels import (
     mixed_readings,
     pdf_string_views,
     png_size,
+    raw_readings,
     raw_texts,
     unescape_literal,
     worth_ocr,
@@ -26,6 +27,13 @@ def png(chunks: list[tuple[bytes, bytes]]) -> bytes:
 
 
 IHDR = (b"IHDR", struct.pack(">IIBBBBB", 40, 30, 8, 2, 0, 0, 0))
+
+
+def raw_count(term: str, data: bytes) -> int:
+    """The raw count `check_file` gives `term` in `data`."""
+    texts, _, word_texts = raw_readings(data)
+    found = Term(term)
+    return max(found.count(t) for t in [*texts, *(word_texts if found.whole_word else [])])
 
 
 def test_png_text_metadata_is_read_plain_and_compressed(tmp_path):
@@ -110,19 +118,14 @@ def test_jpeg_fill_bytes_and_standalone_markers_are_skipped():
 def test_pdf_hex_and_escaped_strings_are_decoded_in_raw_bytes():
     # Regression (Grok G0-14): a name stored as a UTF-16 hex string or with an octal
     # escape held none of its letters in the bytes, so a leftover one counted 0.
-    short = Term("Zuleo")
-
-    def count(data: bytes) -> int:
-        return max(short.count(t) for t in raw_texts(data))
-
-    assert count(b"<< /Author <FEFF005A0075006C0065006F> >>") == 1
-    assert count(b"<< /Author <FEFF 005A 0075 006C\n0065 006F> >>") == 1
-    assert count(b"<< /Author <FEFF005A0075006C00650061> >>") == 0
-    assert count(b"<< /Author (Zul\\351o) >>") == 1
-    assert count(b"<< /Author (\\376\\377\\000Z\\000u\\000l\\000e\\000o) >>") == 1
-    assert count(b"<< /Author (Zul\\351a) >>") == 0
+    assert raw_count("Zuleo", b"<< /Author <FEFF005A0075006C0065006F> >>") == 1
+    assert raw_count("Zuleo", b"<< /Author <FEFF 005A 0075 006C\n0065 006F> >>") == 1
+    assert raw_count("Zuleo", b"<< /Author <FEFF005A0075006C00650061> >>") == 0
+    assert raw_count("Zuleo", b"<< /Author (Zul\\351o) >>") == 1
+    assert raw_count("Zuleo", b"<< /Author (\\376\\377\\000Z\\000u\\000l\\000e\\000o) >>") == 1
+    assert raw_count("Zuleo", b"<< /Author (Zul\\351a) >>") == 0
     stream = zlib.compress(b"BT <FEFF005A0075006C0065006F> Tj ET")
-    assert count(b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
+    assert raw_count("Zuleo", b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
 
 
 def test_literal_escapes_follow_the_pdf_rules():
@@ -142,35 +145,31 @@ def test_a_thin_image_is_read_and_an_icon_is_not():
 def test_a_word_drawn_glyph_by_glyph_is_whole_in_raw_bytes():
     # Regression (Grok G0-19): content streams often draw a word as several strings,
     # and each piece was its own word, so a term under 6 letters counted 0.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     kerned = b"BT [(Z) -2 (u) -2 (l) -2 (e) -2 (o)] TJ ET"
-    assert count("Zuleo", b"(Z)(u)(l)(e)(o)") == 1
-    assert count("Zuleo", kerned) == 1
-    assert count("Zuleo", b"BT [<5A> -2 <75> -2 <6C> <65> <6F>] TJ ET") == 1
-    assert count("Zuleo", b"BT (Zu) Tj 4 0 Td (leo) Tj ET") == 1
-    assert count("Zuleo", b"(Zu\nleo)") == 1
+    assert raw_count("Zuleo", b"(Z)(u)(l)(e)(o)") == 1
+    assert raw_count("Zuleo", kerned) == 1
+    assert raw_count("Zuleo", b"BT [<5A> -2 <75> -2 <6C> <65> <6F>] TJ ET") == 1
+    assert raw_count("Zuleo", b"BT (Zu) Tj 4 0 Td (leo) Tj ET") == 1
+    assert raw_count("Zuleo", b"(Zu\nleo)") == 1
     stream = zlib.compress(kerned)
-    assert count("Zuleo", b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
-    assert count("Zulea", kerned) == 0
-    assert count("Rosa", b"[(R) 5 (o) 5 (s) 5 (a)] TJ") == 1
-    assert count("Fulano", b"[(F)(u)(l)(a)(n)(o)] TJ") == 1
+    assert raw_count("Zuleo", b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
+    assert raw_count("Zulea", kerned) == 0
+    assert raw_count("Rosa", b"[(R) 5 (o) 5 (s) 5 (a)] TJ") == 1
+    assert raw_count("Fulano", b"[(F)(u)(l)(a)(n)(o)] TJ") == 1
     # Strings of separate drawings stay separate words.
-    assert count("Zuleo", b"(Zu) Tj ET BT /F1 9 Tf (leo) Tj") == 0
+    assert raw_count("Zuleo", b"(Zu) Tj ET BT /F1 9 Tf (leo) Tj") == 0
 
 
 def test_a_literal_with_balanced_parentheses_is_one_string():
     # Regression (Grok G0-20): the string stopped at the first parenthesis, so the
     # escapes before it were never decoded.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
-    assert count("Zuleição", b"<< /Author (Zulei\\347\\343o (mae)) >>") == 1
-    assert count("Zuleição", b"<< /Author (Zulei\\347\\343a (mae)) >>") == 0
-    assert count("Fulano", b"<< /Author (Ful\\343no (Dr)) >>") == 1
+    assert raw_count("Zuleição", b"<< /Author (Zulei\\347\\343o (mae)) >>") == 1
+    assert raw_count("Zuleição", b"<< /Author (Zulei\\347\\343a (mae)) >>") == 0
+    assert raw_count("Fulano", b"<< /Author (Ful\\343no (Dr)) >>") == 1
     utf16 = b"(\\376\\377\\000Z\\000u\\000l\\000e\\000o (Dr))"
-    assert count("Zuleo", b"<< /Author " + utf16 + b" >>") == 1
+    assert raw_count("Zuleo", b"<< /Author " + utf16 + b" >>") == 1
 
 
 def test_a_long_run_without_at_sign_is_fast_to_search():
@@ -184,36 +183,38 @@ def test_a_long_run_without_at_sign_is_fast_to_search():
 def test_word_spaces_and_line_moves_split_a_drawn_text():
     # Regression (Grok G0-22): every piece of a text object was glued, so a short name
     # drawn glyph by glyph next to another word was never a whole word.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     name = b"(Z) -2 (u) -2 (l) -2 (e) -2 (o)"
     other = b"(A) -2 (s) -2 (s) -2 (u) -2 (n) -2 (t) -2 (o)"
     spaced = b"BT [" + name + b" -300 " + other + b"] TJ ET"
     next_line = b"BT [" + name + b"] TJ 0 -20 Td [" + other + b"] TJ ET"
     for data in (spaced, next_line):
-        assert count("Zuleo", data) == 1, data
-        assert count("Zulea", data) == 0, data
-        assert count("Assunto", data) == 1, data
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
+        assert raw_count("Assunto", data) == 1, data
         stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
-        assert count("Zuleo", stream) == 1, data
+        assert raw_count("Zuleo", stream) == 1, data
 
 
 def test_text_state_and_same_baseline_keep_a_word_whole():
     # Regression (Grok G0-24): Tm, Tc, and other text-state operators ended the word.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     same_line = b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 90 700 Tm (leo) Tj ET"
-    assert count("Zuleo", same_line) == 1
-    assert count("Zulea", same_line) == 0
-    assert count("Zuleo", b"BT (Zu) Tj 0.1 Tc (leo) Tj ET") == 1
-    assert count("Zuleo", b"BT (Zu) Tj 1 0 0 rg (leo) Tj ET") == 1
-    # Another baseline, or a string shown with ' or ", is another line.
-    assert count("Zuleo", b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 72 680 Tm (leo) Tj ET") == 0
-    assert count("Zuleo", b'BT 0 0 (Zu) " 0 0 (leo) " ET') == 0
-    assert count("Zuleo", b"BT (Zu) Tj (leo) ' ET") == 0
-    assert count("Zuleo", b"BT (Zu) Tj (leo) ' (Assunto) Tj ET") == 0
+    assert raw_count("Zuleo", same_line) == 1
+    assert raw_count("Zulea", same_line) == 0
+    assert raw_count("Zuleo", b"BT (Zu) Tj 0.1 Tc (leo) Tj ET") == 1
+    assert raw_count("Zuleo", b"BT (Zu) Tj 1 0 0 rg (leo) Tj ET") == 1
+    # Every move is ambiguous, a new line too: counting is the safe error (the earlier
+    # refutations for another baseline and for ' and " gave way to this, Grok G0-32).
+    for moved in (
+        b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 72 680 Tm (leo) Tj ET",
+        b'BT 0 0 (Zu) " 0 0 (leo) " ET',
+        b"BT (Zu) Tj (leo) ' (Assunto) Tj ET",
+    ):
+        assert raw_count("Zuleo", moved) == 1, moved
+    # Another drawing is not the same word.
+    assert raw_count("Zuleo", b"BT (Zu) Tj ET BT (leo) Tj ET") == 0
+    assert raw_count("Zuleo", b"BT (Zu) Tj ET 0 0 m 9 9 l S BT (leo) Tj ET") == 0
 
 
 def test_a_number_drawn_glyph_by_glyph_is_a_pattern_hint():
@@ -240,57 +241,51 @@ def test_a_horizontal_move_is_read_both_as_a_break_and_as_glyph_positioning():
     # Regression (Grok G0-25, G0-26): a horizontal Td or a Tm on the same baseline
     # always joined, so two words drawn glyph by glyph became one. Without the glyph
     # widths a move can be either, so both readings are searched.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     words = glyphs("Zuleo"), glyphs("Assunto")
     td = b"BT /F1 12 Tf 72 700 Td " + words[0] + b" 20 0 Td " + words[1] + b" ET"
     tm = b"BT 1 0 0 1 72 700 Tm " + words[0] + b" 1 0 0 1 200 700 Tm " + words[1] + b" ET"
     for data in (td, tm):
-        assert count("Zuleo", data) == 1, data
-        assert count("Assunto", data) == 1, data
-        assert count("Zulea", data) == 0, data
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Assunto", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
         stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
-        assert count("Zuleo", stream) == 1, data
+        assert raw_count("Zuleo", stream) == 1, data
     # Glyph positioning stays a word: an ambiguous boundary adds a match, never hides one.
-    assert count("Zuleo", b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj ET") == 1
+    assert raw_count("Zuleo", b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj ET") == 1
 
 
 def test_a_line_shown_with_a_quote_operator_continues_after_it():
     # Regression (Grok G0-27): ' and " show the string before them on a new line, and
     # the text after them continues that line; the break was put after the string.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     for data in (
         b"BT 72 720 Td (Zu) ' (leo) Tj ET",
         b"BT 72 720 Td (Zu) ' " + glyphs("leo") + b" ET",
         b'BT 72 720 Td 0 0 (Zu) " (leo) Tj ET',
     ):
-        assert count("Zuleo", data) == 1, data
-        assert count("Zulea", data) == 0, data
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
 
 
 def test_a_short_word_placed_piece_by_piece_beside_another_word_is_found():
     # Regression (Grok G0-29): each horizontal move was read the same way, so a word
     # whose pieces are positioned one by one, next to a word placed after another move,
     # was whole in no reading.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     def at(x: int, text: bytes) -> bytes:
         return b"1 0 0 1 %d 700 Tm %s Tj " % (x, text)
 
     stream = b"BT " + at(72, b"(Zu)") + at(86, b"(leo)") + at(200, b"(Assunto)") + b"ET"
-    assert count("Zuleo", stream) == 1
-    assert count("Zulea", stream) == 0
-    assert count("Assunto", stream) == 1
+    assert raw_count("Zuleo", stream) == 1
+    assert raw_count("Zulea", stream) == 0
+    assert raw_count("Assunto", stream) == 1
     compressed = b"1 0 obj << >> stream\n" + zlib.compress(stream) + b"endstream\n"
-    assert count("Zuleo", compressed) == 1
+    assert raw_count("Zuleo", compressed) == 1
     alone = b"BT " + at(72, b"(Zu)") + at(86, b"(leo)") + b"ET"
-    assert count("Zuleo", alone) == 1
+    assert raw_count("Zuleo", alone) == 1
     td = b"BT 72 700 Td (Z) Tj 7 0 Td (u) Tj 7 0 Td (l) Tj 7 0 Td (e) Tj 7 0 Td (o) Tj"
-    assert count("Zuleo", td + b" 30 0 Td (Assunto) Tj ET") == 1
+    assert raw_count("Zuleo", td + b" 30 0 Td (Assunto) Tj ET") == 1
 
 
 def test_a_long_word_without_ambiguous_marks_is_fast_to_read():
@@ -304,8 +299,6 @@ def test_a_long_word_without_ambiguous_marks_is_fast_to_read():
 def test_two_byte_strings_without_a_mark_are_read_as_utf16():
     # Regression (Grok G0-30): Identity-H content strings hold UTF-16 code units with no
     # byte order mark; read as Latin-1 they had a NUL between letters.
-    def count(term: str, data: bytes) -> int:
-        return max(Term(term).count(t) for t in raw_texts(data))
 
     for data in (
         b"BT <005A0075006C0065006F> Tj ET",
@@ -313,8 +306,52 @@ def test_two_byte_strings_without_a_mark_are_read_as_utf16():
         b"BT (\\000Z\\000u\\000l\\000e\\000o) Tj ET",
         b"BT <FEFF005A0075006C0065006F> Tj ET",
     ):
-        assert count("Zuleo", data) == 1, data
-        assert count("Zulea", data) == 0, data
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
     hexed = "123.456.789-09".encode("utf-16-be").hex().encode()
     views = pdf_string_views([b"BT <" + hexed + b"> Tj ET"])
     assert count_patterns([views.lines, views.drawn]) == {"cpf": 1}
+
+
+def test_any_move_is_ambiguous_without_state():
+    # Regression (Grok G0-32, G0-36): the baseline was known only after a Tm, and was
+    # lost in a long first gap, so a line opened with Td or at the start of an
+    # uncompressed stream and continued with Tm was a hard break.
+    opened_with_td = b"BT /F1 12 Tf 72 700 Td (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj ET"
+    assert raw_count("Zuleo", opened_with_td) == 1
+    assert raw_count("Zulea", opened_with_td) == 0
+    page = b"%PDF-1.4\n" + b"1 0 obj << /Type /Catalog >> endobj\n" * 20
+    stream = b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 86 700 Tm (leo) Tj "
+    stream += b"1 0 0 1 200 700 Tm (Assunto) Tj ET"
+    uncompressed = page + b"9 0 obj << >> stream\n" + stream + b"\nendstream endobj\n"
+    assert raw_count("Zuleo", uncompressed) == 1
+    assert raw_count("Zulea", uncompressed) == 0
+    assert raw_count("Assunto", uncompressed) == 1
+
+
+def test_a_string_with_a_character_beyond_latin1_is_read_as_utf16():
+    # Regression (Grok G0-33): one code unit above U+00FF made the whole string Latin-1.
+    for data in (
+        b"BT <005A0075006C0065006F2014> Tj ET",
+        b"BT (\\000Z\\000u\\000l\\000e\\000o\\040\\024) Tj ET",
+        b"BT <005A0075006C0065006F00202265> Tj ET",
+    ):
+        assert raw_count("Zuleo", data) == 1, data
+        assert raw_count("Zulea", data) == 0, data
+    assert raw_count("Zuleo", b"BT (Zuleo) Tj ET") == 1
+
+
+def test_numbers_across_ambiguous_moves_are_pattern_hints():
+    # Regression (Grok G0-34, G0-35): a CPF kerned and followed by a moved number, or
+    # drawn a group at a time, was whole in no reading searched for patterns.
+    def hints(data: bytes) -> dict[str, int]:
+        return count_patterns(pdf_string_views([data]).for_patterns)
+
+    kerned = b"BT 1 0 0 1 72 700 Tm [(123) -2 (.) -2 (456) -2 (.) -2 (789) -2 (-) -2 (09)] TJ"
+    groups = b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj"
+    groups += b" 6 0 Td (789) Tj 22 0 Td (-) Tj 6 0 Td (09) Tj"
+    for data in (kerned, groups):
+        assert hints(data + b" ET") == {"cpf": 1}, data
+        assert hints(data + b" 30 0 Td (99) Tj ET") == {"cpf": 1}, data
+    # A digit short, with nothing after it, is no CPF in any reading.
+    assert hints(groups.replace(b"(09)", b"(0)") + b" ET") == {}

@@ -8,7 +8,6 @@ as an error, never as an empty place: an unread channel proves nothing (Grok G4-
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import os
 import re
 import struct
@@ -17,8 +16,6 @@ import zlib
 from collections.abc import Iterator
 from concurrent.futures import Executor
 from dataclasses import dataclass
-
-from anonimizador.terms import COMPACT_MIN
 
 # The places searched, in report order.
 CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
@@ -83,6 +80,10 @@ class Reading:
         # The decoded PDF strings, searched for patterns: an identifier left in an old
         # object reaches no other pattern channel (Grok G0-21).
         self.strings: list[str] = []
+        # The joins that ambiguous boundaries could make, searched only for terms that
+        # must be whole words: a term matched without separators would count each
+        # occurrence once per join.
+        self.raw_word_texts: list[str] = []
 
     @contextlib.contextmanager
     def channel(self, name: str) -> Iterator[None]:
@@ -198,16 +199,17 @@ GAP_TOKEN = re.compile(
     rb"|(?P<number>[-+]?(?:\d+\.?\d*|\.\d+))|(?P<op>[A-Za-z*'\"]+)|(?P<other>.)",
     re.DOTALL,
 )
-# Text-showing, text-state, and color operators: the pieces around them are one text.
-SAME_TEXT_OPS = frozenset(
-    b"Tj TJ Td TD Tm Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC scn SCN".split()
-)
-# Operators that show their string on the next line: it is not part of the word before.
-NEXT_LINE_SHOW_OPS = frozenset((b"'", b'"'))
-# A TJ adjustment at or below this (thousandths of an em, moving right) is a word space.
+# Text-showing, text-state, and color operators: the text continues where it was.
+SAME_TEXT_OPS = frozenset(b"Tj TJ Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC scn SCN".split())
+# Operators that move the text position. Whether a move is glyph positioning, a word
+# space, or a new line depends on the fonts' widths, which are not read, so a move is
+# ambiguous (Grok G0-25, G0-26, G0-29, G0-32).
+MOVE_OPS = frozenset((b"Td", b"TD", b"Tm", b"T*", b"'", b'"'))
+# A TJ adjustment at or below this (thousandths of an em, moving right) may be a word
+# space: it is ambiguous too.
 WORD_SPACE_ADJUSTMENT = -200
-# Between the pieces of one text stand a few operators and numbers. A longer gap (binary
-# data, another drawing) is a break, and is not tokenized.
+# Between the strings of one text stand a few operators and numbers. A longer gap
+# (binary data, another drawing) is a break, and is not tokenized.
 MAX_TEXT_GAP = 256
 PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
 
@@ -234,9 +236,10 @@ def hex_string(body: bytes) -> bytes:
 
 
 def decode_pdf_string(raw: bytes) -> str:
-    """A PDF text string: UTF-16 or UTF-8 after a byte order mark; UTF-16 when every
-    other byte is NUL, as two-byte (Identity-H) content strings store characters below
-    256 without a mark (Grok G0-30); PDFDocEncoding (read as Latin-1) otherwise."""
+    """A PDF text string: UTF-16 or UTF-8 after a byte order mark; UTF-16 when at least
+    half of the code units have a NUL high byte, as two-byte (Identity-H) content
+    strings store text without a mark, a dash or a symbol among Latin letters (Grok
+    G0-30, G0-33); PDFDocEncoding (read as Latin-1) otherwise."""
     if raw.startswith(b"\xfe\xff"):
         return raw[2:].decode("utf-16-be", "ignore")
     if raw.startswith(b"\xff\xfe"):
@@ -244,9 +247,10 @@ def decode_pdf_string(raw: bytes) -> str:
     if raw.startswith(b"\xef\xbb\xbf"):
         return raw[3:].decode("utf-8", "ignore")
     if len(raw) >= 2 and len(raw) % 2 == 0:
-        if not any(raw[0::2]) and any(raw[1::2]):
+        units = len(raw) // 2
+        if raw[0::2].count(0) * 2 >= units and any(raw[1::2]):
             return raw.decode("utf-16-be", "ignore")
-        if not any(raw[1::2]) and any(raw[0::2]):
+        if raw[1::2].count(0) * 2 >= units and any(raw[0::2]):
             return raw.decode("utf-16-le", "ignore")
     return raw.decode("latin-1")
 
@@ -277,113 +281,73 @@ def pdf_string_spans(blob: bytes) -> list[PdfString]:
     return spans
 
 
-@dataclass
-class DrawState:
-    """What a content stream has set so far: the TJ array depth and the baseline of the
-    last `Tm`."""
-
-    depth: int = 0
-    baseline: float | None = None
-
-
-# Marks a boundary that only the fonts' widths could settle: a horizontal move.
+# Marks a boundary between strings that only the fonts' widths could settle.
 AMBIGUOUS = "\x1f"
-# Pieces separated by ambiguous boundaries. Possessive, and only from the start of a
-# word, so a long word with no mark is tried once (no quadratic backtracking).
-AMBIGUOUS_RUN = re.compile(rf"(?<![^\W_])[^\W_]++(?:{AMBIGUOUS}[^\W_]++)+")
-# The strongest joint wins: another line, then a word space, then a horizontal move.
-JOINT_STRENGTH = ("\n", " ", AMBIGUOUS, "")
+# The longest join of pieces read across ambiguous boundaries: longer than a short term
+# and than any identifier pattern (a CPF is 14 characters, a CNS 18).
+MAX_MIXED_READING = 20
 
 
-def gap_break(gap: bytes, state: DrawState) -> tuple[str, bytes | None]:
-    """How the text before `gap` and after it are joined: "" for one word, `AMBIGUOUS`
-    for a horizontal move (`Td`, `TD`, a `Tm` on the same baseline), which is glyph
-    positioning or a word space depending on the fonts' widths, " " for a word space (a
-    large TJ adjustment), "\\n" for another line or another drawing. Also the gap's
-    first operator."""
+def gap_joint(gap: bytes, in_array: bool) -> tuple[str, bool]:
+    """How the strings before and after `gap` are joined: "" when the text simply
+    continues, `AMBIGUOUS` when the text position moves (a move operator, or a large TJ
+    adjustment), "\\n" when another drawing starts (another operator, binary data, a
+    long gap). Also whether a TJ array is open after the gap."""
     if len(gap) > MAX_TEXT_GAP:
-        state.depth, state.baseline = 0, None
-        return "\n", None
-    joints, numbers, first_op = {""}, [], None
+        return "\n", False
+    joint = ""
     for token in GAP_TOKEN.finditer(gap):
         kind, value = token.lastgroup, token.group()
         if kind == "open":
-            state.depth += 1
+            in_array = True
         elif kind == "close":
-            state.depth = max(0, state.depth - 1)
+            in_array = False
         elif kind == "number":
-            number = float(value)
-            numbers.append(number)
-            if state.depth and number <= WORD_SPACE_ADJUSTMENT:
-                joints.add(" ")
+            if in_array and float(value) <= WORD_SPACE_ADJUSTMENT and joint != "\n":
+                joint = AMBIGUOUS
         elif kind == "op":
-            first_op = first_op or value
-            if value in (b"Td", b"TD"):
-                if len(numbers) >= 2 and numbers[-1] != 0:
-                    joints.add("\n")
-                elif len(numbers) >= 2 and numbers[-2] != 0:
-                    joints.add(AMBIGUOUS)
-            elif value == b"Tm":
-                same_line = len(numbers) >= 6 and numbers[-1] == state.baseline
-                joints.add(AMBIGUOUS if same_line else "\n")
-                if len(numbers) >= 6:
-                    state.baseline = numbers[-1]
-            elif value not in SAME_TEXT_OPS and value not in NEXT_LINE_SHOW_OPS:
-                # `'` and `"` show the string before them on a new line: the break goes
-                # before that string (see `drawn_text`), and the text after it continues
-                # the line (Grok G0-27).
-                joints.add("\n")
-            if value == b"BT":
-                state.baseline = None
-            numbers = []
+            if value in MOVE_OPS and joint != "\n":
+                joint = AMBIGUOUS
+            elif value not in SAME_TEXT_OPS:
+                joint = "\n"
         elif kind == "other":
-            joints.add("\n")
-    return next(j for j in JOINT_STRENGTH if j in joints), first_op
+            joint = "\n"
+    return joint, in_array
 
 
 def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
-    """The strings of `blob` as drawn: the pieces of one word joined, word spaces and
-    line moves kept, horizontal moves marked `AMBIGUOUS`. Content streams often draw a
-    word glyph by glyph (`[(Z) -2 (u)] TJ`), and a short term must be a whole word (Grok
-    G0-19), but a word space is often only a large TJ adjustment or a move, which must
-    stay a break (Grok G0-22). Text state and color operators stay inside a word (Grok
-    G0-24); a string shown with `'` or `"` starts a line. Line breaks inside a string
-    are dropped."""
-    state = DrawState()
-    joints = []
-    starts = [0, *(span.end for span in spans)]
+    """The strings of `blob` as drawn, with `AMBIGUOUS` where the text position moves.
+    Content streams often draw a word glyph by glyph (`[(Z) -2 (u)] TJ`), and a short
+    term must be a whole word (Grok G0-19); a word space is often only a move (Grok
+    G0-22). Line breaks inside a string are dropped."""
+    parts, in_array = [], False
     for index, span in enumerate(spans):
-        joint, first_op = gap_break(blob[starts[index] : span.start], state)
-        if index and first_op in NEXT_LINE_SHOW_OPS:
-            joints[index - 1] = "\n"
-        joints.append(joint if index else "")
-    if spans:
-        tail = blob[spans[-1].end : spans[-1].end + MAX_TEXT_GAP]
-        _, first_op = gap_break(tail, dataclasses.replace(state))
-        if first_op in NEXT_LINE_SHOW_OPS:
-            joints[-1] = "\n"
-    return "".join(
-        joint + re.sub(r"[\r\n]", "", decode_pdf_string(span.value))
-        for joint, span in zip(joints, spans, strict=True)
-    )
+        start = spans[index - 1].end if index else 0
+        joint, in_array = gap_joint(blob[start : span.start], in_array)
+        parts.append(joint if index else "")
+        parts.append(re.sub(r"[\r\n]", "", decode_pdf_string(span.value)))
+    return "".join(parts)
 
 
 def mixed_readings(marked: str) -> str:
-    """Every short word that ambiguous boundaries could make, one per line: in each run
-    of pieces between ambiguous boundaries, the pieces from any one to any later one,
-    up to the length of a short term. A word whose own pieces are placed one by one,
-    next to a word placed after another move, is whole in one of them (Grok G0-29).
-    Longer terms need no word boundary: they match without separators."""
+    """Every way the ambiguous boundaries of `marked` could join its pieces, one reading
+    per line, each up to `MAX_MIXED_READING` characters: the end of one piece (after its
+    last space), the pieces after it, and the start of the last one (before its first
+    space). A short term, or a number drawn group by group, is whole in one of them
+    whatever each move is (Grok G0-29, G0-34, G0-35). Longer terms need no boundary."""
     readings = []
-    for run in AMBIGUOUS_RUN.finditer(marked):
-        pieces = run.group().split(AMBIGUOUS)
-        for first in range(len(pieces)):
-            length = len(pieces[first])
-            for last in range(first + 1, len(pieces)):
-                length += len(pieces[last])
-                if length >= COMPACT_MIN:
+    for line in marked.split("\n"):
+        pieces = line.split(AMBIGUOUS)
+        for first in range(len(pieces) - 1):
+            reading = re.split(r"\s", pieces[first])[-1]
+            for piece in pieces[first + 1 :]:
+                head = re.split(r"\s", piece, maxsplit=1)
+                reading += head[0]
+                if len(reading) > MAX_MIXED_READING:
                     break
-                readings.append("".join(pieces[first : last + 1]))
+                readings.append(reading)
+                if len(head) > 1:
+                    break
     return "\n".join(readings)
 
 
@@ -391,17 +355,20 @@ def mixed_readings(marked: str) -> str:
 class PdfStringViews:
     """The PDF strings of some bytes, read five ways."""
 
-    # One string per line, and as drawn: both also searched for patterns (Grok G0-21,
-    # G0-23).
+    # One string per line.
     lines: str
+    # As drawn, with every move joined, with every move a break, and every join a mix
+    # of the two makes: an ambiguous boundary can add a match, never hide one.
     drawn: str
-    # A horizontal move read as a word break, and the short words a mix of joins and
-    # breaks makes: an ambiguous boundary can add a match, never hide one (Grok G0-25,
-    # G0-26, G0-29).
     split: str
     mixed: str
     # Innermost literals only, robust to a false "(" in binary data.
     inner: str
+
+    @property
+    def for_patterns(self) -> list[str]:
+        """The readings searched for identifier patterns (Grok G0-21, G0-23, G0-34)."""
+        return [self.lines, self.drawn, self.split, self.mixed]
 
 
 def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
@@ -438,7 +405,7 @@ def raw_blobs(data: bytes) -> list[bytes]:
     return blobs
 
 
-def raw_readings(data: bytes) -> tuple[list[str], list[str]]:
+def raw_readings(data: bytes) -> tuple[list[str], list[str], list[str]]:
     """The raw texts of a file, and its PDF strings for patterns (one per line, and as
     drawn)."""
     blobs = raw_blobs(data)
@@ -447,8 +414,8 @@ def raw_readings(data: bytes) -> tuple[list[str], list[str]]:
         blob.decode("utf-16-be", "ignore") for blob in blobs if blob.count(b"\x00") > len(blob) // 4
     )
     strings = pdf_string_views(blobs)
-    texts.extend((strings.lines, strings.drawn, strings.split, strings.mixed, strings.inner))
-    return texts, [strings.lines, strings.drawn]
+    texts.extend((strings.lines, strings.drawn, strings.split, strings.inner))
+    return texts, strings.for_patterns, [strings.mixed]
 
 
 def raw_texts(data: bytes) -> list[str]:
@@ -497,7 +464,7 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        texts["raw"], reading.strings = raw_readings(f.read())
+        texts["raw"], reading.strings, reading.raw_word_texts = raw_readings(f.read())
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
