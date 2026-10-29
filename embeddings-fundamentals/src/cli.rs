@@ -568,12 +568,27 @@ fn print_sources(report: &crate::pipeline::RunReport) {
     }
 }
 
+/// What the manifest of a remote permission check must be the corpus of.
+#[derive(Clone, Copy)]
+enum Searched<'a> {
+    /// The command ingests or combines that very corpus (it checks the snapshots
+    /// itself).
+    Manifest,
+    /// The revisions these experiments pinned.
+    Snapshots(&'a [&'a crate::storage::ExperimentSnapshot]),
+    /// The active revisions, whose corpus no record names.
+    Active,
+}
+
 /// Checks the per-corpus permission of every remote engine among `engines` before any
-/// client or credential exists; local engines need no manifest. Returns the refusal
-/// to report, if any.
+/// client or credential exists; local engines need no manifest. The manifest must be
+/// the corpus actually searched (Codex C4-2): every searched snapshot must have
+/// indexed it, and an active-revision search, whose corpus cannot be checked, is
+/// refused for a remote engine. Returns the refusal to report, if any.
 async fn remote_permission(
     engines: &[&EngineConfig],
     manifest: Option<&Path>,
+    searched: Searched<'_>,
 ) -> Result<Option<String>> {
     let remote: Vec<&&EngineConfig> = engines
         .iter()
@@ -599,6 +614,25 @@ async fn remote_permission(
             &engine.model_id,
         ) {
             return Ok(Some(e.to_string()));
+        }
+    }
+    match searched {
+        Searched::Manifest => {}
+        Searched::Active => {
+            return Ok(Some(
+                "a remote engine needs --experiment: the corpus of the active revisions cannot be checked against --manifest".to_owned(),
+            ));
+        }
+        Searched::Snapshots(snapshots) => {
+            if let Some(other) = snapshots
+                .iter()
+                .find(|s| s.corpus_checksum != manifest.manifest_checksum)
+            {
+                return Ok(Some(format!(
+                    "experiment {} indexed another corpus than --manifest, whose permission does not apply to it",
+                    other.experiment_id
+                )));
+            }
         }
     }
     Ok(None)
@@ -695,11 +729,6 @@ async fn draft_labels(args: &DraftLabelsArgs) -> Result<ExitCode> {
         Ok((configs, crate::evaluation::load_queries(&queries_path)?))
     })
     .await?;
-    let engines: Vec<&EngineConfig> = configs.iter().map(|c| &c.engine).collect();
-    if let Some(refusal) = remote_permission(&engines, args.manifest.as_deref()).await? {
-        eprintln!("validation failed: {refusal}");
-        return Ok(ExitCode::from(EXIT_VALIDATION));
-    }
     // Every snapshot is read before any model loads, so a missing experiment is
     // refused without a model load or download.
     let (root, ids) = (
@@ -718,6 +747,18 @@ async fn draft_labels(args: &DraftLabelsArgs) -> Result<ExitCode> {
         Ok((Arc::new(store), snapshots))
     })
     .await?;
+    let engines: Vec<&EngineConfig> = configs.iter().map(|c| &c.engine).collect();
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshots.iter().collect();
+    if let Some(refusal) = remote_permission(
+        &engines,
+        args.manifest.as_deref(),
+        Searched::Snapshots(&pinned),
+    )
+    .await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
     let mut embedders = Vec::with_capacity(configs.len());
     for config in &configs {
         match adapters::build(&config.engine).await {
@@ -797,13 +838,21 @@ async fn draft_labels(args: &DraftLabelsArgs) -> Result<ExitCode> {
 async fn search(args: &SearchArgs, modality: crate::domain::Modality) -> Result<ExitCode> {
     let path = args.config.clone();
     let config = blocking(move || Ok(ExperimentConfig::load(&path)?)).await?;
-    if let Some(refusal) = remote_permission(&[&config.engine], args.manifest.as_deref()).await? {
-        eprintln!("validation failed: {refusal}");
-        return Ok(ExitCode::from(EXIT_VALIDATION));
-    }
     // The store and snapshot are read before any model loads, so a missing experiment
     // is refused without a model load or download.
     let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshot.iter().collect();
+    let searched = if snapshot.is_some() {
+        Searched::Snapshots(&pinned)
+    } else {
+        Searched::Active
+    };
+    if let Some(refusal) =
+        remote_permission(&[&config.engine], args.manifest.as_deref(), searched).await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
@@ -884,19 +933,26 @@ async fn search_fused(args: &SearchArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(EXIT_VALIDATION));
         }
     };
+    // Snapshot first: a missing experiment, or one that is not a combined run with these
+    // fusion parameters, is refused before either model loads. Its leg spaces are
+    // checked by `search_combined` once the models give them.
+    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshot.iter().collect();
+    let searched = if snapshot.is_some() {
+        Searched::Snapshots(&pinned)
+    } else {
+        Searched::Active
+    };
     if let Some(refusal) = remote_permission(
         &[&config.text.engine, &config.image.engine],
         args.manifest.as_deref(),
+        searched,
     )
     .await?
     {
         eprintln!("validation failed: {refusal}");
         return Ok(ExitCode::from(EXIT_VALIDATION));
     }
-    // Snapshot first: a missing experiment, or one that is not a combined run with these
-    // fusion parameters, is refused before either model loads. Its leg spaces are
-    // checked by `search_combined` once the models give them.
-    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
     if let Some(snapshot) = &snapshot
         && let Err(e) = crate::retrieval::check_fusion_pinned(snapshot, config.fusion)
     {
@@ -958,9 +1014,11 @@ async fn combine(args: &CombineArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(EXIT_VALIDATION));
         }
     };
+    // The manifest is the corpus combined: `run_combined` refuses legs of another one.
     if let Some(refusal) = remote_permission(
         &[&config.text.engine, &config.image.engine],
         Some(&args.manifest),
+        Searched::Manifest,
     )
     .await?
     {

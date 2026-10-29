@@ -6,6 +6,7 @@ Updated: 2026-10-29. Use this file to resume `spec/prompt/execute.md` in a new s
 - Run `spec/prompt/execute.md`, phases 0 → 4 in order. Each phase gets **its own branch and PR** before the next phase starts. Implement every phase.
 - Reply to the owner in Portuguese.
 - Merges are **not** authorized. Push and PR creation are authorized, one per phase.
+- **Merge order (owner, 2026-10-29):** at the end, once their review loops approve, merge the Phase 4 PR first and then the `anonimizador` PR. The `anonimizador/scaffold` branch depends on Phase 4. Open or retarget its PR against `main` only after Phase 4 merges, so its diff shows only the subproject.
 - Review loop for each phase: implementation → validation → **Grok** review → fixes → Grok confirmation → **Codex** review → fixes → Codex confirmation. If Codex fixes change reviewed behavior, run Grok again and then Codex again. Each finding must be fixed or refuted with evidence, and the reviewer must confirm.
 - **Codex waiver:** when Codex fails with the ChatGPT usage-quota error, skip it. Record the skip as an owner waiver in `PROGRESS.md` and in the phase's `FINDINGS.md`. Never simulate a review. Grok is always required.
 - Never invent results, reviewer reports, credentials, or remote authorization. Never send secrets or medical documents to reviewers.
@@ -16,7 +17,7 @@ Updated: 2026-10-29. Use this file to resume `spec/prompt/execute.md` in a new s
 | Phase | Branch | PR | Status |
 |---|---|---|---|
 | 0–3 | — | #3–#8 | Approved and merged to `main` (Phase 3 via PR #8, `e1abe6f`) |
-| 4 Combined + publication (`@m4`) | `phase-4/combined-retrieval` | — | Implemented and validated. Grok rounds 1–3 done (G4-1..G4-4 fixed; G4-4 awaits confirmation). Owner-requested corpus tools added (`TESTS.md`). Next: Grok round 4, then Codex, then Antigravity |
+| 4 Combined + publication (`@m4`) | `phase-4/combined-retrieval` | — | Implemented and validated. Grok rounds 1–3 done (G4-1..G4-4 fixed; G4-4 awaits confirmation). Owner-requested corpus tools added (`TESTS.md`). Grok rounds 4–5 done (G4-5 moved to `anonimizador`, G4-6 fixed, round 5 NO FINDINGS). Codex round 1 is running; Antigravity follows. The sibling project `anonimizador` (branch `anonimizador/scaffold`) holds the verifier and has its own stage 0 review |
 
 The review loop now has a third reviewer, Antigravity (`agy`), after Grok and Codex (see `CLAUDE.md`).
 

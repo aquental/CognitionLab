@@ -163,6 +163,11 @@ pub struct ConfigurationResult {
     pub batch_size: usize,
     /// Corpus manifest checksum.
     pub corpus_checksum: Checksum,
+    /// Fingerprint of the revisions the run's snapshot pinned and its evaluation
+    /// searched ([`crate::storage::revisions_fingerprint`]). `None` in results written
+    /// before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revisions: Option<Fingerprint>,
     /// Configuration fingerprints.
     pub fingerprints: Fingerprints,
     /// Retrieval evaluation.
@@ -183,6 +188,11 @@ pub struct ConfigurationResult {
 pub struct LegConfiguration {
     /// Experiment run that indexed this leg (its snapshot pins the revisions).
     pub experiment_id: ExperimentId,
+    /// Fingerprint of the revisions this leg searched
+    /// ([`crate::storage::revisions_fingerprint`]). A leg is compared only with a
+    /// reported run over the same revisions (Codex C4-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revisions: Option<Fingerprint>,
     /// Engine.
     pub engine: EngineId,
     /// Engine version.
@@ -343,7 +353,7 @@ pub enum ReportError {
     },
     /// A combined result names a leg experiment that the report shows in another space.
     #[error(
-        "combined configuration {experiment}: its {leg} leg {leg_experiment} is reported in another embedding space"
+        "combined configuration {experiment}: its {leg} leg {leg_experiment} is reported {reason}"
     )]
     LegMismatch {
         /// Combined experiment.
@@ -352,6 +362,8 @@ pub enum ReportError {
         leg: &'static str,
         /// The leg's experiment.
         leg_experiment: ExperimentId,
+        /// What differs.
+        reason: &'static str,
     },
 }
 
@@ -450,11 +462,26 @@ impl ComparisonReport {
                     .configurations
                     .iter()
                     .find(|r| r.experiment_id == config.experiment_id);
-                if reported.is_some_and(|r| r.embedding_space_id != config.embedding_space_id) {
+                let Some(reported) = reported else {
+                    continue;
+                };
+                let reason = if reported.embedding_space_id != config.embedding_space_id {
+                    Some("in another embedding space")
+                } else if reported.revisions.is_none() || reported.revisions != config.revisions {
+                    // An experiment id is unique only within one store, and a space
+                    // does not identify the revisions searched (Codex C4-3).
+                    Some(
+                        "over other or unrecorded revisions (another store, extraction, or chunking)",
+                    )
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
                     return Err(ReportError::LegMismatch {
                         experiment: c.experiment_id.clone(),
                         leg,
                         leg_experiment: config.experiment_id.clone(),
+                        reason,
                     });
                 }
             }

@@ -191,6 +191,34 @@ pub struct ExperimentSnapshot {
     /// ingestion that no evaluation belongs to.
     #[serde(default)]
     pub evaluation: Option<EvaluationProvenance>,
+    /// Outcome of the run that pinned these revisions: `incomplete` when a required
+    /// source failed. `None` for snapshots written before it was recorded (Codex C4-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_status: Option<crate::domain::RunStatus>,
+}
+
+/// Fingerprint of a set of revisions, independent of their order: what a result
+/// searched, so that a report can tell two runs over different revisions apart even
+/// when their experiment ids and spaces match (Codex C4-3).
+///
+/// # Errors
+///
+/// Returns [`crate::ids::IdError`] when the canonical encoding fails.
+pub fn revisions_fingerprint(
+    revisions: &[RevisionRef],
+) -> Result<Fingerprint, crate::ids::IdError> {
+    let mut keys: Vec<(&str, &str, &str)> = revisions
+        .iter()
+        .map(|r| {
+            (
+                r.space.as_str(),
+                r.source_id.as_str(),
+                r.revision_id.as_str(),
+            )
+        })
+        .collect();
+    keys.sort_unstable();
+    Fingerprint::of(&keys)
 }
 
 /// Exact query set and labels an experiment evaluated, by version and file checksum.
@@ -1241,6 +1269,7 @@ mod tests {
             fingerprints: BTreeMap::new(),
             corpus_checksum: Checksum::of_bytes(b"c"),
             evaluation: None,
+            run_status: None,
         };
         store.save_experiment(&snapshot).expect("save");
         assert!(matches!(

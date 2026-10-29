@@ -40,11 +40,11 @@ pub enum DraftError {
         source: std::io::Error,
     },
     /// A path is not valid UTF-8, so a manifest cannot name it.
-    #[error("a path under {0} is not valid UTF-8")]
-    NotUtf8(String),
+    #[error("a path under the corpus directory is not valid UTF-8")]
+    NotUtf8,
     /// The directory holds no PDF, PNG, or JPEG file.
-    #[error("no PDF, PNG, or JPEG file under {0}")]
-    Empty(String),
+    #[error("no PDF, PNG, or JPEG file under the corpus directory")]
+    Empty,
     /// A listed file is not a PDF, PNG, or JPEG file.
     #[error("source {index} (in path order) is not a PDF, PNG, or JPEG file")]
     Unsupported {
@@ -135,7 +135,8 @@ pub struct ManifestDraft {
 }
 
 /// Lists the PDF, PNG, and JPEG files under `dir` (recursively, hidden entries and
-/// symbolic links skipped), as paths relative to `dir` in path order.
+/// symbolic links skipped), as paths relative to `dir` in path order. Errors never
+/// name a path: a directory name may be a patient's (Codex C4-4).
 ///
 /// # Errors
 ///
@@ -145,7 +146,7 @@ pub struct ManifestDraft {
 pub fn corpus_files(dir: &Path) -> Result<Vec<String>, DraftError> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), DraftError> {
         let read = |source| DraftError::Read {
-            path: dir.display().to_string(),
+            path: "a directory under the corpus directory".to_owned(),
             source,
         };
         for entry in std::fs::read_dir(dir).map_err(read)? {
@@ -163,7 +164,7 @@ pub fn corpus_files(dir: &Path) -> Result<Vec<String>, DraftError> {
                     .strip_prefix(root)
                     .ok()
                     .and_then(Path::to_str)
-                    .ok_or_else(|| DraftError::NotUtf8(root.display().to_string()))?;
+                    .ok_or(DraftError::NotUtf8)?;
                 out.push(relative.replace(std::path::MAIN_SEPARATOR, "/"));
             }
         }
@@ -172,7 +173,7 @@ pub fn corpus_files(dir: &Path) -> Result<Vec<String>, DraftError> {
     let mut files = Vec::new();
     walk(dir, dir, &mut files)?;
     if files.is_empty() {
-        return Err(DraftError::Empty(dir.display().to_string()));
+        return Err(DraftError::Empty);
     }
     files.sort();
     Ok(files)
