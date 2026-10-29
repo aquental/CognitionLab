@@ -78,6 +78,48 @@ Invariants that span several modules and are easy to break:
 - **Ranking.** Single-modality results sort by descending cosine score, with ties broken by ascending `record_id`. RRF uses `1/(60+rank)` with rank starting at 1, sums across lists, and uses the same tie-break.
 - **Data handling.** `remote_allowed` defaults to false and is checked before any remote client is built or any credential is read. Logs carry IDs and counts only, never chunk text. Stored image assets are re-encoded without metadata.
 
+## Adversarial review per phase (spec/prompt/execute.md §7, extended by the owner)
+
+Each phase is reviewed by three independent external reviewers, **one at a time and never in parallel**:
+
+**Grok → Codex → Antigravity (`agy`)**
+
+The owner added Antigravity on 2026-10-29, starting with Phase 4. It runs after the Grok → Codex order that execute.md fixes.
+
+- **Package.** Every reviewer gets the same review package, built with `scripts/review-package.sh`:
+  - the phase objective and acceptance criteria;
+  - the complete diff since the phase began, including new files;
+  - the reviewed commit;
+  - the evidence of the executed checks;
+  - the findings history.
+
+  Grep the package for secrets before sending it. Never send credentials or medical documents.
+- **Each reviewer works the same way.** It performs an adversarial review of the whole phase, not only a check of earlier fixes. It lists findings with:
+  - ID;
+  - severity;
+  - file and line;
+  - description and impact;
+  - a reproduction scenario or verifiable rationale;
+  - a validation suggestion.
+
+  Claude then handles every finding, including low-severity ones:
+  - fixes a valid finding with a regression test (and a mutant check where it fits);
+  - refutes a false positive with verifiable evidence.
+
+  The same reviewer then confirms closure.
+- **Antigravity.** Run it read-only (`agy --print --mode plan`). The prompt tells it to use the **`rust-dev`** plugin (skills `rust-async-and-errors`, `rust-ownership-and-perf`, `rust-cargo-quality` and its rule) together with PLAN §2.2/§2.3.
+- **Loop.** Repeat Grok → Codex → Antigravity until no reviewer has an unresolved valid finding on the final state. When a later reviewer's fixes change behavior, contracts, or evidence that an earlier reviewer already reviewed, resubmit to the earlier reviewers in order. Unresolved disagreements stay explicit.
+- **Records.** Save each raw report as `reports/reviews/phase-N/{grok,codex,agy}-roundK.md`. Track every finding in `reports/reviews/phase-N/FINDINGS.md`, with these columns:
+  - ID (`G`/`C`/`A` prefixes);
+  - reviewer;
+  - severity;
+  - resolution or refutation;
+  - files;
+  - validation;
+  - confirmation;
+  - status.
+- **No simulation.** Never simulate a review. An unavailable reviewer blocks phase approval. The only exception is a Codex usage-quota error, recorded as an owner waiver; Grok and Antigravity are always required.
+
 ## BDD contract (PRD §5.7, PLAN §5.2)
 
 - The suite uses `cucumber` 0.23 with `output-json` (already a dev-dependency) and a `tests/bdd.rs` runner with `harness = false`. The runner calls `fail_on_skipped()`, tees a JSON writer, and must `.run(...).await`; `run_and_exit` is not used. After the run it checks executed scenarios against the inventory **parsed from `spec/PRD.md`** for milestones ≤ `config/acceptance.toml`.
