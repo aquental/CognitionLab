@@ -188,8 +188,7 @@ def test_patterns_are_searched_in_names_and_across_pages(monkeypatch):
 
 def strict_result(monkeypatch, data: bytes):
     reading = Reading()
-    reading.texts["raw"], strings = raw_readings(data)
-    reading.strings = [strings]
+    reading.texts["raw"], reading.strings = raw_readings(data)
     monkeypatch.setattr(verify, "read", lambda *_: reading)
     options = Options(use_ocr=False, strict_patterns=True)
     return check_file(1, CorpusFile("x.pdf", "x.pdf"), [], options, None), options
@@ -203,6 +202,8 @@ def test_patterns_left_in_pdf_strings_are_hints(monkeypatch):
     for data in (
         b"9 0 obj << /Subject (" + cpf.encode() + b") >> endobj\n",
         b"9 0 obj << /Subject <" + hexed.encode() + b"> >> endobj\n",
+        # Drawn glyph group by glyph group (Grok G0-23).
+        b"BT [(123)(.)(456)(.)(789)(-)(09)] TJ ET\n",
     ):
         result, options = strict_result(monkeypatch, data)
         assert result.hints == {"cpf": 1}, data[:24]

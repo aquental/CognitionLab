@@ -2,7 +2,14 @@ import struct
 import time
 import zlib
 
-from anonimizador.channels import image_metadata, png_size, raw_texts, unescape_literal, worth_ocr
+from anonimizador.channels import (
+    image_metadata,
+    pdf_string_views,
+    png_size,
+    raw_texts,
+    unescape_literal,
+    worth_ocr,
+)
 from anonimizador.terms import Term, count_patterns
 
 NAME = Term("Fulano Ficticio")
@@ -170,3 +177,53 @@ def test_a_long_run_without_at_sign_is_fast_to_search():
     started = time.perf_counter()
     assert count_patterns(["a" * 200_000 + " b@c.com"]) == {"email": 1}
     assert time.perf_counter() - started < 2
+
+
+def test_word_spaces_and_line_moves_split_a_drawn_text():
+    # Regression (Grok G0-22): every piece of a text object was glued, so a short name
+    # drawn glyph by glyph next to another word was never a whole word.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    name = b"(Z) -2 (u) -2 (l) -2 (e) -2 (o)"
+    other = b"(A) -2 (s) -2 (s) -2 (u) -2 (n) -2 (t) -2 (o)"
+    spaced = b"BT [" + name + b" -300 " + other + b"] TJ ET"
+    next_line = b"BT [" + name + b"] TJ 0 -20 Td [" + other + b"] TJ ET"
+    for data in (spaced, next_line):
+        assert count("Zuleo", data) == 1, data
+        assert count("Zulea", data) == 0, data
+        assert count("Assunto", data) == 1, data
+        stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
+        assert count("Zuleo", stream) == 1, data
+
+
+def test_text_state_and_same_baseline_keep_a_word_whole():
+    # Regression (Grok G0-24): Tm, Tc, and other text-state operators ended the word.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    same_line = b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 90 700 Tm (leo) Tj ET"
+    assert count("Zuleo", same_line) == 1
+    assert count("Zulea", same_line) == 0
+    assert count("Zuleo", b"BT (Zu) Tj 0.1 Tc (leo) Tj ET") == 1
+    assert count("Zuleo", b"BT (Zu) Tj 1 0 0 rg (leo) Tj ET") == 1
+    # Another baseline, or a string shown with ' or ", is another line.
+    assert count("Zuleo", b"BT 1 0 0 1 72 700 Tm (Zu) Tj 1 0 0 1 72 680 Tm (leo) Tj ET") == 0
+    assert count("Zuleo", b'BT 0 0 (Zu) " 0 0 (leo) " ET') == 0
+    assert count("Zuleo", b"BT (Zu) Tj (leo) ' ET") == 0
+    assert count("Zuleo", b"BT (Zu) Tj (leo) ' (Assunto) Tj ET") == 0
+
+
+def test_a_number_drawn_glyph_by_glyph_is_a_pattern_hint():
+    # Regression (Grok G0-23): patterns saw one string per line only.
+    def hints(data: bytes) -> dict[str, int]:
+        views = pdf_string_views([data])
+        return count_patterns([views.lines, views.drawn])
+
+    for data in (
+        b"BT [(123)(.)(456)(.)(789)(-)(09)] TJ ET",
+        b"BT (123) Tj (.) Tj (456) Tj (.) Tj (789) Tj (-) Tj (09) Tj ET",
+        b"BT [(12) -2 (3.456.789-09)] TJ ET",
+    ):
+        assert hints(data) == {"cpf": 1}, data
+    assert hints(b"BT [(123)(.)(456)(.)(789)(-)(0)] TJ ET") == {}

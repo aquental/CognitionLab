@@ -8,6 +8,7 @@ as an error, never as an empty place: an unread channel proves nothing (Grok G4-
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 import re
 import struct
@@ -188,9 +189,24 @@ PDF_STRING_OPENER = re.compile(rb"[(<]")
 # `(Concei\\347\\343o (mae))` is one string (Grok G0-20). Deeper nesting is rare, and a
 # regular expression keeps binary streams fast to scan.
 PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOTALL)
-# What may stand between two pieces of one drawn text: numbers (kerning, positions),
-# array brackets, and text-showing and positioning operators.
-TEXT_GLUE = re.compile(rb"[\s\d.+\-\[\]]*(?:(?:Tj|TJ|Td|TD|T\*|')[\s\d.+\-\[\]]*)*")
+# The tokens between two strings of a content stream: whitespace, array brackets,
+# names, numbers, operators, and anything else (which ends the drawn text).
+GAP_TOKEN = re.compile(
+    rb"(?P<space>\s+)|(?P<open>\[)|(?P<close>\])|(?P<name>/[^\s/\[\]()<>{}%]*)"
+    rb"|(?P<number>[-+]?(?:\d+\.?\d*|\.\d+))|(?P<op>[A-Za-z*'\"]+)|(?P<other>.)",
+    re.DOTALL,
+)
+# Text-showing, text-state, and color operators: the pieces around them are one text.
+SAME_TEXT_OPS = frozenset(
+    b"Tj TJ Td TD Tm Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC scn SCN".split()
+)
+# Operators that show their string on the next line: it is not part of the word before.
+NEXT_LINE_SHOW_OPS = frozenset((b"'", b'"'))
+# A TJ adjustment at or below this (thousandths of an em, moving right) is a word space.
+WORD_SPACE_ADJUSTMENT = -200
+# Between the pieces of one text stand a few operators and numbers. A longer gap (binary
+# data, another drawing) is a break, and is not tokenized.
+MAX_TEXT_GAP = 256
 PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
 
 
@@ -253,25 +269,87 @@ def pdf_string_spans(blob: bytes) -> list[PdfString]:
     return spans
 
 
-def glued(blob: bytes, spans: list[PdfString]) -> str:
-    """The strings of `blob` with the pieces of one drawn text joined: content streams
-    often draw a word glyph by glyph (`[(Z) -2 (u) -2 (l)] TJ`), and a short term must
-    be a whole word (Grok G0-19). Line breaks inside a string are dropped too."""
-    parts = []
-    for previous, span in zip([None, *spans], spans, strict=False):
-        if previous is not None and not TEXT_GLUE.fullmatch(blob, previous.end, span.start):
-            parts.append("\n")
-        parts.append(re.sub(r"[\r\n]", "", decode_pdf_string(span.value)))
-    return "".join(parts)
+@dataclass
+class DrawState:
+    """What a content stream has set so far: the TJ array depth and the baseline of the
+    last `Tm`."""
+
+    depth: int = 0
+    baseline: float | None = None
+
+
+def gap_break(gap: bytes, state: DrawState) -> tuple[str, bytes | None]:
+    """How the text before `gap` and after it are joined: "" for one word, " " for a word
+    space (a large TJ adjustment), "\\n" for another line or another drawing. Also the
+    gap's first operator."""
+    if len(gap) > MAX_TEXT_GAP:
+        state.depth, state.baseline = 0, None
+        return "\n", None
+    joint, numbers, first_op = "", [], None
+    for token in GAP_TOKEN.finditer(gap):
+        kind, value = token.lastgroup, token.group()
+        if kind == "open":
+            state.depth += 1
+        elif kind == "close":
+            state.depth = max(0, state.depth - 1)
+        elif kind == "number":
+            number = float(value)
+            numbers.append(number)
+            if state.depth and number <= WORD_SPACE_ADJUSTMENT:
+                joint = joint or " "
+        elif kind == "op":
+            first_op = first_op or value
+            line_moved = (
+                value not in SAME_TEXT_OPS
+                or (value in (b"Td", b"TD") and len(numbers) >= 2 and numbers[-1] != 0)
+                or (value == b"Tm" and (len(numbers) < 6 or numbers[-1] != state.baseline))
+            )
+            if value == b"Tm" and len(numbers) >= 6:
+                state.baseline = numbers[-1]
+            if value == b"BT":
+                state.baseline = None
+            if line_moved:
+                joint = "\n"
+            numbers = []
+        elif kind == "other":
+            joint = "\n"
+    return joint, first_op
+
+
+def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
+    """The strings of `blob` as drawn: the pieces of one word joined, word spaces and
+    line moves kept. Content streams often draw a word glyph by glyph (`[(Z) -2 (u)]
+    TJ`), and a short term must be a whole word (Grok G0-19), but a word space is often
+    only a large TJ adjustment or a move, which must stay a break (Grok G0-22). Text
+    state and color operators stay inside a word (Grok G0-24); a string shown with `'`
+    or `"` starts a line. Line breaks inside a string are dropped."""
+    state = DrawState()
+    joints = []
+    starts = [0, *(span.end for span in spans)]
+    for index, span in enumerate(spans):
+        joint, first_op = gap_break(blob[starts[index] : span.start], state)
+        if index and first_op in NEXT_LINE_SHOW_OPS:
+            joints[index - 1] = "\n"
+        joints.append(joint if index else "")
+    if spans:
+        tail = blob[spans[-1].end : spans[-1].end + MAX_TEXT_GAP]
+        _, first_op = gap_break(tail, dataclasses.replace(state))
+        if first_op in NEXT_LINE_SHOW_OPS:
+            joints[-1] = "\n"
+    return "".join(
+        joint + re.sub(r"[\r\n]", "", decode_pdf_string(span.value))
+        for joint, span in zip(joints, spans, strict=True)
+    )
 
 
 @dataclass(frozen=True)
 class PdfStringViews:
     """The PDF strings of some bytes, read three ways."""
 
-    # One string per line: also searched for patterns (Grok G0-21).
+    # One string per line, and as drawn: both also searched for patterns (Grok G0-21,
+    # G0-23).
     lines: str
-    glued: str
+    drawn: str
     # Innermost literals only, robust to a false "(" in binary data.
     inner: str
 
@@ -284,7 +362,7 @@ def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
     for blob in blobs:
         spans = pdf_string_spans(blob)
         lines.extend(decode_pdf_string(span.value) for span in spans)
-        joined.append(glued(blob, spans))
+        joined.append(drawn_text(blob, spans))
         inner.extend(
             decode_pdf_string(unescape_literal(m)) for m in PDF_INNER_LITERAL.findall(blob)
         )
@@ -305,16 +383,17 @@ def raw_blobs(data: bytes) -> list[bytes]:
     return blobs
 
 
-def raw_readings(data: bytes) -> tuple[list[str], str]:
-    """The raw texts of a file, and its PDF strings one per line (for patterns)."""
+def raw_readings(data: bytes) -> tuple[list[str], list[str]]:
+    """The raw texts of a file, and its PDF strings for patterns (one per line, and as
+    drawn)."""
     blobs = raw_blobs(data)
     texts = decode_both(blobs)
     texts.extend(
         blob.decode("utf-16-be", "ignore") for blob in blobs if blob.count(b"\x00") > len(blob) // 4
     )
     strings = pdf_string_views(blobs)
-    texts.extend((strings.lines, strings.glued, strings.inner))
-    return texts, strings.lines
+    texts.extend((strings.lines, strings.drawn, strings.inner))
+    return texts, [strings.lines, strings.drawn]
 
 
 def raw_texts(data: bytes) -> list[str]:
@@ -363,8 +442,7 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        texts["raw"], strings = raw_readings(f.read())
-    reading.strings = [strings]
+        texts["raw"], reading.strings = raw_readings(f.read())
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
