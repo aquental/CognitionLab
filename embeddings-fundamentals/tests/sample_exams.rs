@@ -102,7 +102,8 @@ fn every_real_exam_name_is_flagged_for_review_without_revealing_it() {
             .expect("name")
             .to_string_lossy()
             .into_owned();
-        let findings = filename_findings(path);
+        // Only the file name: the directories above it are the repository's own.
+        let findings = filename_findings(Path::new(&name));
         assert!(
             !findings.is_empty(),
             "exam #{i}: its file name is not flagged for the anonymization review"
