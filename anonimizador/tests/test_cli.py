@@ -245,3 +245,23 @@ def test_strict_patterns_fail_on_a_pattern_in_the_name(outside_repo, capsys):
     out = capsys.readouterr().out
     assert "possible identifiers (patterns): cpf=1" in out
     assert "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_a_leftover_kerned_word_and_cpf_are_found(outside_repo, capsys):
+    # Regression (Grok G0-19, G0-21), end to end: an unreferenced old content stream
+    # draws a short name glyph by glyph, and an old object holds an unlisted CPF.
+    old = (
+        b"9 0 obj << >> stream\nBT [(Z) -2 (u) -2 (l) -2 (e) -2 (o)] TJ ET\nendstream endobj\n"
+        b"10 0 obj << /Subject (123.456.789-09) >> endobj\n"
+    )
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Assunto) Tj ET\n", b"") + old)
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "Zuleo" not in out and "123" not in out.replace("[1]", "")

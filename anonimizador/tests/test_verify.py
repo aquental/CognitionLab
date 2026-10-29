@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 from conftest import check_report_privacy
+from make_covered_name_pdf import build_pdf
 
 from anonimizador import verify
-from anonimizador.channels import Reading, raw_texts
+from anonimizador.channels import Reading, raw_readings, raw_texts
 from anonimizador.verify import CorpusFile, Options, VerifyError, check_file, collect
 
 TERM = "Fulano Ficticio"
@@ -183,3 +184,37 @@ def test_patterns_are_searched_in_names_and_across_pages(monkeypatch):
     assert hints_of(monkeypatch, "x.pdf", {"ocr": ["CPF 123.456.789-", "09"]}) == {"cpf": 1}
     two = {"ocr": ["CPF 123.456.789-09", "CPF 987.654.321-00"]}
     assert hints_of(monkeypatch, "x.pdf", two) == {"cpf": 2}
+
+
+def strict_result(monkeypatch, data: bytes):
+    reading = Reading()
+    reading.texts["raw"], strings = raw_readings(data)
+    reading.strings = [strings]
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    options = Options(use_ocr=False, strict_patterns=True)
+    return check_file(1, CorpusFile("x.pdf", "x.pdf"), [], options, None), options
+
+
+def test_patterns_left_in_pdf_strings_are_hints(monkeypatch):
+    # Regression (Grok G0-21): decoded PDF strings reached no pattern channel, so a CPF
+    # in an old object gave no hint, even with --strict-patterns.
+    cpf = "123.456.789-09"
+    hexed = "FEFF" + cpf.encode("utf-16-be").hex().upper()
+    for data in (
+        b"9 0 obj << /Subject (" + cpf.encode() + b") >> endobj\n",
+        b"9 0 obj << /Subject <" + hexed.encode() + b"> >> endobj\n",
+    ):
+        result, options = strict_result(monkeypatch, data)
+        assert result.hints == {"cpf": 1}, data[:24]
+        assert result.status(options.strict_patterns) == "FOUND"
+
+
+def test_a_clean_page_gains_no_pattern_from_its_strings(monkeypatch):
+    clean = build_pdf(
+        b"BT /F1 12 Tf 72 730 Td (Paciente: [REMOVIDO]) Tj ET\n"
+        b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n",
+        b"/Title (Assunto sintetico)",
+    )
+    result, options = strict_result(monkeypatch, clean)
+    assert result.hints == {}
+    assert result.status(options.strict_patterns) == "ok"

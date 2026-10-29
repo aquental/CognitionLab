@@ -238,6 +238,7 @@ def check_file(
             for c in PATTERN_CHANNELS
             for t in (["\n".join(texts[c])] if c in PARTS_CHANNELS else texts[c])
         ]
+        + reading.strings
     )
     return FileResult(index, file.name, hits, hints, reading.errors)
 
