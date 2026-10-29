@@ -11,11 +11,16 @@ use std::sync::Arc;
 use embeddings_fundamentals::corpus::LoadedManifest;
 use embeddings_fundamentals::domain::{ExtractionMethod, SourceStatus};
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
-use embeddings_fundamentals::extraction::poppler::{PopplerTextExtractor, TesseractOcr};
+use embeddings_fundamentals::extraction::poppler::{
+    PopplerImageExtractor, PopplerTextExtractor, TesseractOcr,
+};
 use embeddings_fundamentals::extraction::{ExtractionConfig, OcrEngine, TextExtractor};
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
 use embeddings_fundamentals::storage::FsRecordStore;
 use embeddings_fundamentals::tools;
+
+#[path = "../examples/capture_extraction/capture.rs"]
+mod capture;
 
 fn require_integration() {
     assert!(
@@ -127,10 +132,12 @@ async fn real_tools_select_native_then_ocr_on_the_mixed_pdf() {
     let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
+    let images = PopplerImageExtractor::detect().await;
     let embedder = Arc::new(DeterministicEmbedder::builder().build().expect("adapter"));
     let pipeline = Pipeline {
         text: &text,
         ocr: &ocr,
+        images: &images,
         sleeper: &NoSleep,
         store: Arc::clone(&store),
         embedder,
@@ -480,4 +487,314 @@ async fn openai_live_embeddings_rank_sensibly() {
     assert_eq!(adapter.model_info().dimensions.get(), 1536);
     let (_, hb, gl) = hemoglobin_scores(adapter.as_ref()).await;
     assert!(hb > gl, "hemoglobin row outranks glycemia ({hb} vs {gl})");
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn a_real_image_run_keeps_embedded_images_and_drops_page_scans() {
+    use embeddings_fundamentals::assets::MetadataScrubber;
+    use embeddings_fundamentals::domain::Modality;
+    use embeddings_fundamentals::extraction::images::ImageExtractor;
+    require_integration();
+    let manifest = LoadedManifest::load(&corpus("manifest.toml")).expect("manifest");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let text = PopplerTextExtractor::detect().await;
+    let ocr = TesseractOcr::detect(ExtractionConfig::default()).await;
+    let images = PopplerImageExtractor::detect().await;
+    let embedder = Arc::new(
+        DeterministicEmbedder::builder()
+            .text_to_image()
+            .build()
+            .expect("adapter"),
+    );
+    let space = embeddings_fundamentals::embedding::EmbeddingStrategy::model_info(&*embedder)
+        .embedding_space_id
+        .clone();
+    let pipeline = Pipeline {
+        text: &text,
+        ocr: &ocr,
+        images: &images,
+        sleeper: &NoSleep,
+        store: Arc::clone(&store),
+        embedder,
+    };
+    let mut settings = IngestSettings::new("integration-images".parse().expect("id"));
+    settings.modality = Modality::Image;
+    let report = pipeline.ingest(&manifest, &settings).await.expect("ingest");
+    let status = |id: &str| {
+        report
+            .sources
+            .iter()
+            .find(|s| s.source_id.as_str() == id)
+            .map(|s| (s.status, s.records_committed))
+    };
+    // The image files and the embedded page-1 image of the mixed PDF become records; the
+    // page-2 raster of the mixed PDF is its OCR scan, never an image record.
+    assert_eq!(status("chest-001"), Some((SourceStatus::Succeeded, 1)));
+    assert_eq!(status("abd-us-001"), Some((SourceStatus::Succeeded, 1)));
+    assert_eq!(status("us-mixed-003"), Some((SourceStatus::Succeeded, 1)));
+    assert_eq!(
+        status("lab-searchable-001").map(|s| s.0),
+        Some(SourceStatus::NotApplicable)
+    );
+    let records = store.active_records(&space).expect("records");
+    let embedded = records
+        .iter()
+        .find(|r| r.source_id.as_str() == "us-mixed-003")
+        .expect("embedded image record");
+    assert_eq!(embedded.metadata.page_number, 1);
+    assert_eq!(embedded.chunk_text, None);
+    let original = embedded
+        .metadata
+        .original_asset
+        .as_ref()
+        .expect("original asset");
+    // The stored asset is the metadata-free re-encoding of what pdfimages extracted.
+    let pdf = corpus("us-mixed-003.pdf");
+    let listed = images.list_images(&pdf).await.expect("list");
+    let image = listed
+        .iter()
+        .find(|i| Some(i.num) == original.pdf_image_num)
+        .expect("listed image");
+    let bytes = images.extract_image(&pdf, image).await.expect("extract");
+    let expected = MetadataScrubber.scrub(&bytes).expect("scrub");
+    let stored = store
+        .read_asset(embedded.asset_uri.as_deref().expect("asset uri"))
+        .expect("asset");
+    assert_eq!(stored, expected.png);
+    assert_eq!(
+        (original.width, original.height),
+        (expected.width, expected.height)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn real_pdfimages_output_matches_the_captured_mask_fixtures() {
+    // C3-6: the masked-image pipeline regression replays `tests/fixtures/pdf-masks`; this
+    // proves that replay is what the installed `pdfimages` produces (same list, same
+    // pixels for every image and mask) and that each image gets its own mask.
+    use embeddings_fundamentals::extraction::images::{ImageExtractor, mask_of, parse_list};
+    require_integration();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf-masks");
+    let pdf = dir.join("masked-images.pdf");
+    let images = PopplerImageExtractor::detect().await;
+    let listed = images.list_images(&pdf).await.expect("list");
+    let captured =
+        parse_list(&std::fs::read_to_string(dir.join("images.list")).expect("captured list"))
+            .expect("parse");
+    assert_eq!(listed, captured);
+    for info in &listed {
+        let real = images.extract_image(&pdf, info).await.expect("extract");
+        let fixture = std::fs::read(dir.join(format!(
+            "img-{:03}-{:03}.png",
+            info.page.get(),
+            info.position_on_page
+        )))
+        .expect("captured png");
+        let pixels = |png: &[u8]| image::load_from_memory(png).expect("png").to_rgba8();
+        assert_eq!(pixels(&real), pixels(&fixture), "image {}", info.num);
+    }
+    let kinds: Vec<_> = listed
+        .iter()
+        .map(|i| mask_of(&listed, i).map(|m| (m.num, m.kind.clone())))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            Some((1, "smask".to_owned())),
+            None,
+            Some((3, "mask".to_owned())),
+            None
+        ]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn a_recaptured_masked_image_replays_with_its_mask() {
+    // C3-7: `capture_extraction` must capture the mask of every kept image, or a
+    // recaptured masked image cannot be replayed. Capture the masked PDF for real, then
+    // replay it: both kept images and their masks load, and they prepare as a viewer
+    // shows them (hidden red halves white, visible halves blue).
+    use embeddings_fundamentals::assets::MetadataScrubber;
+    use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
+    use embeddings_fundamentals::extraction::images::{ImageExtractor, ImageFilter, mask_of};
+    require_integration();
+    let pdf =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf-masks/masked-images.pdf");
+    let (out, scratch) = (
+        tempfile::tempdir().expect("out"),
+        tempfile::tempdir().expect("scratch"),
+    );
+    let dir = out.path().join("masked-images");
+    std::fs::create_dir(&dir).expect("dir");
+    let kept = capture::capture_images(pdf.to_str().expect("utf-8"), &dir, scratch.path())
+        .expect("capture");
+    assert_eq!(kept, 2);
+    let replay = FixtureExtractor::from_dir(out.path()).expect("replay");
+    let listed = replay.list_images(&pdf).await.expect("list");
+    let filter = ImageFilter::default();
+    let kept: Vec<_> = listed.iter().filter(|i| filter.keeps(i)).collect();
+    assert_eq!(kept.len(), 2);
+    for image in kept {
+        let bytes = replay
+            .extract_image(&pdf, image)
+            .await
+            .expect("image replays");
+        let mask = mask_of(&listed, image).expect("listed mask");
+        let mask = replay
+            .extract_image(&pdf, mask)
+            .await
+            .expect("mask replays");
+        let prepared = MetadataScrubber
+            .scrub_masked(&bytes, Some(&mask))
+            .expect("prepare");
+        let rgb = image::load_from_memory(&prepared.png)
+            .expect("png")
+            .to_rgb8();
+        assert_eq!(
+            rgb.get_pixel(10, 48).0,
+            [255, 255, 255],
+            "image {}",
+            image.num
+        );
+        assert_eq!(rgb.get_pixel(80, 48).0, [0, 0, 255], "image {}", image.num);
+    }
+}
+
+#[cfg(feature = "engine-embed-anything")]
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a broken fixture or model must fail the calling test"
+)]
+async fn cross_modal_scores(
+    config_file: &str,
+    expected_dims: usize,
+) -> std::collections::BTreeMap<(String, String), f32> {
+    use embeddings_fundamentals::config::ExperimentConfig;
+    use embeddings_fundamentals::embedding::{
+        AssetRef, Capability, EmbeddingError, InputKind, TextInput,
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config/experiments")
+        .join(config_file);
+    let config = ExperimentConfig::load(&path).expect("config");
+    let adapter = embeddings_fundamentals::adapters::build(&config.engine)
+        .await
+        .expect("load model");
+    let info = adapter.model_info();
+    assert_eq!(info.dimensions.get(), expected_dims);
+    assert_eq!(info.model_revision, config.engine.model_revision);
+    let caps = adapter.capabilities();
+    assert!(caps.images && caps.text_queries && caps.text_to_image_compatible);
+    assert!(!caps.text_documents);
+    let doc = TextInput {
+        id: "doc".parse().expect("id"),
+        text: "Hemoglobina".into(),
+    };
+    assert!(
+        matches!(
+            adapter.embed_documents(&[doc]).await,
+            Err(EmbeddingError::Unsupported {
+                capability: Capability::TextDocuments,
+                ..
+            })
+        ),
+        "a cross-modal model embeds no document text"
+    );
+    let images = ["chest-001.png", "abd-us-001.jpg"];
+    let assets: Vec<AssetRef> = images
+        .iter()
+        .enumerate()
+        .map(|(i, file)| AssetRef {
+            id: format!("img-{i}").parse().expect("id"),
+            path: corpus(file),
+        })
+        .collect();
+    let batch = adapter.embed_images(&assets).await.expect("embed images");
+    // A batch gives the same vectors as single calls.
+    let single = adapter
+        .embed_images(&assets[1..])
+        .await
+        .expect("embed one image");
+    let drift = batch.embeddings[1]
+        .vector
+        .iter()
+        .zip(&single.embeddings[0].vector)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(drift < 1e-4, "batch and single vectors differ by {drift}");
+    let queries = [
+        "Mostre a radiografia de tórax",
+        "Encontre as imagens de ultrassonografia abdominal",
+        "a chest x-ray",
+        "an abdominal ultrasound image",
+    ];
+    let inputs: Vec<TextInput> = queries
+        .iter()
+        .enumerate()
+        .map(|(i, text)| TextInput {
+            id: format!("q-{i}").parse().expect("id"),
+            text: (*text).to_owned(),
+        })
+        .collect();
+    let embedded = adapter.embed_queries(&inputs).await.expect("embed queries");
+    for e in batch.embeddings.iter().chain(&embedded.embeddings) {
+        assert_eq!(e.vector.len(), expected_dims);
+        let norm: f32 = e.vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-4, "vectors are normalized");
+    }
+    // A query above the text position limit is refused, never truncated or a panic.
+    let budget = adapter.input_budget(InputKind::Query).expect("budget");
+    let long = TextInput {
+        id: "long".parse().expect("id"),
+        text: "radiografia ".repeat(budget + 10),
+    };
+    assert!(
+        matches!(
+            adapter.embed_queries(&[long]).await,
+            Err(EmbeddingError::InputTooLong { .. })
+        ),
+        "an over-limit query is refused"
+    );
+    let mut scores = std::collections::BTreeMap::new();
+    for (q, query) in embedded.embeddings.iter().zip(queries) {
+        for (image, file) in batch.embeddings.iter().zip(images) {
+            let score = q.vector.iter().zip(&image.vector).map(|(a, b)| a * b).sum();
+            scores.insert((query.to_owned(), file.to_owned()), score);
+        }
+    }
+    for ((query, file), score) in &scores {
+        eprintln!("{config_file}\t{query}\t{file}\t{score:.4}");
+    }
+    scores
+}
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned CLIP checkpoint"]
+async fn clip_loads_the_pinned_checkpoint_and_embeds_queries_and_images() {
+    require_integration();
+    let scores = cross_modal_scores("image-clip-vit-b32.toml", 512).await;
+    let s = |q: &str, f: &str| scores[&(q.to_owned(), f.to_owned())];
+    assert!(
+        s("a chest x-ray", "chest-001.png") > s("a chest x-ray", "abd-us-001.jpg"),
+        "CLIP ranks the chest image first for an English chest query"
+    );
+}
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned SigLIP checkpoint"]
+async fn siglip_loads_the_pinned_checkpoint_and_embeds_queries_and_images() {
+    require_integration();
+    let scores = cross_modal_scores("image-siglip-multilingual.toml", 768).await;
+    let s = |q: &str, f: &str| scores[&(q.to_owned(), f.to_owned())];
+    let chest = "Mostre a radiografia de tórax";
+    assert!(
+        s(chest, "chest-001.png") > s(chest, "abd-us-001.jpg"),
+        "SigLIP ranks the chest image first for the Portuguese chest query"
+    );
 }

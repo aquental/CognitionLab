@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::config::EngineConfig;
+use crate::config::{EngineConfig, ModelKind};
 use crate::embedding::deterministic::DeterministicEmbedder;
 use crate::embedding::{EmbeddingStrategy, EngineId};
 
@@ -51,6 +51,22 @@ pub enum BuildError {
         /// Environment variable holding the credential.
         variable: &'static str,
     },
+    /// The engine has no adapter for this kind of model.
+    #[error("engine {engine} has no {kind:?} adapter; cross-modal models run on embed_anything")]
+    UnsupportedModelKind {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Requested model kind.
+        kind: ModelKind,
+    },
+    /// The model takes no prefix, but the configuration sets one.
+    #[error("engine {engine} model {model} takes no prefix; set prefix_policy = \"none\"")]
+    PrefixNotSupported {
+        /// Engine identifier.
+        engine: EngineId,
+        /// Model identifier.
+        model: String,
+    },
     /// The model could not be loaded.
     #[error("cannot load {engine} adapter: {reason}")]
     Load {
@@ -71,7 +87,9 @@ impl BuildError {
             | Self::NotImplemented(_)
             | Self::MissingRevision { .. }
             | Self::MutableRevision { .. }
-            | Self::MissingCredential { .. } => crate::pipeline::EXIT_VALIDATION,
+            | Self::MissingCredential { .. }
+            | Self::UnsupportedModelKind { .. }
+            | Self::PrefixNotSupported { .. } => crate::pipeline::EXIT_VALIDATION,
             Self::Load { .. } => 1,
         }
     }
@@ -87,25 +105,37 @@ impl BuildError {
 pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
     match config.engine {
         EngineId::Deterministic => {
-            let mut builder = DeterministicEmbedder::builder()
-                .model_id(config.model_id.clone())
-                .dimensions(config.dimensions)
-                .prefix_policy(config.prefix_policy);
-            let defaults =
-                DeterministicEmbedder::builder()
-                    .build()
-                    .map_err(|e| BuildError::Load {
-                        engine: EngineId::Deterministic,
-                        reason: e.to_string(),
-                    })?;
-            let mut caps = defaults.capabilities().clone();
-            caps.max_input_tokens = config.max_input_tokens;
-            builder = builder.capabilities(caps);
-            let adapter = builder.build().map_err(|e| BuildError::Load {
+            let load = |e: crate::ids::IdError| BuildError::Load {
                 engine: EngineId::Deterministic,
                 reason: e.to_string(),
-            })?;
+            };
+            let mut caps = deterministic_capabilities(config.model_kind).map_err(load)?;
+            caps.max_input_tokens = config.max_input_tokens;
+            let adapter = DeterministicEmbedder::builder()
+                .model_id(config.model_id.clone())
+                .dimensions(config.dimensions)
+                .prefix_policy(config.prefix_policy)
+                .capabilities(caps)
+                .build()
+                .map_err(load)?;
             Ok(Arc::new(adapter))
+        }
+        // Cross-modal and OpenAI models take no prefix; refused before any download or
+        // credential read.
+        EngineId::EmbedAnything | EngineId::OpenAi
+            if (config.engine == EngineId::OpenAi || !config.model_kind.is_text())
+                && config.prefix_policy != crate::embedding::PrefixPolicy::None =>
+        {
+            Err(BuildError::PrefixNotSupported {
+                engine: config.engine,
+                model: config.model_id.clone(),
+            })
+        }
+        EngineId::FastEmbed | EngineId::OpenAi if !config.model_kind.is_text() => {
+            Err(BuildError::UnsupportedModelKind {
+                engine: config.engine,
+                kind: config.model_kind,
+            })
         }
         EngineId::EmbedAnything | EngineId::FastEmbed | EngineId::OpenAi
             if config.model_revision.is_none() =>
@@ -127,7 +157,10 @@ pub async fn build(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, 
                 revision: config.model_revision.clone().unwrap_or_default(),
             })
         }
-        EngineId::EmbedAnything => build_embed_anything(config).await,
+        EngineId::EmbedAnything => match config.model_kind {
+            ModelKind::Text => build_embed_anything(config).await,
+            ModelKind::TextToImage => build_vision(config).await,
+        },
         EngineId::FastEmbed => build_fastembed(config).await,
         EngineId::OpenAi => build_openai(config),
     }
@@ -147,11 +180,7 @@ pub fn build_contract_test(config: &EngineConfig) -> Result<DeterministicEmbedde
         engine: config.engine,
         reason: e.to_string(),
     };
-    let mut caps = DeterministicEmbedder::builder()
-        .build()
-        .map_err(load)?
-        .capabilities()
-        .clone();
+    let mut caps = deterministic_capabilities(config.model_kind).map_err(load)?;
     caps.max_input_tokens = config.max_input_tokens;
     caps.execution = config.engine.execution();
     DeterministicEmbedder::builder()
@@ -162,6 +191,39 @@ pub fn build_contract_test(config: &EngineConfig) -> Result<DeterministicEmbedde
         .capabilities(caps)
         .build()
         .map_err(load)
+}
+
+/// Capabilities the deterministic adapter advertises for a model kind.
+fn deterministic_capabilities(
+    kind: ModelKind,
+) -> Result<crate::embedding::Capabilities, crate::ids::IdError> {
+    let builder = DeterministicEmbedder::builder();
+    let builder = match kind {
+        ModelKind::Text => builder,
+        ModelKind::TextToImage => builder.text_to_image(),
+    };
+    Ok(builder.build()?.capabilities().clone())
+}
+
+#[cfg(feature = "engine-embed-anything")]
+async fn build_vision(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    let adapter = crate::embedding::vision::load(
+        &config.model_id,
+        config.model_revision.as_deref(),
+        config.dimensions,
+        config.max_input_tokens,
+    )
+    .await
+    .map_err(|e| BuildError::Load {
+        engine: EngineId::EmbedAnything,
+        reason: e.to_string(),
+    })?;
+    Ok(Arc::new(adapter))
+}
+
+#[cfg(not(feature = "engine-embed-anything"))]
+async fn build_vision(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+    build_embed_anything(config).await
 }
 
 #[cfg(feature = "engine-embed-anything")]
@@ -222,12 +284,6 @@ async fn build_fastembed(_config: &EngineConfig) -> Result<Arc<dyn EmbeddingStra
 #[cfg(feature = "engine-openai")]
 fn build_openai(config: &EngineConfig) -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
     use crate::embedding::openai::{LoadError, OpenAiAdapter};
-    if config.prefix_policy != crate::embedding::PrefixPolicy::None {
-        return Err(BuildError::Load {
-            engine: EngineId::OpenAi,
-            reason: "OpenAI models take no prefix; set prefix_policy = \"none\"".to_owned(),
-        });
-    }
     let adapter = OpenAiAdapter::load(
         &config.model_id,
         config.model_revision.as_deref(),
@@ -275,6 +331,81 @@ mod tests {
             prefix_policy: crate::embedding::PrefixPolicy::None,
             weights: None,
             api_base: None,
+            model_kind: ModelKind::Text,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_prefix_on_a_model_without_one_is_a_validation_refusal() {
+        // Regression (G3-2): a configuration mismatch, refused before any download or
+        // credential read, exits 3 like the other configuration refusals.
+        let pinned = Some("3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268".to_owned());
+        let mut cross = config(EngineId::EmbedAnything);
+        cross.model_revision.clone_from(&pinned);
+        cross.model_kind = ModelKind::TextToImage;
+        cross.prefix_policy = crate::embedding::PrefixPolicy::E5;
+        let mut openai = config(EngineId::OpenAi);
+        openai.model_revision = pinned;
+        openai.prefix_policy = crate::embedding::PrefixPolicy::E5;
+        for refused in [cross, openai] {
+            let err = build(&refused).await.err().expect("refused");
+            assert!(
+                matches!(err, BuildError::PrefixNotSupported { .. }),
+                "{err}"
+            );
+            assert_eq!(err.exit_code(), crate::pipeline::EXIT_VALIDATION);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_shipped_text_and_image_stand_ins_live_in_different_spaces() {
+        // Regression (G3-5): same engine, model id, and dimensions, different model kind.
+        let load = |file: &str| {
+            crate::config::ExperimentConfig::load(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("config/experiments")
+                    .join(file),
+            )
+            .expect("config")
+            .engine
+        };
+        let text = build(&load("deterministic.toml")).await.expect("text");
+        let image = build(&load("image-deterministic.toml"))
+            .await
+            .expect("image");
+        assert_eq!(text.model_info().model_id, image.model_info().model_id);
+        assert_ne!(
+            text.model_info().embedding_space_id,
+            image.model_info().embedding_space_id
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cross_modal_kind_selects_a_text_to_image_adapter() {
+        let mut cross = config(EngineId::Deterministic);
+        cross.model_kind = ModelKind::TextToImage;
+        let adapter = build(&cross).await.expect("build");
+        let caps = adapter.capabilities();
+        assert!(caps.images && caps.text_to_image_compatible && caps.text_queries);
+        assert!(
+            !caps.text_documents,
+            "a cross-modal model embeds no document text"
+        );
+        assert_eq!(caps.max_input_tokens, NonZeroUsize::new(64));
+        let text = build(&config(EngineId::Deterministic))
+            .await
+            .expect("build");
+        assert!(!text.capabilities().text_to_image_compatible);
+        for engine in [EngineId::FastEmbed, EngineId::OpenAi] {
+            let mut other = config(engine);
+            other.model_revision = Some("e8f8c211226b894fcb81acc59f3b34ba3efd5f42".into());
+            other.model_kind = ModelKind::TextToImage;
+            let err = build(&other).await.err().expect("refused");
+            assert!(
+                matches!(err, BuildError::UnsupportedModelKind { .. }),
+                "{err}"
+            );
+            assert_eq!(err.exit_code(), crate::pipeline::EXIT_VALIDATION);
         }
     }
 

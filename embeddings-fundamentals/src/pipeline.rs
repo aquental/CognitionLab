@@ -6,6 +6,12 @@
 //! staging → publish`, and any failure is recorded with its stage, reason, and attempt
 //! count. Independent sources keep going after a failure. A run with a failed required
 //! source is `incomplete`.
+//!
+//! A run embeds one modality (PLAN §0.1). A text run chunks the text of PDFs; image
+//! files are `not_applicable` to it. An image run embeds image files and the images
+//! embedded in PDFs (`manifest → image listing and extraction → metadata-free
+//! re-encoding → asset storage → embedding → validation → staging → publish`); a PDF
+//! with no qualifying image is `not_applicable` to it.
 
 use std::future::Future;
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -15,18 +21,21 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::chunking::{Chunk, ChunkingConfig, StructureAwareV1};
+use crate::assets::{MetadataScrubber, PreparedImage};
+use crate::chunking::{Chunk, ChunkKind, ChunkingConfig, StructureAwareV1};
 use crate::corpus::{LoadedManifest, SourceEntry};
 use crate::domain::{Execution, ExtractionMethod, FailureStage, Modality, RunStatus, SourceStatus};
 use crate::embedding::{
-    Capability, EmbeddingError, EmbeddingStrategy, ErrorClass, InputKind, TextInput, validate_batch,
+    AssetRef, Capability, EmbeddingBatch, EmbeddingError, EmbeddingStrategy, ErrorClass, InputKind,
+    TextInput, validate_batch,
 };
+use crate::extraction::images::{ImageExtractor, ImageFilter, mask_of};
 use crate::extraction::{ExtractionConfig, OcrEngine, PageText, TextExtractor};
 use crate::ids::{
     Checksum, ChunkId, EmbeddingSpaceId, ExperimentId, Fingerprint, IdError, ItemId, RecordId,
     RevisionId, SourceId,
 };
-use crate::record::{Record, RecordEmbedding, RecordMetadata};
+use crate::record::{OriginalAsset, Record, RecordEmbedding, RecordMetadata};
 use crate::storage::{
     EvaluationProvenance, ExperimentSnapshot, FsRecordStore, PublishOutcome, StoreError,
 };
@@ -81,6 +90,9 @@ pub struct IngestSettings {
     /// Modality this run embeds (PLAN §0.1: one modality per run).
     #[serde(default = "text_modality")]
     pub modality: Modality,
+    /// Which embedded PDF images an image run keeps.
+    #[serde(default)]
+    pub images: ImageFilter,
 }
 
 const fn text_modality() -> Modality {
@@ -100,6 +112,7 @@ impl IngestSettings {
             extraction: ExtractionConfig::default(),
             chunking: ChunkingConfig::default(),
             modality: Modality::Text,
+            images: ImageFilter::default(),
         }
     }
 }
@@ -126,10 +139,6 @@ pub enum ValidationError {
     /// unreadable, or checksum mismatch). The run is refused before any processing.
     #[error("ineligible sources: {}", .0.iter().map(|(s, r)| format!("{s} ({r})")).collect::<Vec<_>>().join("; "))]
     Ineligible(Vec<(SourceId, String)>),
-    /// The adapter supports the modality, but this build cannot run it yet (image
-    /// ingestion arrives with Milestone 3).
-    #[error("{0} runs are not implemented in this build")]
-    ModalityNotImplemented(&'static str),
     /// The experiment id was already used; snapshots are append-only.
     #[error("experiment {0} already exists")]
     ExperimentExists(ExperimentId),
@@ -155,7 +164,6 @@ impl ValidationError {
             Self::MissingCapability(_)
             | Self::RemoteNotPermitted { .. }
             | Self::ExperimentExists(_)
-            | Self::ModalityNotImplemented(_)
             | Self::Ineligible(_)
             | Self::Chunking(_) => EXIT_VALIDATION,
             Self::Fingerprint(_) | Self::Store(_) | Self::Task(_) => 1,
@@ -328,11 +336,13 @@ impl RunReport {
 }
 
 /// Runs ingestion for one embedding space.
-pub struct Pipeline<'a, T, O, S> {
+pub struct Pipeline<'a, T, O, I, S> {
     /// Text-layer extractor.
     pub text: &'a T,
     /// OCR engine.
     pub ocr: &'a O,
+    /// Embedded-image extractor (image runs).
+    pub images: &'a I,
     /// Retry sleeper.
     pub sleeper: &'a S,
     /// Record store.
@@ -355,7 +365,70 @@ struct ChunkingFingerprintInput<'a> {
     budget: Option<usize>,
 }
 
-impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
+/// Extraction fingerprint of an image run: the text layer decides which pages need OCR
+/// (their rasters are scans, not image records); `pdfimages` lists and extracts.
+#[derive(Serialize)]
+struct ImageExtractionFingerprintInput<'a> {
+    config: &'a ExtractionConfig,
+    text_engine: String,
+    image_engine: String,
+}
+
+/// Image-preparation fingerprint: an image run's counterpart of the chunking
+/// fingerprint (it takes that slot in the revision id and the reports).
+#[derive(Serialize)]
+struct ImagePreparationFingerprintInput<'a> {
+    scrubber: &'a str,
+    filter: &'a ImageFilter,
+    ocr_pages: &'a str,
+}
+
+/// Rule recorded in the image-preparation fingerprint.
+const OCR_PAGE_RULE: &str = "images on pages that need OCR are page scans, not image records";
+
+/// Language tag of image records (BCP 47 "no linguistic content").
+const IMAGE_LANGUAGE: &str = "zxx";
+
+/// Inputs of one source's adapter calls.
+#[derive(Clone, Copy)]
+enum Inputs<'a> {
+    Text(&'a [TextInput]),
+    Images(&'a [AssetRef]),
+}
+
+/// One extracted image before preparation.
+struct RawImage {
+    page: NonZeroU32,
+    index: u32,
+    pdf_image_num: Option<u32>,
+    method: ExtractionMethod,
+    bytes: Vec<u8>,
+    /// The PDF image's soft or explicit mask, as `pdfimages` extracted it.
+    mask: Option<Vec<u8>>,
+}
+
+/// One image to embed: where it came from and its prepared asset.
+struct SourceImage {
+    page: NonZeroU32,
+    index: u32,
+    pdf_image_num: Option<u32>,
+    method: ExtractionMethod,
+    prepared: PreparedImage,
+}
+
+/// How the shared start of a source ended.
+enum Start {
+    /// The source is finished (unchanged or failed); its report is final.
+    Done(SourceReport),
+    /// Work continues with the verified checksum and the derived revision.
+    Proceed {
+        report: SourceReport,
+        checksum: Checksum,
+        revision: RevisionId,
+    },
+}
+
+impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_, T, O, I, S> {
     /// Runs a store operation on the blocking pool (directory fsync and renames block).
     async fn on_store<R, F>(&self, op: F) -> Result<R, ValidationError>
     where
@@ -405,9 +478,6 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             Modality::Image => {
                 caps.require(Capability::TextToImage, info)?;
                 caps.require(Capability::Images, info)?;
-                return Err(ValidationError::ModalityNotImplemented(
-                    Modality::Image.as_str(),
-                ));
             }
         }
         check_remote_permission(
@@ -432,17 +502,37 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             .await
             .map_err(|e| ValidationError::Task(e.to_string()))??;
         let chunker = StructureAwareV1::new(settings.chunking.clone())?;
-        let budget = self.embedder.input_budget(InputKind::Document);
-        let extraction_fingerprint = Fingerprint::of(&ExtractionFingerprintInput {
-            config: &settings.extraction,
-            text_engine: self.text.engine_id(),
-            ocr_engine: self.ocr.engine_id(),
-        })?;
-        let chunking_fingerprint = Fingerprint::of(&ChunkingFingerprintInput {
-            config: &settings.chunking,
-            tokenizer: self.embedder.token_counter().id(),
-            budget,
-        })?;
+        let (budget, extraction_fingerprint, chunking_fingerprint) = match settings.modality {
+            Modality::Text => {
+                let budget = self.embedder.input_budget(InputKind::Document);
+                (
+                    budget,
+                    Fingerprint::of(&ExtractionFingerprintInput {
+                        config: &settings.extraction,
+                        text_engine: self.text.engine_id(),
+                        ocr_engine: self.ocr.engine_id(),
+                    })?,
+                    Fingerprint::of(&ChunkingFingerprintInput {
+                        config: &settings.chunking,
+                        tokenizer: self.embedder.token_counter().id(),
+                        budget,
+                    })?,
+                )
+            }
+            Modality::Image => (
+                None,
+                Fingerprint::of(&ImageExtractionFingerprintInput {
+                    config: &settings.extraction,
+                    text_engine: self.text.engine_id(),
+                    image_engine: self.images.engine_id(),
+                })?,
+                Fingerprint::of(&ImagePreparationFingerprintInput {
+                    scrubber: MetadataScrubber.id(),
+                    filter: &settings.images,
+                    ocr_pages: OCR_PAGE_RULE,
+                })?,
+            ),
+        };
         let space = info.embedding_space_id.clone();
         info!(experiment_id = %settings.experiment_id, space = %space, "ingestion started");
 
@@ -569,39 +659,43 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
     }
 
     async fn process_source(&self, ctx: &SourceContext<'_>) -> SourceReport {
-        let entry = ctx.entry;
-        let mut report = SourceReport::new(entry);
-        if !entry.input_type.is_pdf() {
-            report.status = SourceStatus::NotApplicable;
-            report.reason = Some("image input does not apply to a text run".to_owned());
-            return report;
+        match ctx.settings.modality {
+            Modality::Text => self.process_text_source(ctx).await,
+            Modality::Image => self.process_image_source(ctx).await,
         }
+    }
+
+    /// Shared start of every source: re-verify the checksum, derive the revision, and
+    /// stop when that revision is already active and intact.
+    async fn begin_source(&self, ctx: &SourceContext<'_>, mut report: SourceReport) -> Start {
+        let entry = ctx.entry;
         // Re-verified per source (the file may change after the gate); reading and
         // hashing the file runs on the blocking pool.
         let (gate, gate_entry) = (ctx.manifest.clone(), entry.clone());
         let checksum = match tokio::task::spawn_blocking(move || gate.verify(&gate_entry)).await {
             Ok(Ok(checksum)) => checksum,
-            Ok(Err(e)) => return report.fail(FailureStage::Manifest, e.to_string()),
+            Ok(Err(e)) => return Start::Done(report.fail(FailureStage::Manifest, e.to_string())),
             Err(e) => {
-                return report.fail(
+                return Start::Done(report.fail(
                     FailureStage::Manifest,
                     format!("verification task failed: {e}"),
-                );
+                ));
             }
         };
         // The revision depends only on the file checksum and the extraction and chunking
-        // fingerprints, so an unchanged source is recognised before any extraction work.
+        // (or image-preparation) fingerprints, so an unchanged source is recognised
+        // before any extraction work.
         let revision = match RevisionId::derive(
             &checksum,
             ctx.extraction_fingerprint,
             ctx.chunking_fingerprint,
         ) {
             Ok(revision) => revision,
-            Err(e) => return report.fail(FailureStage::Manifest, e.to_string()),
+            Err(e) => return Start::Done(report.fail(FailureStage::Manifest, e.to_string())),
         };
         report.revision_id = Some(revision.clone());
         let space = self.embedder.model_info().embedding_space_id.clone();
-        let (pointer_space, pointer_source) = (space.clone(), entry.source_id.clone());
+        let (pointer_space, pointer_source) = (space, entry.source_id.clone());
         let current = self
             .on_store(move |s| {
                 let pointer = s.active_pointer(&pointer_space, &pointer_source)?;
@@ -613,16 +707,42 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             Ok(Some((active, true))) if active == revision => {
                 report.status = SourceStatus::Succeeded;
                 report.unchanged = true;
-                return report;
+                return Start::Done(report);
             }
             Ok(Some((active, false))) if active == revision => {
-                // The pointer names this revision but its records are missing or altered:
-                // rebuild it; `publish` quarantines the damaged directory.
+                // The pointer names this revision but its records or assets are missing
+                // or altered: rebuild it. `publish` quarantines a damaged directory, and
+                // an image run rewrites its content-addressed assets.
                 warn!(source_id = %entry.source_id, "active revision is damaged; rebuilding");
             }
             Ok(_) => {}
-            Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+            Err(e) => return Start::Done(report.fail(FailureStage::Storage, e.to_string())),
         }
+        Start::Proceed {
+            report,
+            checksum,
+            revision,
+        }
+    }
+
+    async fn process_text_source(&self, ctx: &SourceContext<'_>) -> SourceReport {
+        let entry = ctx.entry;
+        let report = SourceReport::new(entry);
+        if !entry.input_type.is_pdf() {
+            let mut report = report;
+            report.status = SourceStatus::NotApplicable;
+            report.reason = Some("image input does not apply to a text run".to_owned());
+            return report;
+        }
+        let (mut report, checksum, revision) = match self.begin_source(ctx, report).await {
+            Start::Done(report) => return report,
+            Start::Proceed {
+                report,
+                checksum,
+                revision,
+            } => (report, checksum, revision),
+        };
+        let space = self.embedder.model_info().embedding_space_id.clone();
 
         let path = ctx.manifest.path_of(entry);
         let pages = match self
@@ -682,7 +802,10 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             })
             .collect();
 
-        let vectors = match self.embed_all(&inputs, ctx.settings, &mut report).await {
+        let vectors = match self
+            .embed_all(Inputs::Text(&inputs), ctx.settings, &mut report)
+            .await
+        {
             Ok(vectors) => vectors,
             Err((stage, reason)) => return report.fail(stage, reason),
         };
@@ -719,16 +842,31 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
                     overlap_tokens: ctx.settings.chunking.overlap_tokens,
                     truncation: chunk.truncation,
                     anonymization_status: "verified".to_owned(),
+                    original_asset: None,
+                    generated_caption: None,
                 },
                 embedding: RecordEmbedding::new(info, vector),
                 experiment_id: ctx.settings.experiment_id.clone(),
             });
         }
 
+        self.commit(space, entry.source_id.clone(), revision, records, report)
+            .await
+    }
+
+    /// Stages and publishes the records of one source revision.
+    async fn commit(
+        &self,
+        space: EmbeddingSpaceId,
+        source_id: SourceId,
+        revision: RevisionId,
+        records: Vec<Record>,
+        mut report: SourceReport,
+    ) -> SourceReport {
         let store = Arc::clone(&self.store);
-        let source_id = entry.source_id.clone();
+        let committed = source_id.clone();
         let stored = tokio::task::spawn_blocking(move || {
-            let staged = store.stage(&space, &source_id, &revision, &records)?;
+            let staged = store.stage(&space, &committed, &revision, &records)?;
             store.publish(staged)
         })
         .await;
@@ -739,10 +877,10 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
                     PublishOutcome::Installed { records } => report.records_committed = records,
                     PublishOutcome::Reused { records } => {
                         report.reused_revision = true;
-                        info!(source_id = %entry.source_id, records, "intact revision re-activated");
+                        info!(source_id = %source_id, records, "intact revision re-activated");
                     }
                 }
-                info!(source_id = %entry.source_id, records = report.records_committed, "source committed");
+                info!(source_id = %source_id, records = report.records_committed, "source committed");
                 report
             }
             Ok(Err(e)) => report.fail(FailureStage::Storage, e.to_string()),
@@ -750,25 +888,276 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
         }
     }
 
+    /// One adapter call: documents for a text run, images for an image run.
+    async fn call(&self, inputs: Inputs<'_>) -> Result<EmbeddingBatch, EmbeddingError> {
+        match inputs {
+            Inputs::Text(inputs) => self.embedder.embed_documents(inputs).await,
+            Inputs::Images(inputs) => self.embedder.embed_images(inputs).await,
+        }
+    }
+
+    /// Collects the images of one source: the file itself for PNG/JPEG, otherwise every
+    /// listed image the filter keeps on a page whose text layer is usable (on a page that
+    /// needs OCR the raster is the page scan), together with its mask when it has one.
+    /// Each image is masked and re-encoded without metadata on the blocking pool.
+    async fn source_images(
+        &self,
+        ctx: &SourceContext<'_>,
+    ) -> Result<Vec<SourceImage>, (FailureStage, String)> {
+        let path = ctx.manifest.path_of(ctx.entry);
+        let extraction =
+            |e: crate::extraction::ExtractionError| (FailureStage::Extraction, e.to_string());
+        let mut raw: Vec<RawImage> = Vec::new();
+        if ctx.entry.input_type.is_pdf() {
+            let listed = self.images.list_images(&path).await.map_err(extraction)?;
+            // Whether each inspected page has a usable text layer.
+            let mut usable_text = std::collections::BTreeMap::new();
+            for image in listed.iter().filter(|i| ctx.settings.images.keeps(i)) {
+                let usable = match usable_text.get(&image.page) {
+                    Some(usable) => *usable,
+                    None => {
+                        let native = self
+                            .text
+                            .extract_page(&path, image.page)
+                            .await
+                            .map_err(extraction)?;
+                        let usable = ctx
+                            .settings
+                            .extraction
+                            .native_text_is_usable(&native.text());
+                        usable_text.insert(image.page, usable);
+                        usable
+                    }
+                };
+                if !usable {
+                    continue;
+                }
+                let bytes = self
+                    .images
+                    .extract_image(&path, image)
+                    .await
+                    .map_err(extraction)?;
+                let mask = match mask_of(&listed, image) {
+                    Some(mask) => Some(
+                        self.images
+                            .extract_image(&path, mask)
+                            .await
+                            .map_err(extraction)?,
+                    ),
+                    None => None,
+                };
+                let index = u32::try_from(raw.iter().filter(|r| r.page == image.page).count())
+                    .map_err(|_| {
+                        (
+                            FailureStage::Extraction,
+                            "too many images on one page".to_owned(),
+                        )
+                    })?;
+                raw.push(RawImage {
+                    page: image.page,
+                    index,
+                    pdf_image_num: Some(image.num),
+                    method: ExtractionMethod::EmbeddedImage,
+                    bytes,
+                    mask,
+                });
+            }
+        } else {
+            let bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|e| (FailureStage::Extraction, format!("cannot read image: {e}")))?;
+            raw.push(RawImage {
+                page: NonZeroU32::MIN,
+                index: 0,
+                pdf_image_num: None,
+                method: ExtractionMethod::ImageFile,
+                bytes,
+                mask: None,
+            });
+        }
+        tokio::task::spawn_blocking(move || {
+            raw.into_iter()
+                .map(|image| {
+                    let prepared = MetadataScrubber
+                        .scrub_masked(&image.bytes, image.mask.as_deref())
+                        .map_err(|e| (FailureStage::Extraction, e.to_string()))?;
+                    Ok(SourceImage {
+                        page: image.page,
+                        index: image.index,
+                        pdf_image_num: image.pdf_image_num,
+                        method: image.method,
+                        prepared,
+                    })
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| {
+            (
+                FailureStage::Extraction,
+                format!("image preparation task failed: {e}"),
+            )
+        })?
+    }
+
+    async fn process_image_source(&self, ctx: &SourceContext<'_>) -> SourceReport {
+        let entry = ctx.entry;
+        let (mut report, checksum, revision) =
+            match self.begin_source(ctx, SourceReport::new(entry)).await {
+                Start::Done(report) => return report,
+                Start::Proceed {
+                    report,
+                    checksum,
+                    revision,
+                } => (report, checksum, revision),
+            };
+        let images = match self.source_images(ctx).await {
+            Ok(images) => images,
+            Err((stage, reason)) => return report.fail(stage, reason),
+        };
+        if images.is_empty() {
+            // Nothing to publish. A previously active revision of this source (other
+            // bytes, filter, or preparation) must stop answering searches, so its pointer
+            // is removed; no new revision exists.
+            let space = self.embedder.model_info().embedding_space_id.clone();
+            let source = entry.source_id.clone();
+            let deactivated = match self.on_store(move |s| s.deactivate(&space, &source)).await {
+                Ok(deactivated) => deactivated,
+                Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+            };
+            report.revision_id = None;
+            report.status = SourceStatus::NotApplicable;
+            report.reason = Some(format!(
+                "no image qualifies for an image run (type image, both sides at least {} px, on a page with a usable text layer){}",
+                ctx.settings.images.min_side_px,
+                if deactivated {
+                    "; the previously active revision was deactivated"
+                } else {
+                    ""
+                }
+            ));
+            return report;
+        }
+        // Assets are content-addressed: storing them before the revision is harmless
+        // even if the source fails later.
+        let pngs: Vec<Vec<u8>> = images.iter().map(|i| i.prepared.png.clone()).collect();
+        let stored = self
+            .on_store(move |s| {
+                pngs.iter()
+                    .map(|png| {
+                        let uri = s.put_asset(png)?;
+                        let path = s.asset_path(&uri)?;
+                        Ok((uri, path))
+                    })
+                    .collect::<Result<Vec<_>, StoreError>>()
+            })
+            .await;
+        let assets = match stored {
+            Ok(assets) => assets,
+            Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+        };
+        let mut chunk_ids = Vec::with_capacity(images.len());
+        for image in &images {
+            match ChunkId::new(&entry.source_id, image.page, Modality::Image, image.index) {
+                Ok(id) => chunk_ids.push(id),
+                Err(e) => return report.fail(FailureStage::Extraction, e.to_string()),
+            }
+        }
+        let inputs: Vec<AssetRef> = chunk_ids
+            .iter()
+            .zip(&assets)
+            .map(|(id, (_, path))| AssetRef {
+                id: ItemId::from(id),
+                path: path.clone(),
+            })
+            .collect();
+        let vectors = match self
+            .embed_all(Inputs::Images(&inputs), ctx.settings, &mut report)
+            .await
+        {
+            Ok(vectors) => vectors,
+            Err((stage, reason)) => return report.fail(stage, reason),
+        };
+        let info = self.embedder.model_info();
+        let space = info.embedding_space_id.clone();
+        let engine = if entry.input_type.is_pdf() {
+            self.images.engine_id()
+        } else {
+            MetadataScrubber.id().to_owned()
+        };
+        let mut records = Vec::with_capacity(images.len());
+        for (((image, chunk_id), (uri, _)), vector) in
+            images.into_iter().zip(chunk_ids).zip(assets).zip(vectors)
+        {
+            let record_id = match RecordId::derive(&revision, &chunk_id, &space) {
+                Ok(id) => id,
+                Err(e) => return report.fail(FailureStage::Storage, e.to_string()),
+            };
+            records.push(Record {
+                record_id,
+                chunk_id,
+                source_id: entry.source_id.clone(),
+                revision_id: revision.clone(),
+                chunk_text: None,
+                modality: Modality::Image,
+                asset_uri: Some(uri),
+                metadata: RecordMetadata {
+                    source_file: entry.file.display().to_string(),
+                    source_checksum: checksum.clone(),
+                    document_type: entry.document_type,
+                    language: IMAGE_LANGUAGE.to_owned(),
+                    page_number: image.page.get(),
+                    section: None,
+                    chunk_index: image.index,
+                    chunk_kind: ChunkKind::Image,
+                    bounding_box: None,
+                    extraction_method: image.method,
+                    extraction_engine: engine.clone(),
+                    extraction_confidence: None,
+                    chunking_strategy: MetadataScrubber.id().to_owned(),
+                    overlap_tokens: 0,
+                    truncation: None,
+                    anonymization_status: "verified".to_owned(),
+                    original_asset: Some(OriginalAsset {
+                        file: entry.file.display().to_string(),
+                        page: image.page.get(),
+                        pdf_image_num: image.pdf_image_num,
+                        width: image.prepared.width,
+                        height: image.prepared.height,
+                    }),
+                    generated_caption: None,
+                },
+                embedding: RecordEmbedding::new(info, vector),
+                experiment_id: ctx.settings.experiment_id.clone(),
+            });
+        }
+        self.commit(space, entry.source_id.clone(), revision, records, report)
+            .await
+    }
+
     /// Embeds `inputs` in batches with class-based retries, validating every batch.
     async fn embed_all(
         &self,
-        inputs: &[TextInput],
+        inputs: Inputs<'_>,
         settings: &IngestSettings,
         report: &mut SourceReport,
     ) -> Result<Vec<Vec<f32>>, (FailureStage, String)> {
         let caps = self.embedder.capabilities();
-        let batch = caps.batch_limit().map_or(settings.batch_size.get(), |max| {
-            max.min(settings.batch_size.get())
-        });
+        let batch = caps
+            .batch_limit()
+            .map_or(settings.batch_size.get(), |max| {
+                max.min(settings.batch_size.get())
+            })
+            .max(1);
         let mut vectors = Vec::with_capacity(inputs.len());
-        for batch_inputs in inputs.chunks(batch.max(1)) {
-            let ids: Vec<ItemId> = batch_inputs.iter().map(|i| i.id.clone()).collect();
+        for start in (0..inputs.len()).step_by(batch) {
+            let batch_inputs = inputs.slice(start, (start + batch).min(inputs.len()));
+            let ids = batch_inputs.ids();
             let mut attempt: u32 = 0;
             let embedded = loop {
                 attempt += 1;
                 report.attempts += 1;
-                match self.embedder.embed_documents(batch_inputs).await {
+                match self.call(batch_inputs).await {
                     Ok(embedded) => break embedded,
                     Err(e)
                         if e.class() == ErrorClass::Transient
@@ -798,6 +1187,29 @@ impl<T: TextExtractor, O: OcrEngine, S: Sleeper> Pipeline<'_, T, O, S> {
             vectors.extend(embedded.embeddings.into_iter().map(|e| e.vector));
         }
         Ok(vectors)
+    }
+}
+
+impl Inputs<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Text(inputs) => inputs.len(),
+            Self::Images(inputs) => inputs.len(),
+        }
+    }
+
+    fn slice(&self, start: usize, end: usize) -> Self {
+        match self {
+            Self::Text(inputs) => Self::Text(inputs.get(start..end).unwrap_or_default()),
+            Self::Images(inputs) => Self::Images(inputs.get(start..end).unwrap_or_default()),
+        }
+    }
+
+    fn ids(&self) -> Vec<ItemId> {
+        match self {
+            Self::Text(inputs) => inputs.iter().map(|i| i.id.clone()).collect(),
+            Self::Images(inputs) => inputs.iter().map(|i| i.id.clone()).collect(),
+        }
     }
 }
 
