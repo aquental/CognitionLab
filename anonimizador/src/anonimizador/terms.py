@@ -31,6 +31,14 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 # Terms whose letters-and-digits form is at least this long are matched without
 # spaces or punctuation; shorter ones need whole words.
 COMPACT_MIN = 6
+# Terms with at least this many digits are matched by their digits alone, whatever
+# label or punctuation surrounds them ("CPF 123.456.789-09" is its digits).
+NUMERIC_MIN_DIGITS = 5
+# Digit runs separated by at most this many non-alphanumeric characters (spaces,
+# punctuation, parentheses, line and page breaks) are one number: "(11) 98765-4321",
+# a number broken across lines.
+DIGIT_GAP_MAX = 3
+DIGIT_RUN = re.compile(rf"\d(?:[\W_]{{0,{DIGIT_GAP_MAX}}}\d)*")
 
 
 class TermsError(Exception):
@@ -54,8 +62,8 @@ def compact(text: str) -> str:
 
 
 def digit_groups(text: str) -> list[str]:
-    """Digit runs joined across the separators numbers are written with."""
-    return [re.sub(r"\D", "", m) for m in re.findall(r"\d[\d.\-/ ]*\d|\d", text)]
+    """Digit runs joined across the separators numbers are written with (Grok G0-1)."""
+    return [re.sub(r"\D", "", m) for m in DIGIT_RUN.findall(text)]
 
 
 @dataclass(frozen=True)
@@ -72,7 +80,9 @@ class Term:
         digits = re.sub(r"\D", "", self.raw)
         letters = compact(self.raw)
         object.__setattr__(self, "digits", digits)
-        object.__setattr__(self, "numeric", len(digits) >= 5 and len(digits) >= 0.8 * len(letters))
+        # A label is not part of the identifier: any term with enough digits is matched
+        # by them (Grok G0-2).
+        object.__setattr__(self, "numeric", len(digits) >= NUMERIC_MIN_DIGITS)
         object.__setattr__(self, "compact", letters if len(letters) >= COMPACT_MIN else None)
         object.__setattr__(self, "words", words(self.raw))
 
@@ -133,8 +143,12 @@ def load_terms(path: str) -> list[Term]:
             "the terms file is inside a git work tree and not ignored; "
             "keep it outside the repository"
         )
-    with open(path, encoding="utf-8") as f:
-        lines = [line.strip() for line in f]
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [line.strip() for line in f]
+    except UnicodeDecodeError:
+        # Its message holds bytes of a term: report the encoding only (Grok G0-4).
+        raise TermsError("the terms file is not UTF-8 text; save it as UTF-8") from None
     terms = [Term(line) for line in lines if line and not line.startswith("#")]
     if not terms:
         raise TermsError("the terms file lists no term")

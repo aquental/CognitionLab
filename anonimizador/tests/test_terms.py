@@ -58,3 +58,38 @@ def test_comments_and_blank_lines_are_skipped_and_an_empty_list_is_refused(
     terms.write_text("# nothing\n\n", encoding="utf-8")
     with pytest.raises(TermsError, match="no term"):
         load_terms(str(terms))
+
+
+def test_numbers_survive_parentheses_line_breaks_and_unusual_spaces():
+    # Regression (Grok G0-1): a parenthesis, a line break, a tab, or a non-breaking
+    # space used to end a number, so these counted 0.
+    assert Term("(11) 98765-4321").count("Tel: (11) 98765-4321") == 1
+    assert Term("11987654321").count("Tel: (11) 98765-4321") == 1
+    assert Term("2024.123456").count("Protocolo (2024) 123456") == 1
+    cpf = Term("123.456.789-09")
+    for gap in ("\n", "\u00a0", "\t", "\f", "\r", "\r\n"):
+        assert cpf.count(f"CPF: 123.456.789-{gap}09") == 1, repr(gap)
+    assert cpf.count("CPF: 123.456.789-\n08") == 0
+    # Digits further apart are separate numbers.
+    assert Term("12345").count("12 ---- 345") == 0
+
+
+def test_a_labeled_number_is_matched_by_its_digits():
+    # Regression (Grok G0-2): the label made the term a word term, so the bare number
+    # in the document did not count.
+    term = Term("CPF 123.456.789-09")
+    assert term.numeric
+    assert term.count("123.456.789-09") == 1
+    assert term.count("Cadastro 123.456.789-09") == 1
+    assert term.count("CPF: 123.456.789-09") == 1
+    assert Term("Prontuario 4821-77").count("Registro: 482177") == 1
+
+
+def test_a_terms_file_that_is_not_utf8_is_refused_without_its_bytes(outside_repo: Path):
+    # Regression (Grok G0-4): a Latin-1 file raised UnicodeDecodeError, a traceback with
+    # exit 1 ("found").
+    terms = outside_repo / "terms.txt"
+    terms.write_bytes("Fulano Conceição\n".encode("latin-1"))
+    with pytest.raises(TermsError, match="not UTF-8") as error:
+        load_terms(str(terms))
+    assert "0xe7" not in str(error.value) and "position" not in str(error.value)

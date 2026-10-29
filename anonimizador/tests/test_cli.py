@@ -173,3 +173,33 @@ def test_a_name_in_a_directory_is_searched_and_never_printed(outside_repo, capsy
     assert code == EXIT_FOUND, out
     assert "    term 1: name=1\n" in out
     assert "BELTRANO" not in out and "Beltrano" not in out
+
+
+def test_a_terms_file_that_is_not_utf8_exits_2_without_a_traceback(outside_repo, capsys):
+    # Regression (Grok G0-4): exit 1 meant "found", and the traceback showed the bytes.
+    terms = outside_repo / "terms.txt"
+    terms.write_bytes("Fulano Conceição\n".encode("latin-1"))
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    assert main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)]) == EXIT_USAGE
+    out = capsys.readouterr()
+    assert "the terms file is not UTF-8 text" in out.err
+    assert "Traceback" not in out.err and out.out == ""
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_an_unlisted_directory_fails_the_run(terms, outside_repo, capsys):
+    # Regression (Grok G0-3), end to end: a clean file beside an unreadable directory.
+    root = outside_repo / "corpus"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    (root / "clean.pdf").write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (ok) Tj ET\n", b""))
+    locked.chmod(0)
+    try:
+        code = main(["verify", "--no-ocr", "--terms", str(terms), str(root)])
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "cannot list a directory under argument 1" in out.err
+    assert "ok" not in out.out and "locked" not in out.out + out.err
