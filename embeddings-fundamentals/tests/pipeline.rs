@@ -5,8 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use embeddings_fundamentals::anonymization::image_findings;
-use embeddings_fundamentals::corpus::LoadedManifest;
-use embeddings_fundamentals::domain::{ExtractionMethod, FailureStage, Modality, SourceStatus};
+use embeddings_fundamentals::corpus::{LoadedManifest, Manifest};
+use embeddings_fundamentals::domain::{
+    ExtractionMethod, FailureStage, Modality, RunStatus, SourceStatus,
+};
 use embeddings_fundamentals::embedding::EmbeddingStrategy;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
 use embeddings_fundamentals::embedding::deterministic::Method;
@@ -943,4 +945,99 @@ async fn a_failed_source_keeps_the_pages_extracted_before_the_failure() {
     );
     assert_eq!(source.pages[0].page, 1);
     assert_eq!(source.pages[0].method, ExtractionMethod::Ocr);
+    // Codex C4-1: the snapshot records that this run is incomplete, so a combined run
+    // can refuse it as a leg.
+    let snapshot = pipeline
+        .store
+        .load_experiment(&"ocr-fails".parse().expect("id"))
+        .expect("snapshot");
+    assert_eq!(snapshot.run_status, Some(RunStatus::Incomplete));
+}
+
+#[tokio::test]
+async fn a_remote_search_needs_the_manifest_of_the_corpus_it_searches() {
+    // Regression (Codex C4-2): the remote permission of one corpus must not authorize
+    // a remote query model against an index of another corpus. The refusals come before
+    // any adapter is built.
+    let dir = tempfile::tempdir().expect("tmp");
+    let fixture_manifest = std::fs::read_to_string(fixtures().join("corpus/manifest.toml"))
+        .expect("manifest")
+        .replace("remote_allowed = false", "remote_allowed = true");
+    let corpus_a = dir.path().join("a.toml");
+    let corpus_b = dir.path().join("b.toml");
+    std::fs::write(&corpus_a, &fixture_manifest).expect("write a");
+    std::fs::write(
+        &corpus_b,
+        fixture_manifest.replace(
+            "corpus_id = \"synthetic-fixtures-v1\"",
+            "corpus_id = \"other\"",
+        ),
+    )
+    .expect("write b");
+    let parsed: Manifest = toml::from_str(&fixture_manifest).expect("parse");
+    let manifest = LoadedManifest::from_manifest(
+        parsed,
+        &fixtures().join("corpus"),
+        fixture_manifest.as_bytes(),
+    )
+    .expect("load");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let store_dir = dir.path().join("store");
+    {
+        let pipeline = Pipeline {
+            text: &extractor,
+            ocr: &extractor,
+            images: &extractor,
+            sleeper: &NoSleep,
+            store: Arc::new(FsRecordStore::open_writer(&store_dir).expect("store")),
+            embedder: Arc::new(DeterministicEmbedder::builder().build().expect("adapter")),
+        };
+        pipeline
+            .ingest(
+                &manifest,
+                &IngestSettings::new("corpus-a-run".parse().expect("id")),
+            )
+            .await
+            .expect("ingest");
+    }
+    let search = |manifest: &Path, experiment: Option<&str>| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"));
+        command
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args([
+                "search",
+                "--config",
+                "config/experiments/text-openai-3-small.toml",
+                "--query",
+                "hemoglobina",
+                "--store",
+            ])
+            .arg(&store_dir)
+            .arg("--manifest")
+            .arg(manifest);
+        if let Some(id) = experiment {
+            command.args(["--experiment", id]);
+        }
+        let output = command.output().expect("run search");
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let (code, stderr) = search(&corpus_b, Some("corpus-a-run"));
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(
+        stderr.contains("corpus-a-run indexed another corpus"),
+        "{stderr}"
+    );
+    let (code, stderr) = search(&corpus_a, None);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(stderr.contains("needs --experiment"), "{stderr}");
+    // With the manifest of the corpus searched, the permission check passes and the
+    // command goes on to the adapter (which fails here for want of the feature or key).
+    let (_, stderr) = search(&corpus_a, Some("corpus-a-run"));
+    assert!(
+        !stderr.contains("indexed another corpus") && !stderr.contains("needs --experiment"),
+        "{stderr}"
+    );
 }

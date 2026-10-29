@@ -20,6 +20,7 @@
   "embedding_space_id": "space-04233b7a97515dc7c052bb12db39a743",
   "batch_size": 32,
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+  "revisions": "06eeedf32793f190bbdea0c50c6821301a081a8e1f7a60c826bf2bd50cd0bbb2",
   "fingerprints": {
     "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
     "chunking": "1be001b75489bf5c5236a8aae303e080e47ac8e39f833b1d5d08d2c4d35d4ef1",
@@ -592,42 +593,42 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 2769.773125,
+      "duration_ms": 3051.952084,
       "pages": 6,
       "chunks": 28,
-      "ms_per_page": 461.6288541666667,
-      "chunks_per_second": 10.10913123073934
+      "ms_per_page": 508.65868066666667,
+      "chunks_per_second": 9.174455964361727
     },
-    "ingestion_model_load_ms": 455.44374999999997,
+    "ingestion_model_load_ms": 1773.811042,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 28,
-      "total_ms": 403.506374,
-      "mean_batch_latency_ms": 134.50212466666667,
-      "items_per_second": 69.39171672167934,
+      "total_ms": 501.09824999999995,
+      "mean_batch_latency_ms": 167.03275,
+      "items_per_second": 55.87726558614005,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 455.44374999999997,
-      "first_operation_ms": 128.97354099999998,
+      "model_load_ms": 1773.811042,
+      "first_operation_ms": 242.71025,
       "first_operation_items": 10,
-      "total_ms": 584.417291
+      "total_ms": 2016.5212920000001
     },
     "query_side_start": {
-      "model_load_ms": 414.954084,
-      "first_query_ms": 14.929459000000001,
-      "total_ms": 429.88354300000003
+      "model_load_ms": 406.7455,
+      "first_query_ms": 14.948084,
+      "total_ms": 421.693584
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 15.607416,
-      "p95_ms": 17.10475
+      "median_ms": 16.015667,
+      "p95_ms": 17.670042
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 1672593408.0,
+      "value": 1642168320.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

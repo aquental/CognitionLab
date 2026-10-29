@@ -20,6 +20,7 @@
   "embedding_space_id": "space-912b12ea1376ca71b44ae24b04fc91ca",
   "batch_size": 16,
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+  "revisions": "b87afc6487eb7b9a9390c5ee9ba2fe8258d72ff02f6ecfe861c99f34c3a91dab",
   "fingerprints": {
     "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
     "chunking": "7d8dff06acd59b492dd11ab4d59141ca5cf1b2daf58813325c38667fa72428ee",
@@ -592,42 +593,42 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 857.922458,
+      "duration_ms": 821.738875,
       "pages": 0,
       "chunks": 3,
       "ms_per_page": null,
-      "chunks_per_second": 3.496819522586737
+      "chunks_per_second": 3.650794785630654
     },
-    "ingestion_model_load_ms": 2587.7201250000003,
+    "ingestion_model_load_ms": 2615.3021249999997,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 3,
-      "total_ms": 684.619208,
-      "mean_batch_latency_ms": 228.20640266666666,
-      "items_per_second": 4.3819979996821825,
+      "total_ms": 658.684792,
+      "mean_batch_latency_ms": 219.56159733333334,
+      "items_per_second": 4.554530537878276,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 2587.7201250000003,
-      "first_operation_ms": 225.156333,
+      "model_load_ms": 2615.3021249999997,
+      "first_operation_ms": 222.393125,
       "first_operation_items": 1,
-      "total_ms": 2812.876458
+      "total_ms": 2837.6952499999998
     },
     "query_side_start": {
-      "model_load_ms": 538.457458,
-      "first_query_ms": 57.97575,
-      "total_ms": 596.4332079999999
+      "model_load_ms": 513.403375,
+      "first_query_ms": 57.388042,
+      "total_ms": 570.791417
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 62.853541,
-      "p95_ms": 78.493583
+      "median_ms": 59.023875000000004,
+      "p95_ms": 64.146958
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 3550543872.0,
+      "value": 3510992896.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

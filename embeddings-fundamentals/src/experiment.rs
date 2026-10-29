@@ -258,6 +258,8 @@ where
                 .map_err(|e| ExperimentError::Task(e.to_string()))??
         };
         let scope = Scope::Experiment(&snapshot);
+        let revisions_fingerprint = crate::storage::revisions_fingerprint(&snapshot.revisions)
+            .map_err(|e| ExperimentError::Task(e.to_string()))?;
         let space = info.embedding_space_id.clone();
         let modality = inputs.settings.modality;
         // Labels are checked against the pinned snapshot before any query-side work.
@@ -355,6 +357,7 @@ where
             embedding_space_id: space,
             batch_size: inputs.settings.batch_size.get(),
             corpus_checksum: report.corpus_checksum.clone(),
+            revisions: Some(revisions_fingerprint),
             fingerprints: Fingerprints {
                 extraction: report.extraction_fingerprint.clone(),
                 chunking: report.chunking_fingerprint.clone(),
@@ -540,6 +543,21 @@ where
                 provenance.query_set_checksum, provenance.labels_checksum
             )));
         }
+        // An incomplete leg would make the combined evidence look complete (Codex
+        // C4-1); a snapshot that does not say is refused too.
+        match snapshot.run_status {
+            Some(RunStatus::Succeeded) => {}
+            Some(RunStatus::Incomplete) => {
+                return Err(ExperimentError::Combination(format!(
+                    "experiment {id} is incomplete: a required source failed"
+                )));
+            }
+            None => {
+                return Err(ExperimentError::Combination(format!(
+                    "experiment {id} records no run status (written before it was recorded); run it again"
+                )));
+            }
+        }
     }
 
     // 2. Both query models: the cold start of this fresh process.
@@ -577,6 +595,13 @@ where
         }
     }
 
+    let fingerprint_of = |revisions: &[RevisionRef]| {
+        crate::storage::revisions_fingerprint(revisions)
+            .map_err(|e| ExperimentError::Combination(e.to_string()))
+    };
+    let text_revisions_fingerprint = fingerprint_of(&text_revisions)?;
+    let image_revisions_fingerprint = fingerprint_of(&image_revisions)?;
+
     // 3. The combined snapshot.
     let mut fingerprints = BTreeMap::new();
     for (leg, snapshot) in [("text", &text_snapshot), ("image", &image_snapshot)] {
@@ -594,6 +619,7 @@ where
         fingerprints,
         corpus_checksum: inputs.corpus_checksum.clone(),
         evaluation: Some(provenance),
+        run_status: Some(RunStatus::Succeeded),
     };
     {
         let (store, snapshot) = (Arc::clone(store), snapshot.clone());
@@ -669,10 +695,12 @@ where
     );
     let leg = |experiment: &ExperimentId,
                info: &crate::embedding::ModelInfo,
-               execution: Execution|
+               execution: Execution,
+               revisions: &Fingerprint|
      -> LegConfiguration {
         LegConfiguration {
             experiment_id: experiment.clone(),
+            revisions: Some(revisions.clone()),
             engine: info.engine,
             engine_version: info.engine_version.clone(),
             model_id: info.model_id.clone(),
@@ -698,8 +726,18 @@ where
         hardware: instruments.hardware.clone(),
         experiment_id: inputs.experiment_id.clone(),
         corpus_checksum: inputs.corpus_checksum.clone(),
-        text: leg(inputs.text_experiment, &text_info, text_execution),
-        image: leg(inputs.image_experiment, &image_info, image_execution),
+        text: leg(
+            inputs.text_experiment,
+            &text_info,
+            text_execution,
+            &text_revisions_fingerprint,
+        ),
+        image: leg(
+            inputs.image_experiment,
+            &image_info,
+            image_execution,
+            &image_revisions_fingerprint,
+        ),
         fusion: inputs.fusion,
         evaluation,
         measurements: CombinedMeasurements {

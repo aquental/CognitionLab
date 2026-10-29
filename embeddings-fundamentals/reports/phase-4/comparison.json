@@ -40,6 +40,7 @@
       "embedding_space_id": "space-04233b7a97515dc7c052bb12db39a743",
       "batch_size": 32,
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+      "revisions": "06eeedf32793f190bbdea0c50c6821301a081a8e1f7a60c826bf2bd50cd0bbb2",
       "fingerprints": {
         "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
         "chunking": "1be001b75489bf5c5236a8aae303e080e47ac8e39f833b1d5d08d2c4d35d4ef1",
@@ -612,42 +613,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 2769.773125,
+          "duration_ms": 3051.952084,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 461.6288541666667,
-          "chunks_per_second": 10.10913123073934
+          "ms_per_page": 508.6586806666666,
+          "chunks_per_second": 9.174455964361728
         },
-        "ingestion_model_load_ms": 455.44375,
+        "ingestion_model_load_ms": 1773.811042,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 403.506374,
-          "mean_batch_latency_ms": 134.50212466666667,
-          "items_per_second": 69.39171672167934,
+          "total_ms": 501.0982499999999,
+          "mean_batch_latency_ms": 167.03275,
+          "items_per_second": 55.87726558614005,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 455.44375,
-          "first_operation_ms": 128.97354099999998,
+          "model_load_ms": 1773.811042,
+          "first_operation_ms": 242.71025,
           "first_operation_items": 10,
-          "total_ms": 584.417291
+          "total_ms": 2016.521292
         },
         "query_side_start": {
-          "model_load_ms": 414.954084,
-          "first_query_ms": 14.929459,
-          "total_ms": 429.883543
+          "model_load_ms": 406.7455,
+          "first_query_ms": 14.948084,
+          "total_ms": 421.693584
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 15.607416,
-          "p95_ms": 17.10475
+          "median_ms": 16.015667,
+          "p95_ms": 17.670042
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 1672593408.0,
+          "value": 1642168320.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -845,6 +846,7 @@
       "embedding_space_id": "space-25b9aeac30261d1226218758e6756264",
       "batch_size": 32,
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+      "revisions": "2cfc5fdf4e2bb63bbb37038521e1af20728bef8b9df55d238e50dfa7f06bc53e",
       "fingerprints": {
         "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
         "chunking": "6bd81d71d15429c597f16bcb83886636b4b97b33cb41bcee36a2a15709b9042a",
@@ -1417,42 +1419,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 2750.320041,
+          "duration_ms": 2735.9867919999997,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 458.3866735,
-          "chunks_per_second": 10.18063337451425
+          "ms_per_page": 455.9977986666666,
+          "chunks_per_second": 10.233967532983618
         },
-        "ingestion_model_load_ms": 2386.936166,
+        "ingestion_model_load_ms": 3131.4335,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 379.579417,
-          "mean_batch_latency_ms": 126.52647233333332,
-          "items_per_second": 73.76585437982271,
+          "total_ms": 366.709875,
+          "mean_batch_latency_ms": 122.236625,
+          "items_per_second": 76.35463866360293,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 2386.936166,
-          "first_operation_ms": 143.440667,
+          "model_load_ms": 3131.4335,
+          "first_operation_ms": 144.67475,
           "first_operation_items": 10,
-          "total_ms": 2530.376833
+          "total_ms": 3276.10825
         },
         "query_side_start": {
-          "model_load_ms": 2134.696042,
-          "first_query_ms": 30.892375,
-          "total_ms": 2165.588417
+          "model_load_ms": 2714.0686670000005,
+          "first_query_ms": 30.2845,
+          "total_ms": 2744.3531670000007
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 32.271375,
-          "p95_ms": 36.682959
+          "median_ms": 30.549375,
+          "p95_ms": 33.634875
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 5566349312.0,
+          "value": 5118296064.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -1650,6 +1652,7 @@
       "embedding_space_id": "space-20e1f35a45635362d2a1a1be05b34b34",
       "batch_size": 32,
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+      "revisions": "3551b211438d5b4d52678a17130f34a502b3a6487a9bbe20d2a5962ad61046b4",
       "fingerprints": {
         "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
         "chunking": "ab9378502da8626d45923c335a695d1fb5d5396beb8a6cec23ac48be988b7b52",
@@ -2222,42 +2225,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 3344.84175,
+          "duration_ms": 3369.5912080000003,
           "pages": 6,
           "chunks": 28,
-          "ms_per_page": 557.473625,
-          "chunks_per_second": 8.3710985728996
+          "ms_per_page": 561.5985346666668,
+          "chunks_per_second": 8.309613324465916
         },
-        "ingestion_model_load_ms": 8382.783541,
+        "ingestion_model_load_ms": 7397.477209,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 28,
-          "total_ms": 937.409083,
-          "mean_batch_latency_ms": 312.46969433333334,
-          "items_per_second": 29.86956336116491,
+          "total_ms": 906.849084,
+          "mean_batch_latency_ms": 302.283028,
+          "items_per_second": 30.87614079786621,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 8382.783541,
-          "first_operation_ms": 360.307458,
+          "model_load_ms": 7397.477209,
+          "first_operation_ms": 342.276625,
           "first_operation_items": 10,
-          "total_ms": 8743.090999
+          "total_ms": 7739.753834
         },
         "query_side_start": {
-          "model_load_ms": 7852.781875,
-          "first_query_ms": 68.421125,
-          "total_ms": 7921.203
+          "model_load_ms": 6223.166499999999,
+          "first_query_ms": 84.834292,
+          "total_ms": 6308.000791999999
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 61.494417000000006,
-          "p95_ms": 65.770458
+          "median_ms": 57.468542,
+          "p95_ms": 63.472792
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 6588727296.0,
+          "value": 7233503232.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -2455,6 +2458,7 @@
       "embedding_space_id": "space-6603884ac3fef0f888b11488a160b13c",
       "batch_size": 16,
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+      "revisions": "f1bfabf2837f070383a35623ae950d151cb1e574352be3b935108a24b92e3fe7",
       "fingerprints": {
         "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
         "chunking": "7d8dff06acd59b492dd11ab4d59141ca5cf1b2daf58813325c38667fa72428ee",
@@ -3027,42 +3031,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 345.42145899999997,
+          "duration_ms": 340.432291,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 8.685042349960082
+          "chunks_per_second": 8.812325032938782
         },
-        "ingestion_model_load_ms": 808.164083,
+        "ingestion_model_load_ms": 792.517541,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 151.060042,
-          "mean_batch_latency_ms": 50.35334733333334,
-          "items_per_second": 19.859652892192365,
+          "total_ms": 145.650458,
+          "mean_batch_latency_ms": 48.55015266666667,
+          "items_per_second": 20.597257579512725,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 808.164083,
-          "first_operation_ms": 51.936542,
+          "model_load_ms": 792.517541,
+          "first_operation_ms": 49.259292,
           "first_operation_items": 1,
-          "total_ms": 860.100625
+          "total_ms": 841.776833
         },
         "query_side_start": {
-          "model_load_ms": 588.4579170000001,
-          "first_query_ms": 32.5715,
-          "total_ms": 621.0294170000001
+          "model_load_ms": 540.045666,
+          "first_query_ms": 33.227417,
+          "total_ms": 573.273083
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 34.614540999999996,
-          "p95_ms": 37.132458
+          "median_ms": 33.944416,
+          "p95_ms": 42.295916000000005
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 699990016.0,
+          "value": 701464576.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -3133,6 +3137,7 @@
       "embedding_space_id": "space-912b12ea1376ca71b44ae24b04fc91ca",
       "batch_size": 16,
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
+      "revisions": "b87afc6487eb7b9a9390c5ee9ba2fe8258d72ff02f6ecfe861c99f34c3a91dab",
       "fingerprints": {
         "extraction": "8a4be74221f547c2ea1e4963dd74840c074a96ccf6c86f13f57ad872ac47680b",
         "chunking": "7d8dff06acd59b492dd11ab4d59141ca5cf1b2daf58813325c38667fa72428ee",
@@ -3705,42 +3710,42 @@
       },
       "measurements": {
         "ingestion": {
-          "duration_ms": 857.922458,
+          "duration_ms": 821.738875,
           "pages": 0,
           "chunks": 3,
           "ms_per_page": null,
-          "chunks_per_second": 3.496819522586737
+          "chunks_per_second": 3.650794785630654
         },
-        "ingestion_model_load_ms": 2587.7201250000003,
+        "ingestion_model_load_ms": 2615.3021249999997,
         "embedding": {
           "calls": 3,
           "failed_calls": 0,
           "items": 3,
-          "total_ms": 684.619208,
-          "mean_batch_latency_ms": 228.20640266666663,
-          "items_per_second": 4.3819979996821825,
+          "total_ms": 658.684792,
+          "mean_batch_latency_ms": 219.56159733333337,
+          "items_per_second": 4.554530537878276,
           "usage_tokens": null
         },
         "cold_start": {
-          "model_load_ms": 2587.7201250000003,
-          "first_operation_ms": 225.156333,
+          "model_load_ms": 2615.3021249999997,
+          "first_operation_ms": 222.393125,
           "first_operation_items": 1,
-          "total_ms": 2812.876458
+          "total_ms": 2837.69525
         },
         "query_side_start": {
-          "model_load_ms": 538.457458,
-          "first_query_ms": 57.97575,
-          "total_ms": 596.4332079999999
+          "model_load_ms": 513.403375,
+          "first_query_ms": 57.388042,
+          "total_ms": 570.791417
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 62.853541,
-          "p95_ms": 78.493583
+          "median_ms": 59.023875,
+          "p95_ms": 64.146958
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 3550543872.0,
+          "value": 3510992896.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -3804,6 +3809,7 @@
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
       "text": {
         "experiment_id": "p4-fastembed-e5-base",
+        "revisions": "3551b211438d5b4d52678a17130f34a502b3a6487a9bbe20d2a5962ad61046b4",
         "engine": "fastembed",
         "engine_version": "7.5.0",
         "model_id": "intfloat/multilingual-e5-base",
@@ -3815,6 +3821,7 @@
       },
       "image": {
         "experiment_id": "p4-siglip-multilingual",
+        "revisions": "b87afc6487eb7b9a9390c5ee9ba2fe8258d72ff02f6ecfe861c99f34c3a91dab",
         "engine": "embed_anything",
         "engine_version": "0.7.1",
         "model_id": "google/siglip-base-patch16-256-multilingual",
@@ -4642,20 +4649,20 @@
       },
       "measurements": {
         "cold_start": {
-          "text_model_load_ms": 7359.477833999999,
-          "image_model_load_ms": 2686.999584,
-          "first_query_ms": 87.497375,
-          "total_ms": 10133.974793
+          "text_model_load_ms": 6832.795292,
+          "image_model_load_ms": 2717.818084,
+          "first_query_ms": 84.267375,
+          "total_ms": 9634.880751
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 94.641084,
-          "p95_ms": 104.40725
+          "median_ms": 87.740792,
+          "p95_ms": 95.757042
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 6357270528.0,
+          "value": 6372458496.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -4708,6 +4715,7 @@
       "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
       "text": {
         "experiment_id": "p4-embed-anything-minilm",
+        "revisions": "06eeedf32793f190bbdea0c50c6821301a081a8e1f7a60c826bf2bd50cd0bbb2",
         "engine": "embed_anything",
         "engine_version": "0.7.1",
         "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -4719,6 +4727,7 @@
       },
       "image": {
         "experiment_id": "p4-clip-vit-b32",
+        "revisions": "f1bfabf2837f070383a35623ae950d151cb1e574352be3b935108a24b92e3fe7",
         "engine": "embed_anything",
         "engine_version": "0.7.1",
         "model_id": "openai/clip-vit-base-patch32",
@@ -5546,20 +5555,20 @@
       },
       "measurements": {
         "cold_start": {
-          "text_model_load_ms": 1090.747833,
-          "image_model_load_ms": 758.359333,
-          "first_query_ms": 37.034375,
-          "total_ms": 1886.1415409999995
+          "text_model_load_ms": 1054.230417,
+          "image_model_load_ms": 741.656625,
+          "first_query_ms": 36.718917,
+          "total_ms": 1832.605959
         },
         "warm_query_latency": {
           "samples": 200,
-          "median_ms": 41.62975,
-          "p95_ms": 43.909749999999995
+          "median_ms": 39.745208,
+          "p95_ms": 45.038125
         },
         "latency_repeats": 20,
         "peak_local_ram": {
           "status": "measured",
-          "value": 1876180992.0,
+          "value": 1866203136.0,
           "unit": "bytes",
           "scope": "local process memory (ru_maxrss high-water mark)"
         },
@@ -5605,7 +5614,7 @@
     "OpenAI text-embedding-3-small is not in this comparison: OPENAI_API_KEY and owner permission for remote processing (remote_allowed) are outstanding. Its adapter is implemented and covered by deterministic tests only.",
     "Combined retrieval fuses ranks with RRF (k = 60, ranks from 1, fusion depth all); raw scores of the two models are never compared. A combined run ingests nothing: it pins the revisions of its text run and image run in its own snapshot, so 'search --mode combined --experiment <id>' reproduces it (the search refuses a snapshot fused with other parameters or missing a leg). Its index size is the size of the revisions that snapshot pins.",
     "On this corpus, fusion raises Hit@3 above every single leg (E5-base + SigLIP 0.80 vs 0.70 text-only and 0.30 image-only; MiniLM + CLIP 0.60 vs 0.50 and 0.30): on the image queries (q07-q09) relevant images reach the top 3, and on the laboratory queries (q01-q04) irrelevant images displace relevant text chunks. Precision@3 and nDCG@3 are NOT robust. With disjoint lists and depth all, the fused ranks 1-2 are the two leg winners (1/61 each) and rank 3 is one of the two runners-up (1/62 each), so the order of every fused tie between a text and an image item is decided by the record-id tie-break (PRD 6.6). Record ids hash (revision, chunk, space), and the chunking-rules revision r2 changed every text revision id without changing any chunk of this corpus. That alone moved E5-base + SigLIP from P@3 0.367 / nDCG@3 0.508 to 0.400 / 0.545, and MiniLM + CLIP from 0.300 / 0.388 to 0.267 / 0.340. Differences between combined and text-only quality on this corpus are therefore within tie-break noise. Low quality is a valid result; a relevance-aware cross-leg tie rule, weighted fusion, a score floor, or a smaller image depth are not evaluated here.",
-    "Latency was measured on a shared developer machine under moderate load (load average 4-11 during the runs; the last regeneration about 5-6); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.",
+    "Latency was measured on a shared developer machine under moderate load (load average 4-11 during the runs, the last regeneration included); warm medians are indicative, not benchmarks. Cold start depends on the OS file cache of the model files (see reports/progress/PROGRESS.md, Phase 2) and is a single indicative run.",
     "Extraction fidelity is reported for text runs only: it measures text extraction, which image runs and combined runs do not perform."
   ]
 }

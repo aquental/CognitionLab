@@ -354,3 +354,29 @@ async fn a_filled_label_draft_applies_to_the_runs_it_was_pooled_from() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_directory_is_reported_without_its_name() {
+    // Regression (Codex C4-4): the traversal error used to carry the directory path.
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tmp");
+    let locked = dir.path().join("FULANO DE TAL");
+    std::fs::create_dir(&locked).expect("mkdir");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let readable_anyway = std::fs::read_dir(&locked).is_ok(); // root ignores permissions
+    let result = drafts::corpus_files(dir.path());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    if readable_anyway {
+        return;
+    }
+    let message = result
+        .expect_err("an unreadable directory fails")
+        .to_string();
+    assert!(!message.contains("FULANO"), "{message}");
+    assert!(
+        !message.contains(&dir.path().display().to_string()),
+        "{message}"
+    );
+    assert!(message.starts_with("cannot read a directory under the corpus directory"));
+}

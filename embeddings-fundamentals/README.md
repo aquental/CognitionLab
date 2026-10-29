@@ -90,12 +90,12 @@ These numbers come from 3 synthetic PDFs (28 text chunks), 3 synthetic images, a
 | Configuration | Mode | Precision@3 | Hit@3 | nDCG@3 | Warm median |
 |---|---|---:|---:|---:|---:|
 | MiniLM · EmbedAnything | text-only | 0.333 | 0.500 | 0.409 | 16 ms |
-| MiniLM · FastEmbed | text-only | 0.333 | 0.500 | 0.409 | 32 ms |
-| E5-base · FastEmbed | text-only | **0.433** | 0.700 | 0.540 | 61 ms |
-| CLIP ViT-B/32 | image-only | 0.167 | 0.300 | 0.241 | 35 ms |
-| SigLIP multilingual | image-only | 0.167 | 0.300 | 0.270 | 63 ms |
-| E5-base + SigLIP (RRF) | combined | 0.400 | **0.800** | **0.545** | 95 ms |
-| MiniLM + CLIP (RRF) | combined | 0.267 | 0.600 | 0.340 | 42 ms |
+| MiniLM · FastEmbed | text-only | 0.333 | 0.500 | 0.409 | 31 ms |
+| E5-base · FastEmbed | text-only | **0.433** | 0.700 | 0.540 | 57 ms |
+| CLIP ViT-B/32 | image-only | 0.167 | 0.300 | 0.241 | 34 ms |
+| SigLIP multilingual | image-only | 0.167 | 0.300 | 0.270 | 59 ms |
+| E5-base + SigLIP (RRF) | combined | 0.400 | **0.800** | **0.545** | 88 ms |
+| MiniLM + CLIP (RRF) | combined | 0.267 | 0.600 | 0.340 | 40 ms |
 
 Fusion finds a relevant item for more queries: Hit@3 rises above every single leg (0.70 → 0.80 and 0.50 → 0.60), because relevant images reach the top 3 for image queries.
 
@@ -112,9 +112,9 @@ Latencies come from a shared laptop (Apple M3, CPU inference, moderate load) and
 
 A comparison is only useful if its inputs and index state can be trusted. The acceptance contract therefore requires unchanged inputs to produce no duplicate active records, and failed updates to leave the previously committed revision searchable.
 
-The **Cucumber for Rust** suite maps the PRD's Gherkin scenarios to `#[given]`, `#[when]`, and `#[then]` steps: 38 scenarios, covering all 35 required ones. Deterministic fixtures exercise orchestration and failure recovery. Separate integration runs test the real extraction tools and embedding models (16 tests). Passing simulated provider responses does not count as evidence of real model quality or of a working provider integration. That is why the live OpenAI run is listed as outstanding.
+The **Cucumber for Rust** suite maps the PRD's Gherkin scenarios to `#[given]`, `#[when]`, and `#[then]` steps: 38 scenarios, covering all 35 required ones. Deterministic fixtures exercise orchestration and failure recovery. Separate integration runs test the real extraction tools and embedding models (17 tests). Passing simulated provider responses does not count as evidence of real model quality or of a working provider integration. That is why the live OpenAI run is listed as outstanding.
 
-Each phase also passed an independent adversarial review loop by Grok and Codex, with Antigravity added from Phase 4. Every finding was either fixed with a regression test or refuted with evidence. The raw reports and the tracked findings are in `reports/reviews/`.
+Phases 0–3 each passed an independent adversarial review loop by Grok and Codex. Phase 4 adds Antigravity as a third reviewer, and its review loop is **still in progress**: see `reports/reviews/phase-4/FINDINGS.md` and `reports/progress/PROGRESS.md`. Every finding so far was either fixed with a regression test or refuted with evidence. The raw reports and the tracked findings are in `reports/reviews/`.
 
 ## Roadmap and current evidence
 
