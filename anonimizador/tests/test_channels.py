@@ -5,6 +5,7 @@ import zlib
 
 from anonimizador.channels import (
     AMBIGUOUS,
+    Reading,
     image_metadata,
     image_metadata_blocks,
     mixed_readings,
@@ -571,17 +572,22 @@ def test_a_literal_nested_deeper_than_one_level_is_one_string():
     # parentheses over any length.
     assert pdf_string_views([b"(a (b (c)) d)"]).lines == "a \n d\nb (c)"
     assert pdf_string_views([b"(" + b"a" * 1100 + b" (b (c)))"]).lines == "b (c)"
-    assert pdf_string_views([b"(a (endstream (c)))"]).lines == "endstream (c)"
+    assert pdf_string_views([b"(a (endstream\nendobj (c)))"]).lines == "endstream\nendobj (c)"
 
 
 def test_a_deeper_literal_may_hold_the_word_stream():
     # Regression (Codex C0-5): any "stream" in a deeper literal, a word in its text
     # included, made it unread.
-    for literal in (rb"(Zul\351o (upstream (2)))", rb"(Zul\351o (a stream (2)))"):
+    for literal in (
+        rb"(Zul\351o (upstream (2)))",
+        rb"(Zul\351o (a stream (2)))",
+        rb"(Zul\351o (endstream (2)))",
+    ):
         data = b"9 0 obj << /Author " + literal + b" >> endobj\n"
         assert raw_count("Zul\xe9o", data) == 1, literal
     # The keywords of the file structure still end it.
     assert pdf_string_views([b"(a >> stream\n (b (c)))"]).lines == "b (c)"
+    assert pdf_string_views([b"(a endstream endobj (b (c)))"]).lines == "b (c)"
 
 
 def test_hex_strings_with_nul_spaces_or_one_digit_are_read():
@@ -634,7 +640,8 @@ JPEG_SCAN = b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\x12\x34\xff\xd9"
 def test_an_image_that_is_not_whole_is_an_error_without_ocr(tmp_path):
     # Regression (Codex C0-9): with OCR off, nothing read an image as one, so bytes
     # that are no image were reported clean.
-    idat = (b"IDAT", zlib.compress(b"\x00" * 121))
+    # IHDR: 40 x 30, RGB, 8 bits: 30 rows of a filter byte and 120 bytes.
+    idat = (b"IDAT", zlib.compress(b"\x00" * 30 * 121))
     whole = {
         "a.png": png([IHDR, idat, (b"IEND", b"")]),
         "b.jpg": JPEG_START + JPEG_SCAN,
@@ -647,6 +654,21 @@ def test_an_image_that_is_not_whole_is_an_error_without_ocr(tmp_path):
         "g.jpg": JPEG_START + JPEG_SCAN[:-2],
         "h.jpg": JPEG_START[:4],
         "i.jpg": b"\xff\xd8" + JPEG_SCAN,
+        # Codex round 2: empty chunks, data that does not inflate, too few pixels, a
+        # wrong checksum, a palette image without a palette.
+        "j.png": png([(b"IHDR", b""), (b"IDAT", b""), (b"IEND", b"")]),
+        "k.png": png([IHDR, (b"IDAT", b"broken"), (b"IEND", b"")]),
+        "l.png": png([IHDR, (b"IDAT", zlib.compress(b"\x00" * 121)), (b"IEND", b"")]),
+        "m.png": png([IHDR, idat, (b"IEND", b"")]).replace(
+            b"IEND\xaeB`\x82", b"IEND\x00\x00\x00\x00"
+        ),
+        "n.png": png(
+            [
+                (b"IHDR", struct.pack(">IIBBBBB", 40, 30, 8, 3, 0, 0, 0)),
+                (b"IDAT", zlib.compress(b"\x00" * 30 * 41)),
+                (b"IEND", b""),
+            ]
+        ),
     }
     for name, data in {**whole, **broken}.items():
         (tmp_path / name).write_bytes(data)
@@ -655,8 +677,9 @@ def test_an_image_that_is_not_whole_is_an_error_without_ocr(tmp_path):
         assert reading.errors == expected, name
 
 
-def lzw_encode(data: bytes) -> bytes:
-    """LZW as PDF reads it (9 to 12-bit codes, the size growing one code early)."""
+def lzw_encode(data: bytes, early_change: int = 1) -> bytes:
+    """LZW as PDF reads it: 9 to 12-bit codes, the size growing one code early unless
+    `early_change` is 0."""
     table = {bytes([i]): i for i in range(256)}
     out, buffer, buffered, width, next_code = bytearray(), 0, 0, 9, 258
 
@@ -675,7 +698,7 @@ def lzw_encode(data: bytes) -> bytes:
             continue
         emit(table[word])
         table[word + bytes([byte])], next_code = next_code, next_code + 1
-        if next_code == 1 << width and width < 12:
+        if next_code == (1 << width) + 1 - early_change and width < 12:
             width += 1
         if next_code >= 4094:
             emit(256)
@@ -719,7 +742,13 @@ def test_a_stream_is_decoded_through_its_chain_of_filters():
         assert raw_count("Zulea", data) == 0, filters
         assert raw.unread == 0, filters
     # A filter that is not read makes the raw bytes unread; an image codec does not.
-    for filters, unread in ((b"/Crypt", 1), (b"[/A85 /Unknown]", 1), (b"/DCTDecode", 0)):
+    for filters, unread in (
+        (b"/Crypt /DecodeParms << /Name /StdCF >>", 1),
+        (b"[/A85 /Unknown]", 1),
+        (b"/DCTDecode", 0),
+        # Crypt without parameters is the identity.
+        (b"/Crypt", 0),
+    ):
         data = page + b"9 0 obj << /Filter " + filters + b" >> stream\nxyz\nendstream endobj\n"
         assert raw_readings(data).unread == unread, filters
 
@@ -734,3 +763,134 @@ def test_independent_places_add_up_and_readings_of_one_place_do_not():
     segment = b"\xff\xfe\x00\x07Zuleo"
     jpeg = JPEG_START + segment + segment + JPEG_SCAN
     assert [max(Term("Zuleo").count(t) for t in b) for b in image_metadata_blocks(jpeg)] == [1, 1]
+
+
+def png_predict(data: bytes, columns: int) -> bytes:
+    """PNG prediction, one filter type per row in turn (none, sub, up, average, Paeth)."""
+    out, above = bytearray(), bytes(columns)
+    for row, start in enumerate(range(0, len(data), columns)):
+        line = data[start : start + columns].ljust(columns, b" ")
+        kind = row % 5
+        out.append(kind)
+        for i, value in enumerate(line):
+            left, up = (line[i - 1] if i else 0), above[i]
+            corner = above[i - 1] if i else 0
+            guess = left + up - corner
+            distances = [abs(guess - left), abs(guess - up), abs(guess - corner)]
+            paeth = (left, up, corner)[distances.index(min(distances))]
+            out.append((value - (0, left, up, (left + up) // 2, paeth)[kind]) & 0xFF)
+        above = line
+    return bytes(out)
+
+
+def tiff_predict(data: bytes, columns: int) -> bytes:
+    out = bytearray()
+    for start in range(0, len(data), columns):
+        line = data[start : start + columns]
+        out += line[:1] + bytes((line[i] - line[i - 1]) & 0xFF for i in range(1, len(line)))
+    return bytes(out)
+
+
+def zlib_holding(raw: bytes, rest: bytes) -> bytes:
+    """A zlib stream whose first block stores `raw` as it is, then deflates `rest`."""
+    stored = b"\x00" + struct.pack("<HH", len(raw), len(raw) ^ 0xFFFF) + raw
+    deflater = zlib.compressobj(9, zlib.DEFLATED, -15)
+    deflated = deflater.compress(rest) + deflater.flush()
+    return b"\x78\x01" + stored + deflated + struct.pack(">I", zlib.adler32(raw + rest))
+
+
+def test_a_stream_is_decoded_as_its_dictionary_says():
+    # Regression (Codex C0-3, C0-13..C0-16): a failed decoder was silent, a chain of
+    # Flate filters was inflated once, an indirect or escaped /Filter or one far from
+    # the data was missed, /DecodeParms was ignored, and the data ended at the first
+    # "endstream" whatever /Length said.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    # The name is drawn in the fifth 40-byte row, which PNG prediction filters with
+    # Paeth, after rows filtered every other way.
+    content = b"%" + b" " * 158 + b"\n" + b"BT (Zu) Tj (leo) Tj ET\n"
+    content += b"BT 72 600 Td (linha de teste abc) Tj ET\n" * 30
+    padded = content.ljust(-(-len(content) // 40) * 40, b" ")
+    a85 = base64.a85encode(zlib.compress(content)) + b"~>"
+    held = zlib_holding(b"% endstream\n", content)
+    for entries, body, extra in (
+        (b"/Filter [/FlateDecode /FlateDecode]", zlib.compress(zlib.compress(content)), b""),
+        (b"/Filter 10 0 R", a85, b"10 0 obj [/ASCII85Decode /FlateDecode] endobj\n"),
+        (b"/F#69lter [/A#385 /Fl]", a85, b""),
+        (b"/Filter [/A85 /Fl] /Pad (" + b"x" * 4200 + b")", a85, b""),
+        (
+            b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns 40 >>",
+            zlib.compress(png_predict(padded, 40)),
+            b"",
+        ),
+        (
+            b"/Filter /Fl /DecodeParms << /Predictor 2 /Columns 40 >>",
+            zlib.compress(tiff_predict(padded, 40)),
+            b"",
+        ),
+        (b"/Filter /LZW /DecodeParms << /EarlyChange 0 >>", lzw_encode(content, 0), b""),
+        (b"/Filter /FlateDecode /Length %d" % len(held), held, b""),
+        (b"/Filter /FlateDecode /Length 11 0 R", held, b"11 0 obj %d endobj\n" % len(held)),
+    ):
+        data = page + extra + b"9 0 obj << " + entries + b" >> stream\n" + body
+        data += b"\nendstream endobj\n"
+        raw = raw_readings(data)
+        assert raw_count("Zuleo", data) == 1, entries[:40]
+        assert raw_count("Zulea", data) == 0, entries[:40]
+        assert raw.unread == 0, entries[:40]
+    # A declared filter that fails, or data that ends too soon, is unread.
+    for entries, body in (
+        (b"/Filter /FlateDecode", b"invalidcompressedbytes"),
+        (b"/Filter /FlateDecode", zlib.compress(content)[:-30]),
+        (b"/Filter /A85", b"<~vwxyz~>"),
+        (b"/Filter /AHx", b"4G>"),
+        (b"/Filter /LZW", b"\xff\xff\xff"),
+        (b"/Filter /Fl /DecodeParms << /Predictor 15 /Columns 0 >>", zlib.compress(b"ab")),
+        (b"/Filter 12 0 R", zlib.compress(content)),
+    ):
+        data = page + b"9 0 obj << " + entries + b" >> stream\n" + body + b"\nendstream endobj\n"
+        assert raw_readings(data).unread == 1, (entries, body[:10])
+
+
+def test_a_compressed_png_text_that_cannot_be_inflated_is_unread(tmp_path):
+    # Regression (Codex C0-17): a zTXt or iTXt chunk that did not inflate was dropped
+    # as if it held no metadata.
+    idat = (b"IDAT", zlib.compress(b"\x00" * 30 * 121))
+    good = [
+        (b"zTXt", b"Comment\x00\x00" + zlib.compress(b"Zuleo")),
+        (b"iTXt", b"Comment\x00\x01\x00pt\x00\x00" + zlib.compress(b"Zuleo")),
+        (b"iTXt", b"Comment\x00\x00\x00pt\x00\x00Zuleo"),
+    ]
+    for chunk in good:
+        (tmp_path / "a.png").write_bytes(png([IHDR, chunk, idat, (b"IEND", b"")]))
+        reading = read_image(str(tmp_path / "a.png"), "a.png", "por", False, 10)
+        assert reading.errors == [], chunk[0]
+        assert sum(Term("Zuleo").count(t) for t in reading.texts["metadata"]) >= 1, chunk[0]
+    for chunk in (
+        (b"zTXt", b"Comment\x00\x00invalidcompressedbytes"),
+        (b"zTXt", b"Comment\x00\x00" + zlib.compress(b"Zuleo")[:-3]),
+        (b"iTXt", b"Comment\x00\x01\x00pt\x00\x00broken"),
+        (b"zTXt", b"no keyword end"),
+    ):
+        (tmp_path / "b.png").write_bytes(png([IHDR, chunk, idat, (b"IEND", b"")]))
+        reading = read_image(str(tmp_path / "b.png"), "b.png", "por", False, 10)
+        assert reading.errors == ["metadata: 1 compressed PNG text chunk(s) cannot be read"]
+
+
+def test_an_inline_image_whose_end_cannot_be_told_makes_the_raw_bytes_unread():
+    # Regression (Codex round 2, C0-4): with a color space named in the resources,
+    # the samples' size is unknown, and the first " EI " in them was taken as the end.
+    text = b" EI BT /F1 12 Tf 72 700 Td (Zu) Tj (leo) Tj ET"
+    head = b"BI /W 16 /H 1 /CS /Cs1 /BPC 8 ID "
+    raw = raw_readings(head + b" EI %abcdefghijk" + text)
+    assert raw.unclear_images == 1
+    reading = Reading()
+    reading.take_raw(raw)
+    assert reading.errors == ["raw: 1 inline image(s) end where it is unclear"]
+    # One "EI" only: the end is clear, and the text after it is read.
+    raw = raw_readings(head + b"\x01\x02%abcdefghijklm" + text)
+    assert raw.unclear_images == 0
+    assert raw_count("Zuleo", head + b"\x01\x02%abcdefghijklm" + text) == 1
+    # A later image's own "EI" does not make the first one unclear; no "EI" at all does.
+    two = head + b"\x01%" + text + b"\n" + head + b"\x02%" + text
+    assert raw_readings(two).unclear_images == 0
+    assert raw_readings(head + b"\x01\x02 no end").unclear_images == 1

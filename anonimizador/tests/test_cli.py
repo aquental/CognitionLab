@@ -335,6 +335,20 @@ def test_a_usage_error_never_prints_an_argument(argv, capsys):
 
 
 @requires_tools
+def test_the_data_directory_in_the_language_list_is_no_language(terms, stubs, capsys):
+    # Regression (Codex C0-1): every word of `tesseract --list-langs` counted as a
+    # language, the header's data directory too, which was then printed.
+    header = 'List of available languages in "/private/Zuleo/tessdata/" (2):'
+    listing = f"printf '%s\\neng\\npor\\n' '{header}'"
+    stub(stubs, "tesseract", f'if [ "$1" = "--list-langs" ]; then {listing}; exit 0; fi\nexit 1\n')
+    lang = '"/private/Zuleo/tessdata/"'
+    code = main(["verify", "--lang", lang, "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "Zuleo" not in out.err + out.out
+
+
+@requires_tools
 def test_a_missing_language_is_named_by_position(terms, stubs, capsys):
     # Regression (Codex C0-1): the language list was printed as typed.
     stub(stubs, "tesseract", LIST_LANGS + "exit 1\n")
@@ -370,3 +384,16 @@ def test_the_information_dictionary_and_the_xmp_packet_are_two_places(stubs, cap
     pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b""))
     assert main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)]) == EXIT_FOUND
     assert "    term 1: metadata=2\n" in capsys.readouterr().out
+
+
+@requires_tools
+def test_an_old_stream_that_cannot_be_decoded_is_an_unread_place(terms, outside_repo, capsys):
+    # Regression (Codex round 2, C0-3): a declared filter that failed on an object no
+    # page uses was silent, and Poppler never reads that object.
+    old = b"9 0 obj << /Filter /FlateDecode >> stream\ninvalidcompressedbytes\nendstream endobj\n"
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b"") + old)
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    text = capsys.readouterr().out
+    assert code == EXIT_USAGE, text
+    assert "[1] ERROR" in text and "    unreadable: raw: 1 stream(s) cannot be decoded" in text

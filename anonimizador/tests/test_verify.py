@@ -299,3 +299,23 @@ def test_raw_parts_add_up(monkeypatch):
     monkeypatch.setattr(verify, "read", lambda *_: reading)
     result = check_file(1, CorpusFile("x.pdf", "x.pdf"), [verify.Term(TERM)], Options(), None)
     assert result.hits[0].counts["raw"] == 2
+
+
+def test_a_temporary_directory_that_cannot_be_removed_is_an_unread_file(tmp_path, monkeypatch):
+    # Regression (Codex C0-10): cleanup errors were ignored, so renders left on disk
+    # went unreported.
+    def fail(path, *_, onexc=None, **__):
+        # As `shutil.rmtree` reports an error to its handler.
+        error = OSError(5, "Input/output error", "/private/Zuleo/tmp")
+        try:
+            raise error
+        except OSError:
+            if onexc is None:
+                raise
+            onexc(os.unlink, path, error)
+
+    monkeypatch.setattr(verify.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(verify.tempfile._shutil, "rmtree", fail)
+    file = CorpusFile(str(pdf(tmp_path / "a.pdf")), "a.pdf")
+    reading = verify.read(file, Options(use_ocr=False), None)
+    assert reading.errors == ["file: cannot read (Input/output error)"]

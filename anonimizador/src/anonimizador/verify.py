@@ -202,9 +202,10 @@ def collect(paths: list[str]) -> list[CorpusFile]:
 
 def read(file: CorpusFile, options: Options, pool: Executor) -> Reading:
     # The temporary directory is made and removed inside the handler too: its failure
-    # is an unread file, not a traceback with a path (Codex C0-10).
+    # is an unread file, not a traceback with a path, and renders left behind are not
+    # silent (Codex C0-10).
     try:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             if SUFFIXES.get(os.path.splitext(file.path)[1].lower()) == "pdf":
                 return read_pdf(
                     file.path,
