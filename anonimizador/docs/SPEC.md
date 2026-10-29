@@ -32,7 +32,10 @@ Count each term in six places: the file name, the metadata, the text layer, the 
 - Numbers are matched by their digits. A term with 5 digits or more is a number whatever its label, and digits up to 3 non-alphanumeric characters apart are one number (Grok G0-1, G0-2).
 - Every page and embedded image counts, and they are searched together, so a term split across a page break is found. Alternative readings of the same bytes (encodings) count an occurrence once (Grok G0-6).
 - A term found in the file but not on the page is flagged, because it is text under a drawn box.
-- Identifier patterns are counted as hints.
+- Identifier patterns are counted as hints, in the file name too (Grok G0-16), across page and line breaks (Grok G0-18).
+- Raw bytes include PDF strings, decoded from hex, octal escapes, and UTF-16, so a leftover non-ASCII name is found (Grok G0-14).
+- Hidden files and directories are searched; only AppleDouble files (`._name`) are left out (Grok G0-15).
+- Every embedded image is read except icons, under 32 pixels on both sides; a thin strip can hold a line of text (Grok G0-17).
 - A place that cannot be read is an error, never an empty place. This covers a failed or timed-out tool, an encrypted PDF, missing OCR language data, and pages that did not render. The file is reported `ERROR` with the place and the tool, never the path, and the run exits 2 (Grok G4-5).
 - The file name is the path relative to the directory searched, so directory names are searched too (Grok G4-6).
 - Directories are walked recursively, following symbolic links once per real directory. Every other relative path that reaches a directory is searched as a name of the files under it (Grok G0-7). A directory that cannot be listed, or a link that leads nowhere, is an error that stops the run, never a skipped place (Grok G0-3, G0-11). A file reached by several arguments is searched under every name they give it (Grok G0-13).

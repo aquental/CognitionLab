@@ -150,3 +150,36 @@ def test_a_short_name_left_only_in_raw_bytes_is_found(monkeypatch):
         for term, expected in (("Zuleo", [1]), ("Zulea", [])):
             result = check_file(1, file, [verify.Term(term)], Options(use_ocr=False), None)
             assert [hit.counts["raw"] for hit in result.hits] == expected, (data[:12], term)
+
+
+def test_hidden_entries_are_searched_and_appledouble_files_are_not(tmp_path: Path):
+    # Regression (Grok G0-15): hidden directories and files were skipped, so a clean
+    # file beside them was "ok".
+    root = tmp_path / "corpus"
+    pdf(root / "clean.pdf")
+    pdf(root / ".Zuleo" / "lab.pdf")
+    pdf(root / ".hidden.pdf")
+    (root / "._clean.pdf").write_bytes(b"\x00\x05\x16\x07")
+    names = [f.name for f in collect([str(root)])]
+    assert names == [".Zuleo/lab.pdf", ".hidden.pdf", "clean.pdf"]
+    (root / ".gone").symlink_to(tmp_path / "missing")
+    with pytest.raises(VerifyError, match="leads nowhere"):
+        collect([str(root)])
+
+
+def hints_of(monkeypatch, name: str, texts: dict[str, list[str]]) -> dict[str, int]:
+    reading = Reading()
+    reading.texts.update(texts)
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    return check_file(1, CorpusFile("x.pdf", name), [], Options(), None).hints
+
+
+def test_patterns_are_searched_in_names_and_across_pages(monkeypatch):
+    # Regression (Grok G0-16): a CPF in the file name alone gave no hint.
+    assert hints_of(monkeypatch, "123.456.789-09.pdf", {}) == {"cpf": 1}
+    assert hints_of(monkeypatch, "123.456.789-0.pdf", {}) == {}
+    # Regression (Grok G0-18): pages were searched one at a time, so a number split by
+    # a page break was no hint, and one per page counted once.
+    assert hints_of(monkeypatch, "x.pdf", {"ocr": ["CPF 123.456.789-", "09"]}) == {"cpf": 1}
+    two = {"ocr": ["CPF 123.456.789-09", "CPF 987.654.321-00"]}
+    assert hints_of(monkeypatch, "x.pdf", two) == {"cpf": 2}

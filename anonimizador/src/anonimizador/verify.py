@@ -25,6 +25,8 @@ from anonimizador.channels import (
 from anonimizador.terms import Term, count_patterns
 
 SUFFIXES = {".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image"}
+# macOS writes `._<name>` beside a file on volumes without extended attributes.
+APPLEDOUBLE = "._"
 
 
 class VerifyError(Exception):
@@ -111,7 +113,9 @@ def relative(path: str, top: str) -> str:
 
 
 def scan(top: str) -> list[CorpusFile]:
-    """The corpus files under `top`, hidden entries skipped. A directory that cannot be
+    """The corpus files under `top`, hidden ones included (Grok G0-15): only AppleDouble
+    files (`._name`), which hold another file's attributes and are not corpus files,
+    are left out. A directory that cannot be
     listed raises `OSError`, and symlinked directories are followed: a skipped
     directory could hide an identifying file behind a clean one (Grok G0-3). Each real
     directory is walked once, so a link loop ends; every other path that reaches it
@@ -126,14 +130,14 @@ def scan(top: str) -> list[CorpusFile]:
             dirs[:] = []
             continue
         first[real] = relative(root, top)
-        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-        for name in sorted(n for n in names if not n.startswith(".")):
+        dirs[:] = sorted(dirs)
+        for name in sorted(names):
             path = os.path.join(root, name)
             if not os.path.exists(path):
                 # os.walk lists a link it cannot follow as a file, whatever its name:
                 # what it should reach was never searched (Grok G0-11).
                 raise BrokenLinkError
-            if os.path.splitext(name)[1].lower() in SUFFIXES:
+            if not name.startswith(APPLEDOUBLE) and os.path.splitext(name)[1].lower() in SUFFIXES:
                 found.append((path, relative(path, top)))
     files = []
     for path, name in found:
@@ -158,10 +162,10 @@ def merge(known: CorpusFile | None, file: CorpusFile) -> CorpusFile:
 
 
 def collect(paths: list[str]) -> list[CorpusFile]:
-    """The PDF, PNG, and JPEG files named or found under directories (hidden entries
-    skipped), in path order. A file found under a directory is named by its path
-    relative to that directory, so a name in a subdirectory is searched too (Grok
-    G4-6); a file named directly is named by its file name."""
+    """The PDF, PNG, and JPEG files named or found under directories, in path order. A
+    file found under a directory is named by its path relative to that directory, so a
+    name in a subdirectory is searched too (Grok G4-6); a file named directly is named
+    by its file name."""
     files: dict[str, CorpusFile] = {}  # real path -> the file
     for position, path in enumerate(paths, start=1):
         if os.path.isdir(path):
@@ -227,7 +231,14 @@ def check_file(
                 counts[channel] = max((term.count(t) for t in texts[channel]), default=0)
         if any(counts.values()):
             hits.append(TermHit(number, counts))
-    hints = count_patterns([t for c in PATTERN_CHANNELS for t in texts[c]])
+    # Pages and images are searched together for patterns too (Grok G0-18).
+    hints = count_patterns(
+        [
+            t
+            for c in PATTERN_CHANNELS
+            for t in (["\n".join(texts[c])] if c in PARTS_CHANNELS else texts[c])
+        ]
+    )
     return FileResult(index, file.name, hits, hints, reading.errors)
 
 

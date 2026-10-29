@@ -14,16 +14,18 @@ import unicodedata
 from dataclasses import dataclass, field
 
 # Identifier patterns counted as hints. They are noisy (an exam date is a date), so
-# they inform the reviewer and fail a check only on request.
+# they inform the reviewer and fail a check only on request. A number may break after
+# a separator (`\s?` takes a line or page break), as OCR and page joins write it (Grok
+# G0-18).
 PATTERNS: dict[str, re.Pattern[str]] = {
     name: re.compile(pattern)
     for name, pattern in {
-        "cpf": r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)",
-        "cns": r"(?<!\d)[1-2789]\d{2} ?\d{4} ?\d{4} ?\d{4}(?!\d)",
-        "phone": r"(?<!\d)\(?\d{2}\)? ?9?\d{4}[- ]?\d{4}(?!\d)",
+        "cpf": r"(?<!\d)\d{3}\.?\s?\d{3}\.?\s?\d{3}-?\s?\d{2}(?!\d)",
+        "cns": r"(?<!\d)[1-2789]\d{2}\s?\d{4}\s?\d{4}\s?\d{4}(?!\d)",
+        "phone": r"(?<!\d)\(?\d{2}\)?\s?9?\d{4}[-\s]?\s?\d{4}(?!\d)",
         "email": r"[\w.+-]+@[\w-]+\.[\w.-]+",
-        "cep": r"(?<!\d)\d{5}-\d{3}(?!\d)",
-        "date": r"(?<!\d)\d{1,2}/\d{1,2}/\d{2,4}(?!\d)",
+        "cep": r"(?<!\d)\d{5}-\s?\d{3}(?!\d)",
+        "date": r"(?<!\d)\d{1,2}/\s?\d{1,2}/\s?\d{2,4}(?!\d)",
         "crm": r"\bcrm\b",
     }.items()
 }
