@@ -126,7 +126,7 @@ Each phase also passed an independent adversarial review loop by Grok and Codex,
 | Milestone 2 | Provider comparisons, retrieval metrics, and resource/cost reports | Implemented (synthetic corpus; OpenAI live run outstanding) |
 | Milestone 3 | Text-to-image retrieval and Portuguese query evaluation | Implemented (CLIP, SigLIP; synthetic corpus) |
 | Milestone 4 | Rank fusion and publication of reproducible comparisons | Implemented (RRF; [final report](reports/phase-4/comparison.md)) |
-| Owner corpus | Anonymized documents, frozen labels, fidelity sample | **Outstanding** |
+| Owner corpus | Anonymized documents, frozen labels, fidelity sample | **Outstanding** (guide and tools: [`TESTS.md`](TESTS.md)) |
 
 The current repository contains:
 

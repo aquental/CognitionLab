@@ -250,6 +250,8 @@ None for Phase 0.
 | `anonymization::filename_findings` also flags upper-case word sequences (with one-letter particles) and every free-form file name (anything beyond lower-case ASCII letters, digits, `-`, `_`, `.`) | Found by the real exams: none of the 12 real file names, mostly upper-case personal names, was flagged. A finding only asks the reviewer to look, so a conservative rule is safe. The blocking gate is unchanged: without a recorded review a source is refused |
 | Chunking rules `structure-aware-v1/r2` (`chunking::RULES_ID`, part of the chunking fingerprint): a table header that no row uses (a multi-column line without digits followed by text, a heading, a blank line, another header, or the end of the page) is kept as a paragraph | Found by the real exams: 24 such lines on 9 of the 12 documents were silently dropped from every chunk. The rules id enters the fingerprint, so revisions chunked by the old rules are not reused as "unchanged". The synthetic corpus has no such line: its chunks are unchanged, but every text revision id (and so every text record id) changed |
 | `pipeline::extract_pdf`: the per-page native/OCR selection as a public function, used by ingestion and by the real-exam tests | The tests exercise the same selection as ingestion without a manifest, and without bypassing the gate through `Pipeline::extract_source` |
+| Owner-requested corpus tools (2026-10-29). `draft-manifest` measures a corpus directory: checksums, pages with a usable text layer (same rule as ingestion), and kept images. It guesses `input_type`, writes no anonymization review, refuses flagged file names because the manifest is tracked, and never uses a flagged name as a `source_id`. `draft-labels` pools the top `--depth` results of every run for every frozen query, with anchors, asset checksums, and `label = "TODO"`, which does not parse until it is judged. `scripts/anonymization-verify.py` counts the owner's terms in the name, metadata, text layer, OCR, embedded images, and raw bytes, and prints counts only. `TESTS.md` documents anonymization, building the corpus, and what an automatic anonymizer would need | The owner corpus is the main outstanding input. The drafts remove the mechanical work (checksums, ids, anchors, asset checksums) without ever recording a review or a judgment. The verifier is a separate Python script that checks independently of the pipeline code. It catches the classic failed redaction, a box drawn over text that stays in the file |
+| `extract_pdf` reports each page through an `on_page` callback as it is extracted, and its error names the failing page (Grok G4-4) | A failed source must still show how far extraction got. The refactor in `b14c7d1` had moved page reports after full success |
 | BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
 
 ### Implementation
@@ -279,7 +281,13 @@ None for Phase 0.
   - the index size is that of the pinned revisions (G4-3).
 
   The integration test `the_cli_runs_combined_retrieval_over_real_text_and_image_runs` runs real MiniLM + CLIP through the CLI.
-- Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule).
+- Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule), `TESTS.md` (anonymization, owner corpus, automatic anonymizer design).
+- Corpus tools (owner request):
+  - `src/drafts.rs` with the `draft-manifest` and `draft-labels` CLI commands;
+  - `scripts/anonymization-verify.py`;
+  - `scripts/make-covered-name-pdf.py`, which writes `tests/fixtures/anonymization/covered-name.pdf`.
+
+  Tests: `tests/drafts.rs` (3), `drafts::tests` (5), and 2 integration tests.
 
 ### Acceptance criteria (PLAN Phase 4 exit)
 | Criterion | Evidence |
@@ -292,11 +300,11 @@ None for Phase 0.
 
 ### Validation (local, 2026-10-29)
 - fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
-- `cargo test`: 160 unit (incl. 9 fusion and 2 combined-config tests), 15 pipeline, 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
+- `cargo test`: 166 unit (incl. 9 fusion, 2 combined-config, and 5 draft tests), 16 pipeline (incl. the G4-4 regression), 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 drafts, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
 - Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
   - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
   - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
-- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **16 passed**, including the new real combined CLI chain. The OpenAI live test stays outstanding.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. The OpenAI live test stays outstanding.
 - `RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored` (local only, real exams): **4 passed**.
   - Every unreviewed exam is refused before any processing.
   - Every file name is flagged, and no finding reveals it.

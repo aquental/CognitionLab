@@ -33,7 +33,7 @@ for f in "" engine-embed-anything engine-fastembed engine-openai engine-embed-an
 done
 cargo test                                   # unit, pipeline, experiment, combined, BDD (milestone 4), runner self-test
 RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed \
-  --test integration -- --include-ignored    # real poppler/tesseract and real local models
+  --test integration -- --include-ignored    # real poppler/tesseract, real local models, the corpus tools
 ```
 
 Local only, when the owner's real sample exams are present in `tests/sample-exams/` (git-ignored; never committed or sent anywhere, see `CLAUDE.md`):
@@ -91,6 +91,9 @@ A combined result carries its fused RRF score and its rank and cosine score in e
 
 ## Running the owner corpus
 
-1. Place the anonymized files under `corpus/`, which git ignores except for the manifest. Write `corpus/manifest.toml` with checksums and the anonymization review of each source (filename, embedded metadata, text, pixels, reviewer, date).
-2. Run `$B anonymization-check --manifest corpus/manifest.toml` and `$B manifest --manifest corpus/manifest.toml`. Ineligible sources are refused before extraction.
-3. Freeze relevance labels for that corpus, in the shape of `config/evaluation/labels-synthetic-v4.toml`, and a fidelity sample, in the shape of `config/fidelity/sample-synthetic-v1.toml`. Then run the commands above with `--manifest corpus/manifest.toml --labels <labels>`.
+[`../TESTS.md`](../TESTS.md) is the full guide: how to anonymize real PDFs and images, check them with `scripts/anonymization-verify.py`, and build the evaluable corpus. In short:
+
+1. Put the anonymized files under `corpus/`, which git ignores except for the manifest. Draft the manifest with `$B draft-manifest --dir corpus --corpus-id <id> --out corpus/manifest.toml`. It holds checksums and measured input types, but no anonymization review.
+2. Record each source's review (filename, embedded metadata, text, pixels, reviewer, date). Then run `$B anonymization-check --manifest corpus/manifest.toml` and `$B manifest --manifest corpus/manifest.toml`. Ineligible sources are refused before extraction.
+3. Ingest pool runs, then draft the labels with `$B draft-labels --store <store> --corpus <id> --run <experiment>=<config> ...`. Judge every candidate, and write a fidelity sample in the shape of `config/fidelity/sample-synthetic-v1.toml`.
+4. Run the commands above with `--manifest corpus/manifest.toml --labels <labels> --fidelity <sample>`.

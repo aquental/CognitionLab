@@ -937,3 +937,133 @@ async fn the_cli_runs_combined_retrieval_over_real_text_and_image_runs() {
         md.contains("## Retrieval modes compared") && md.contains("| it-combined | combined |")
     );
 }
+
+/// Runs `scripts/anonymization-verify.py` and returns its exit code and stdout + stderr.
+#[expect(clippy::expect_used, reason = "test helper")]
+fn verify(terms: &Path, paths: &[&Path]) -> (Option<i32>, String) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("python3")
+        .current_dir(root)
+        .arg("scripts/anonymization-verify.py")
+        .arg("--terms")
+        .arg(terms)
+        .args(paths)
+        .output()
+        .expect("run the verifier");
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    (output.status.code(), text)
+}
+
+#[test]
+#[ignore = "requires RUN_INTEGRATION=1, python3, poppler + tesseract"]
+fn the_anonymization_verifier_counts_a_covered_name_without_printing_it() {
+    // The synthetic covered-name PDF keeps an invented name in its text layer and
+    // metadata under a drawn box, and shows an invented CPF.
+    require_integration();
+    let dir = tempfile::tempdir().expect("tmp");
+    let terms = dir.path().join("terms.txt");
+    std::fs::write(
+        &terms,
+        "# invented identifiers\nFulano Ficticio\n123.456.789-09\n",
+    )
+    .expect("terms");
+    let covered =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anonymization/covered-name.pdf");
+
+    let (code, out) = verify(&terms, &[&covered]);
+    assert_eq!(code, Some(1), "{out}");
+    // The name is in the text layer, the metadata, and the raw bytes, not on the page.
+    assert!(out.contains("term 1: metadata=1 text=1 raw=2\n"), "{out}");
+    assert!(
+        out.contains("hint: term 1 is in the file but not visible"),
+        "{out}"
+    );
+    // The CPF is visible: OCR finds it.
+    assert!(out.contains("term 2: text=1 ocr=1 raw=1\n"), "{out}");
+    assert!(!out.contains("hint: term 2"), "{out}");
+    // Counts only: no term, no match, no file name.
+    for secret in ["Fulano", "Ficticio", "123.456", "789", "covered-name"] {
+        assert!(!out.contains(secret), "the output reveals {secret}: {out}");
+    }
+
+    // The synthetic corpus holds neither identifier.
+    let (code, out) = verify(&terms, &[&corpus("")]);
+    assert_eq!(code, Some(0), "{out}");
+
+    // A terms file that git could commit is refused before any file is read.
+    let repo = tempfile::tempdir().expect("tmp");
+    let init = std::process::Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .arg(repo.path())
+        .status()
+        .expect("git init");
+    assert!(init.success());
+    let tracked = repo.path().join("terms.txt");
+    std::fs::write(&tracked, "Fulano Ficticio\n").expect("terms");
+    let (code, out) = verify(&tracked, &[&covered]);
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains("inside a git work tree"), "{out}");
+}
+
+#[test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler"]
+fn the_cli_drafts_the_synthetic_manifest_with_real_tools() {
+    require_integration();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let draft = |dir: &Path, extra: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"))
+            .current_dir(root)
+            .arg("draft-manifest")
+            .arg("--dir")
+            .arg(dir)
+            .args(["--corpus-id", "draft-check"])
+            .args(extra)
+            .output()
+            .expect("run draft-manifest")
+    };
+
+    // Real poppler measures the same input types as the reviewed manifest.
+    let output = draft(&corpus(""), &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let drafted: embeddings_fundamentals::corpus::Manifest =
+        toml::from_str(&String::from_utf8_lossy(&output.stdout)).expect("draft parses");
+    let committed = LoadedManifest::load(&corpus("manifest.toml")).expect("manifest");
+    let key = |s: &embeddings_fundamentals::corpus::SourceEntry| {
+        (
+            s.source_id.to_string(),
+            s.file.clone(),
+            s.checksum.to_string(),
+            s.input_type,
+        )
+    };
+    let mut expected: Vec<_> = committed.manifest.sources.iter().map(key).collect();
+    expected.sort_by(|a, b| a.1.cmp(&b.1));
+    let got: Vec<_> = drafted.sources.iter().map(key).collect();
+    assert_eq!(got, expected);
+    assert!(drafted.sources.iter().all(|s| s.anonymization.is_none()));
+
+    // A flagged file name is refused (the manifest is tracked) without being printed.
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::copy(
+        corpus("lab-searchable-001.pdf"),
+        dir.path().join("FULANO DE TAL.pdf"),
+    )
+    .expect("copy");
+    let output = draft(dir.path(), &[]);
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("sources 1 (in path order)"), "{stderr}");
+    assert!(!stderr.contains("FULANO"), "{stderr}");
+    assert!(output.stdout.is_empty());
+    let output = draft(dir.path(), &["--allow-flagged-names"]);
+    assert!(output.status.success());
+    let drafted: embeddings_fundamentals::corpus::Manifest =
+        toml::from_str(&String::from_utf8_lossy(&output.stdout)).expect("draft parses");
+    assert_eq!(drafted.sources[0].source_id.as_str(), "source-001");
+}

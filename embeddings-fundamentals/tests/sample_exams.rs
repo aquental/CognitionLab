@@ -183,12 +183,12 @@ async fn real_exams_extract_deterministically_and_chunk_within_the_invariants() 
     .expect("chunker");
     let (mut native_pages, mut ocr_pages, mut chunks_seen) = (0, 0, 0);
     for (i, path) in exams().iter().enumerate() {
-        let pages = extract_pdf(&text, &ocr, path, &config)
+        let pages = extract_pdf(&text, &ocr, path, &config, |_| {})
             .await
             .unwrap_or_else(|e| panic!("exam #{i}: extraction failed: {e:?}"));
         assert!(!pages.is_empty(), "exam #{i}: no page");
         // Reproducibility: a second extraction gives the same pages.
-        let again = extract_pdf(&text, &ocr, path, &config)
+        let again = extract_pdf(&text, &ocr, path, &config, |_| {})
             .await
             .expect("second extraction");
         for (p, (a, b)) in pages.iter().zip(&again).enumerate() {

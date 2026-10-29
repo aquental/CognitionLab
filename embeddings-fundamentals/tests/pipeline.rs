@@ -1,15 +1,17 @@
 //! Pipeline properties that the PRD scenarios observe only indirectly (always runs).
 
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::Arc;
 
 use embeddings_fundamentals::anonymization::image_findings;
 use embeddings_fundamentals::corpus::LoadedManifest;
-use embeddings_fundamentals::domain::{ExtractionMethod, Modality, SourceStatus};
+use embeddings_fundamentals::domain::{ExtractionMethod, FailureStage, Modality, SourceStatus};
 use embeddings_fundamentals::embedding::EmbeddingStrategy;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
 use embeddings_fundamentals::embedding::deterministic::Method;
 use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
+use embeddings_fundamentals::extraction::{ExtractionError, OcrEngine, PageText};
 use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
 use embeddings_fundamentals::storage::FsRecordStore;
 
@@ -871,4 +873,74 @@ async fn masked_pdf_images_are_stored_as_a_viewer_shows_them() {
             "{uri}: a hidden red pixel was revealed"
         );
     }
+}
+
+/// OCR that replays the fixtures but fails on one page, as a crashed or timed-out
+/// `tesseract` would.
+struct OcrFailingOn {
+    inner: FixtureExtractor,
+    page: u32,
+}
+
+impl OcrEngine for OcrFailingOn {
+    fn engine_id(&self) -> String {
+        self.inner.engine_id()
+    }
+
+    async fn ocr_page(&self, pdf: &Path, page: NonZeroU32) -> Result<PageText, ExtractionError> {
+        if page.get() == self.page {
+            return Err(ExtractionError::Tool {
+                tool: "tesseract",
+                reason: "timed out".to_owned(),
+            });
+        }
+        self.inner.ocr_page(pdf, page).await
+    }
+}
+
+#[tokio::test]
+async fn a_failed_source_keeps_the_pages_extracted_before_the_failure() {
+    // Review finding G4-4: a tool failure on page 2 must not erase page 1 from the
+    // source report, and the reason must name the failing page.
+    let mut manifest =
+        LoadedManifest::load(&fixtures().join("corpus/manifest.toml")).expect("manifest");
+    manifest
+        .manifest
+        .sources
+        .retain(|s| s.source_id.as_str() == "lab-scanned-002");
+    let extractor = FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures");
+    let ocr = OcrFailingOn {
+        inner: FixtureExtractor::from_dir(&fixtures().join("extraction")).expect("fixtures"),
+        page: 2,
+    };
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let pipeline = Pipeline {
+        text: &extractor,
+        ocr: &ocr,
+        images: &extractor,
+        sleeper: &NoSleep,
+        store: Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store")),
+        embedder: Arc::new(DeterministicEmbedder::builder().build().expect("adapter")),
+    };
+    let report = pipeline
+        .ingest(
+            &manifest,
+            &IngestSettings::new("ocr-fails".parse().expect("id")),
+        )
+        .await
+        .expect("run");
+    let source = &report.sources[0];
+    assert_eq!(source.status, SourceStatus::Failed);
+    assert_eq!(source.stage, Some(FailureStage::Extraction));
+    assert_eq!(
+        source.reason.as_deref(),
+        Some("page 2: tesseract failed: timed out")
+    );
+    assert_eq!(
+        source.pages.len(),
+        1,
+        "page 1 was extracted before the failure"
+    );
+    assert_eq!(source.pages[0].page, 1);
+    assert_eq!(source.pages[0].method, ExtractionMethod::Ocr);
 }

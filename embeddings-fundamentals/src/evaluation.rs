@@ -220,6 +220,16 @@ fn load_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Frozen<T>, E
     })
 }
 
+/// Loads a frozen query set on its own (for example to draft labels for it).
+///
+/// # Errors
+///
+/// Returns [`EvalError::Read`] or [`EvalError::Parse`] for an unreadable or invalid
+/// file.
+pub fn load_queries(path: &Path) -> Result<Frozen<QuerySet>, EvalError> {
+    load_toml(path)
+}
+
 /// A query set and its labels, loaded and cross-checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dataset {
@@ -594,7 +604,8 @@ pub fn evaluate(
     })
 }
 
-fn anchor_form(text: &str) -> String {
+/// The form anchors are compared in: NFC, whitespace collapsed, lower case.
+pub(crate) fn anchor_form(text: &str) -> String {
     text.nfc()
         .collect::<String>()
         .split_whitespace()

@@ -44,11 +44,12 @@ embeddings-fundamentals/
 ├── src/
 │   ├── lib.rs                  # Library crate root
 │   ├── main.rs                 # Thin binary entrypoint (CLI parse -> tracing -> ExitCode)
-│   ├── cli.rs                  # Subcommands: doctor, manifest, anonymization-check, validate, ingest, search, experiment, combine, report
+│   ├── cli.rs                  # Subcommands: doctor, manifest, anonymization-check, validate, ingest, search, experiment, combine, report, draft-manifest, draft-labels
 │   ├── ids.rs                  # Canonical-JSON SHA-256 hashing & validated ID newtypes
 │   ├── domain.rs               # Closed-set domain enums (Modality, EngineId, ExtractionMethod, etc.)
 │   ├── config.rs               # TOML schemas (deny_unknown_fields), fingerprints
 │   ├── corpus.rs               # Manifest loading, checksums, blocking anonymization gate
+│   ├── drafts.rs               # Owner-corpus drafts: manifest skeleton and pooled relevance-label skeleton
 │   ├── anonymization.rs        # Filename pattern checks, PDF info/XMP & EXIF inspection
 │   ├── assets.rs               # MetadataScrubber (decode, PDF mask, EXIF orient, flatten to RGB8 PNG)
 │   ├── extraction/             # TextExtractor, OcrEngine, ImageExtractor, poppler/tesseract & fixture replay
@@ -74,6 +75,8 @@ embeddings-fundamentals/
 │   ├── pipeline.rs             # Idempotency, retries, and snapshot property tests
 │   ├── experiment.rs           # Experiment evaluation & failure tests
 │   ├── combined.rs             # Combined retrieval & RRF tests
+│   ├── drafts.rs               # Manifest and label draft tests
+│   ├── sample_exams.rs         # Local-only property tests on the owner's real exams (RUN_SAMPLE_EXAMS=1)
 │   ├── evidence.rs             # Committed report & artifact verification tests
 │   ├── fixtures.rs             # Deterministic fixture generation checks
 │   ├── bdd/                    # Cucumber World and step definitions
@@ -83,7 +86,10 @@ embeddings-fundamentals/
 ├── scripts/
 │   ├── sync-features.py        # Generates tests/features/*.feature from spec/PRD.md for acceptance.toml
 │   ├── precompute-metrics.py   # Independently precomputes expected evaluation metrics
-│   └── review-package.sh       # Builds adversarial review packages
+│   ├── review-package.sh       # Builds adversarial review packages
+│   ├── anonymization-verify.py # Local verifier: counts identifiers left in corpus files (counts only)
+│   └── make-covered-name-pdf.py # Writes the synthetic covered-name fixture used to test the verifier
+├── TESTS.md                    # Anonymization guide, owner-corpus construction, automatic anonymizer design
 └── reports/                    # Progress log, phase comparison reports, spikes, and adversarial reviews
 ```
 
