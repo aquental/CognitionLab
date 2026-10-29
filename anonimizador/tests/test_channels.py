@@ -421,3 +421,19 @@ def test_an_email_split_by_a_move_is_a_hint_whatever_its_length():
     numbers = b"BT (123.456) Tj 9 0 Td (789-09) Tj 9 0 Td (12) Tj ET"
     views = pdf_string_views([numbers])
     assert count_patterns([], (), [views.drawn]) == {}
+
+
+def test_a_tj_adjustment_that_a_reader_shows_as_a_space_is_ambiguous():
+    # Regression (Grok G0-42): pdftotext splits words from about -100 (0.1 em), but only
+    # -200 or less was ambiguous, so a short name glued onto the next word.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    for adjustment in (b"-150", b"-100", b"-199", b"-50"):
+        array = b"BT /F1 12 Tf 72 700 Td [(Z) -2 (u) -2 (l) -2 (e) -2 (o) " + adjustment
+        array += b" (A) -2 (s) -2 (s) -2 (u) -2 (n) -2 (t) -2 (o)] TJ ET"
+        data = page + b"9 0 obj << >> stream\n" + zlib.compress(array) + b"endstream\n"
+        assert raw_count("Zuleo", data) == 1, adjustment
+        assert raw_count("Zulea", data) == 0, adjustment
+        assert raw_count("Assunto", data) == 1, adjustment
+    # Kerning inside a word stays a continuation: the word is whole in every reading.
+    kerned = b"BT [(Z) -2 (u) -30 (l) -2 (e) -49 (o)] TJ ET"
+    assert pdf_string_views([kerned]).split == "Zuleo"

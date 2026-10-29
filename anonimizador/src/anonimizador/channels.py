@@ -207,8 +207,10 @@ SAME_TEXT_OPS = frozenset(b"Tj TJ Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC
 # and the positions, which are not read, tell. It is ambiguous; no gap is a sure break
 # (Grok G0-25, G0-26, G0-29, G0-32, G0-37, G0-38, G0-39). So is a number at or below
 # this: in a TJ array (thousandths of an em, moving right) it may be a word space, and
-# elsewhere it is an operand, whose operator is ambiguous anyway.
-WORD_SPACE_ADJUSTMENT = -200
+# elsewhere it is an operand, whose operator is ambiguous anyway. `pdftotext -layout`
+# splits words from about -100 (0.1 em; -110 at 8 and 10 pt); -50 leaves a margin of
+# half, and smaller kerning inside a word stays a continuation (Grok G0-42).
+WORD_SPACE_ADJUSTMENT = -50
 # A gap longer than this is ambiguous without being tokenized (binary-sized gaps stay
 # fast).
 MAX_TEXT_GAP = 256
