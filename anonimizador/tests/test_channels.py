@@ -1,7 +1,7 @@
 import struct
 import zlib
 
-from anonimizador.channels import image_metadata, png_size, raw_texts
+from anonimizador.channels import image_metadata, png_size, raw_texts, unescape_literal, worth_ocr
 from anonimizador.terms import Term
 
 NAME = Term("Fulano Ficticio")
@@ -95,3 +95,35 @@ def test_jpeg_fill_bytes_and_standalone_markers_are_skipped():
         assert max(NAME.count(t) for t in image_metadata(jpeg)) == 1, fill
     restart = b"\xff\xd8\xff\xd0\xff" + app1 + b"\xff\xda"
     assert max(NAME.count(t) for t in image_metadata(restart)) == 1
+
+
+def test_pdf_hex_and_escaped_strings_are_decoded_in_raw_bytes():
+    # Regression (Grok G0-14): a name stored as a UTF-16 hex string or with an octal
+    # escape held none of its letters in the bytes, so a leftover one counted 0.
+    short = Term("Zuleo")
+
+    def count(data: bytes) -> int:
+        return max(short.count(t) for t in raw_texts(data))
+
+    assert count(b"<< /Author <FEFF005A0075006C0065006F> >>") == 1
+    assert count(b"<< /Author <FEFF 005A 0075 006C\n0065 006F> >>") == 1
+    assert count(b"<< /Author <FEFF005A0075006C00650061> >>") == 0
+    assert count(b"<< /Author (Zul\\351o) >>") == 1
+    assert count(b"<< /Author (\\376\\377\\000Z\\000u\\000l\\000e\\000o) >>") == 1
+    assert count(b"<< /Author (Zul\\351a) >>") == 0
+    stream = zlib.compress(b"BT <FEFF005A0075006C0065006F> Tj ET")
+    assert count(b"1 0 obj << >> stream\n" + stream + b"endstream\n") == 1
+
+
+def test_literal_escapes_follow_the_pdf_rules():
+    assert unescape_literal(rb"a\8b\(c\)\\d\101\0e\n") == b"a8b(c)\\dA\x00e\n"
+    assert unescape_literal(b"split\\\nline") == b"splitline"
+
+
+def test_a_thin_image_is_read_and_an_icon_is_not():
+    # Regression (Grok G0-17): both sides had to reach 32 pixels, so a strip with a
+    # line of text was never read.
+    assert worth_ocr((400, 20))
+    assert worth_ocr((20, 400))
+    assert not worth_ocr((16, 16))
+    assert not worth_ocr((31, 31))

@@ -23,8 +23,11 @@ CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
 # occurrence counts and a term split across a page break is found (Grok G0-6).
 PARTS_CHANNELS = ("ocr", "images")
 # Channels whose text a document shows or declares (searched for patterns).
-PATTERN_CHANNELS = ("text", "ocr", "images", "metadata")
-# Images smaller than this on either side are icons or masks, not readable text.
+# The file name too: an identifier can be the name of the file (Grok G0-16).
+PATTERN_CHANNELS = ("name", "text", "ocr", "images", "metadata")
+# Images smaller than this on both sides are icons, not readable text. A thin strip
+# (a header bar, a label) can hold a line of text, so one long side is enough (Grok
+# G0-17).
 MIN_OCR_SIDE = 32
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -82,6 +85,10 @@ class Reading:
             yield
         except ToolError as e:
             self.errors.append(f"{name}: {e}")
+
+
+def worth_ocr(size: tuple[int, int]) -> bool:
+    return max(size) >= MIN_OCR_SIDE
 
 
 def png_size(path: str) -> tuple[int, int]:
@@ -168,9 +175,57 @@ def decode_both(blobs: list[bytes]) -> list[str]:
     return texts
 
 
+PDF_HEX_STRING = re.compile(rb"<([0-9A-Fa-f\s]{4,})>")
+PDF_LITERAL_STRING = re.compile(rb"\(((?:\\.|[^\\()])*)\)", re.DOTALL)
+PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
+
+
+def unescape_literal(body: bytes) -> bytes:
+    """The bytes of a PDF literal string: octal (`\\347`) and character escapes
+    resolved, escaped line breaks removed."""
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        escape = match.group(1)
+        if escape[:1] in b"01234567":
+            return bytes([int(escape, 8) & 0xFF])
+        if escape[:1] in b"\r\n":
+            return b""
+        return PDF_ESCAPES.get(escape, escape)
+
+    return re.sub(rb"\\([0-7]{1,3}|\r\n|.)", replace, body, flags=re.DOTALL)
+
+
+def hex_string(body: bytes) -> bytes:
+    """The bytes of a PDF hex string; a missing final digit is 0, as the format says."""
+    digits = re.sub(rb"\s", b"", body).decode("ascii")
+    return bytes.fromhex(digits + "0" * (len(digits) % 2))
+
+
+def decode_pdf_string(raw: bytes) -> str:
+    """A PDF text string: UTF-16 or UTF-8 after a byte order mark, PDFDocEncoding
+    (read as Latin-1) otherwise."""
+    if raw.startswith(b"\xfe\xff"):
+        return raw[2:].decode("utf-16-be", "ignore")
+    if raw.startswith(b"\xff\xfe"):
+        return raw[2:].decode("utf-16-le", "ignore")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", "ignore")
+    return raw.decode("latin-1")
+
+
+def pdf_strings(blob: bytes) -> str:
+    """Every PDF string in `blob`, decoded, one per line. A name stored as a hex string
+    (`<FEFF005A…>`) or with octal escapes (`(Jo\\343o)`), the usual forms for a non-ASCII
+    name, holds none of its letters in the bytes (Grok G0-14)."""
+    strings = [hex_string(m) for m in PDF_HEX_STRING.findall(blob)]
+    strings += [unescape_literal(m) for m in PDF_LITERAL_STRING.findall(blob)]
+    return "\n".join(decode_pdf_string(s) for s in strings)
+
+
 def raw_texts(data: bytes) -> list[str]:
     """The file bytes and every zlib stream in it, decoded the ways text is stored:
-    leftover incremental updates, uncompressed content streams, XMP packets, PNG text."""
+    leftover incremental updates, uncompressed content streams, XMP packets, PNG text,
+    and PDF strings (hex and escaped literals)."""
     blobs = [data]
     for match in re.finditer(rb"stream\r?\n", data):
         start = match.end()
@@ -184,6 +239,7 @@ def raw_texts(data: bytes) -> list[str]:
     texts.extend(
         blob.decode("utf-16-be", "ignore") for blob in blobs if blob.count(b"\x00") > len(blob) // 4
     )
+    texts.append("\n".join(pdf_strings(blob) for blob in blobs))
     return texts
 
 
@@ -247,7 +303,7 @@ def read_pdf(
             images = sorted(
                 os.path.join(tmp, p)
                 for p in os.listdir(tmp)
-                if p.startswith("img") and min(png_size(os.path.join(tmp, p))) >= MIN_OCR_SIDE
+                if p.startswith("img") and worth_ocr(png_size(os.path.join(tmp, p)))
             )
             texts["images"] = ocr_all(images, lang, timeout, pool)
     return reading

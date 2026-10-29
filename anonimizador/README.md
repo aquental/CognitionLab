@@ -39,12 +39,12 @@ The verifier searches six places in each PDF, PNG, or JPEG:
 
 | Place | What is read |
 |---|---|
-| `name` | The file name |
+| `name` | The file name, with every directory of its path |
 | `metadata` | The PDF information dictionary and XMP (`pdfinfo`), and image EXIF, XMP, IPTC, PNG text, and comments |
 | `text` | The PDF text layer (`pdftotext`) |
 | `ocr` | What the rendered pages show (`pdftoppm` + `tesseract`), or what an image file shows |
-| `images` | What each image embedded in a PDF shows (`pdfimages` + `tesseract`) |
-| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text. Terms shorter than 6 letters are not searched here, because binary data is full of short letter runs. |
+| `images` | What each image embedded in a PDF shows (`pdfimages` + `tesseract`); only icons, under 32 pixels on both sides, are skipped |
+| `raw` | The file bytes and every compressed stream: old incremental updates, content streams, XMP packets, and PNG text, with PDF strings decoded (hex, octal escapes, UTF-16). Terms shorter than 4 letters are not searched here, because binary data is full of short letter runs. |
 
 ```text
 anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)
@@ -57,12 +57,12 @@ anonimizador verify: 2 file(s), 2 term(s), OCR at 300 dpi (por+eng)
 ```
 
 How to read the report:
-- **Directories** are searched recursively, following symbolic links (each real directory once; every other path that reaches it, from any argument, is searched as a name too). A directory that cannot be listed, or a link that leads nowhere, stops the run with exit 2, because a skipped place proves nothing.
+- **Directories** are searched recursively, following symbolic links (each real directory once; every other path that reaches it, from any argument, is searched as a name too). A directory that cannot be listed, or a link that leads nowhere, stops the run with exit 2, because a skipped place proves nothing. Hidden files and directories are searched too; only macOS AppleDouble files (`._name`) are left out.
 - **Files** are named by position. Pass `--show-names` to print their names as the corpus records them: the path relative to the directory searched, directories included. Directory names are searched too, because a manifest records the whole relative path.
 - **Terms** are named by their position among the terms in the file, so `term 1` is the first term listed.
 - **Matching** ignores case and accents. Long terms are matched without spaces or punctuation, so OCR spacing errors and line breaks do not hide them. Numbers are matched by their digits: `123.456.789-09`, `12345678909`, and `CPF 123.456.789-09` are the same term. Any term with 5 digits or more is matched by its digits, and digits up to 3 characters apart (spaces, punctuation, parentheses, line breaks) are one number, so `(11) 98765-4321` and a number broken across lines are found. Every page and embedded image counts, and a term split across a page break is found. UTF-16 metadata (EXIF, Windows tags) is decoded, so a short name stored in it is found. Raw bytes are searched for terms of 4 letters or more; shorter terms match binary data by chance, so list a patient's full name, not only a 3-letter first name.
 - **The hint** marks the classic failed redaction: a box drawn over text that is still in the file.
-- **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints. They fail the check only with `--strict-patterns`.
+- **Pattern counts** (CPF, CNS, phone, e-mail, CEP, date, CRM) are hints, searched in the file name too, and across page breaks. They fail the check only with `--strict-patterns`.
 - **Safety:** the verifier refuses a terms file that git could commit. The terms file must be UTF-8 text.
 
 - **ERROR** marks a file in which a place could not be read: a tool failed or timed out, a PDF is encrypted, or pages did not render. The `unreadable:` lines name the place and the tool, never the file. An unread place proves nothing, so such a file is never reported `ok`.

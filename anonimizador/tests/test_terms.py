@@ -102,3 +102,10 @@ def test_terms_of_four_letters_or_more_are_searched_in_raw_bytes():
     assert Term("Rosa").searchable_in_binary
     # Three letters match binary data by chance (see RAW_MIN_LENGTH).
     assert not Term("Ana").searchable_in_binary
+
+
+def test_patterns_allow_a_break_after_a_separator():
+    # Regression (Grok G0-18): a number broken by a line or page break was no hint.
+    assert count_patterns(["CPF 123.456.789-\n09"]) == {"cpf": 1}
+    assert count_patterns(["CEP 01310-\n100"]) == {"cep": 1}
+    assert count_patterns(["CPF 123.456.789-\n0"]) == {}

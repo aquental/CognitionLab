@@ -218,3 +218,30 @@ def test_a_nonpositive_number_is_a_usage_error(option, value, outside_repo, caps
     err = capsys.readouterr().err
     assert f"argument {option}: must be a positive whole number" in err
     assert "Traceback" not in err
+
+
+@requires_tools
+def test_a_leftover_hex_string_is_found_in_raw_bytes(outside_repo, capsys):
+    # Regression (Grok G0-14), end to end: an object no trailer references, as an
+    # incremental update leaves it, holding a UTF-16 hex author.
+    old = b"9 0 obj << /Author <FEFF005A0075006C0065006F> >> endobj\n"
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b"") + old)
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out
+    assert "Zuleo" not in out and "FEFF" not in out
+
+
+@requires_tools
+def test_strict_patterns_fail_on_a_pattern_in_the_name(outside_repo, capsys):
+    # Regression (Grok G0-16), end to end.
+    pdf = outside_repo / "123.456.789-09.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b""))
+    assert main(["verify", "--no-ocr", "--strict-patterns", str(pdf)]) == EXIT_FOUND
+    out = capsys.readouterr().out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "123" not in out.replace("[1]", "")
