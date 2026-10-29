@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 
 from anonimizador import __version__
 from anonimizador.channels import ToolError, missing_languages
@@ -17,16 +18,25 @@ from anonimizador.verify import Options, VerifyError, collect, missing_tools, re
 EXIT_OK, EXIT_FOUND, EXIT_USAGE = 0, 1, 2
 
 
-def positive_int(value: str) -> int:
-    """An argument that must be a whole number above zero: argparse reports anything
-    else as a usage error (exit 2), never as a traceback (Grok G0-9)."""
-    try:
-        number = int(value)
-    except ValueError:
-        number = 0
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be a positive whole number")
-    return number
+def bounded_int(maximum: int) -> Callable[[str], int]:
+    """An argument that must be a whole number from 1 to `maximum`: argparse reports
+    anything else as a usage error (exit 2), never as a traceback (Grok G0-9, G0-31; a
+    huge timeout overflowed in `subprocess`)."""
+
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError:
+            number = 0
+        if not 1 <= number <= maximum:
+            raise argparse.ArgumentTypeError(f"must be a whole number from 1 to {maximum}")
+        return number
+
+    return parse
+
+
+# One day per tool run; 2400 dpi is beyond any scan.
+MAX_TIMEOUT, MAX_DPI = 86_400, 2_400
 
 
 def parser() -> argparse.ArgumentParser:
@@ -50,11 +60,11 @@ def parser() -> argparse.ArgumentParser:
         help="file of identifiers to look for, one per line (keep it outside the repository)",
     )
     v.add_argument("--lang", default="por+eng", help="tesseract languages")
-    v.add_argument("--dpi", type=positive_int, default=300, help="page render resolution")
+    v.add_argument("--dpi", type=bounded_int(MAX_DPI), default=300, help="page render resolution")
     v.add_argument("--no-ocr", action="store_true", help="skip rendering and OCR")
     v.add_argument(
         "--timeout",
-        type=positive_int,
+        type=bounded_int(MAX_TIMEOUT),
         default=600,
         help="seconds each tool run may take before its channel is reported unreadable",
     )

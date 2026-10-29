@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from concurrent.futures import Executor
 from dataclasses import dataclass
 
+from anonimizador.terms import COMPACT_MIN
+
 # The places searched, in report order.
 CHANNELS = ("name", "metadata", "text", "ocr", "images", "raw")
 # Channels whose texts are separate parts of the file (pages, embedded images), not
@@ -232,14 +234,20 @@ def hex_string(body: bytes) -> bytes:
 
 
 def decode_pdf_string(raw: bytes) -> str:
-    """A PDF text string: UTF-16 or UTF-8 after a byte order mark, PDFDocEncoding
-    (read as Latin-1) otherwise."""
+    """A PDF text string: UTF-16 or UTF-8 after a byte order mark; UTF-16 when every
+    other byte is NUL, as two-byte (Identity-H) content strings store characters below
+    256 without a mark (Grok G0-30); PDFDocEncoding (read as Latin-1) otherwise."""
     if raw.startswith(b"\xfe\xff"):
         return raw[2:].decode("utf-16-be", "ignore")
     if raw.startswith(b"\xff\xfe"):
         return raw[2:].decode("utf-16-le", "ignore")
     if raw.startswith(b"\xef\xbb\xbf"):
         return raw[3:].decode("utf-8", "ignore")
+    if len(raw) >= 2 and len(raw) % 2 == 0:
+        if not any(raw[0::2]) and any(raw[1::2]):
+            return raw.decode("utf-16-be", "ignore")
+        if not any(raw[1::2]) and any(raw[0::2]):
+            return raw.decode("utf-16-le", "ignore")
     return raw.decode("latin-1")
 
 
@@ -278,15 +286,25 @@ class DrawState:
     baseline: float | None = None
 
 
-def gap_break(gap: bytes, state: DrawState, split: bool) -> tuple[str, bytes | None]:
-    """How the text before `gap` and after it are joined: "" for one word, " " for a word
-    space (a large TJ adjustment), "\\n" for another line or another drawing. Also the
-    gap's first operator. With `split`, every move (`Td`, `TD`, `Tm`) is a break: without
-    the fonts' widths, a horizontal move can be glyph positioning or a word space."""
+# Marks a boundary that only the fonts' widths could settle: a horizontal move.
+AMBIGUOUS = "\x1f"
+# Pieces separated by ambiguous boundaries. Possessive, and only from the start of a
+# word, so a long word with no mark is tried once (no quadratic backtracking).
+AMBIGUOUS_RUN = re.compile(rf"(?<![^\W_])[^\W_]++(?:{AMBIGUOUS}[^\W_]++)+")
+# The strongest joint wins: another line, then a word space, then a horizontal move.
+JOINT_STRENGTH = ("\n", " ", AMBIGUOUS, "")
+
+
+def gap_break(gap: bytes, state: DrawState) -> tuple[str, bytes | None]:
+    """How the text before `gap` and after it are joined: "" for one word, `AMBIGUOUS`
+    for a horizontal move (`Td`, `TD`, a `Tm` on the same baseline), which is glyph
+    positioning or a word space depending on the fonts' widths, " " for a word space (a
+    large TJ adjustment), "\\n" for another line or another drawing. Also the gap's
+    first operator."""
     if len(gap) > MAX_TEXT_GAP:
         state.depth, state.baseline = 0, None
         return "\n", None
-    joint, numbers, first_op = "", [], None
+    joints, numbers, first_op = {""}, [], None
     for token in GAP_TOKEN.finditer(gap):
         kind, value = token.lastgroup, token.group()
         if kind == "open":
@@ -297,52 +315,51 @@ def gap_break(gap: bytes, state: DrawState, split: bool) -> tuple[str, bytes | N
             number = float(value)
             numbers.append(number)
             if state.depth and number <= WORD_SPACE_ADJUSTMENT:
-                joint = joint or " "
+                joints.add(" ")
         elif kind == "op":
             first_op = first_op or value
             if value in (b"Td", b"TD"):
-                moved = any(numbers[-2:]) if split else len(numbers) >= 2 and numbers[-1] != 0
+                if len(numbers) >= 2 and numbers[-1] != 0:
+                    joints.add("\n")
+                elif len(numbers) >= 2 and numbers[-2] != 0:
+                    joints.add(AMBIGUOUS)
             elif value == b"Tm":
-                moved = split or len(numbers) < 6 or numbers[-1] != state.baseline
+                same_line = len(numbers) >= 6 and numbers[-1] == state.baseline
+                joints.add(AMBIGUOUS if same_line else "\n")
                 if len(numbers) >= 6:
                     state.baseline = numbers[-1]
-            else:
+            elif value not in SAME_TEXT_OPS and value not in NEXT_LINE_SHOW_OPS:
                 # `'` and `"` show the string before them on a new line: the break goes
                 # before that string (see `drawn_text`), and the text after it continues
                 # the line (Grok G0-27).
-                moved = value not in SAME_TEXT_OPS and value not in NEXT_LINE_SHOW_OPS
+                joints.add("\n")
             if value == b"BT":
                 state.baseline = None
-            if moved:
-                joint = "\n"
             numbers = []
         elif kind == "other":
-            joint = "\n"
-    return joint, first_op
+            joints.add("\n")
+    return next(j for j in JOINT_STRENGTH if j in joints), first_op
 
 
-def drawn_text(blob: bytes, spans: list[PdfString], split: bool = False) -> str:
+def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
     """The strings of `blob` as drawn: the pieces of one word joined, word spaces and
-    line moves kept. Content streams often draw a word glyph by glyph (`[(Z) -2 (u)]
-    TJ`), and a short term must be a whole word (Grok G0-19), but a word space is often
-    only a large TJ adjustment or a move, which must stay a break (Grok G0-22). Text
-    state and color operators stay inside a word (Grok G0-24); a string shown with `'`
-    or `"` starts a line. Line breaks inside a string are dropped.
-
-    A horizontal move is read as part of the word, or, with `split`, as a word break:
-    which one it is depends on glyph widths, so both readings are searched, and an
-    ambiguous boundary can only add a match, never hide one (Grok G0-25, G0-26)."""
+    line moves kept, horizontal moves marked `AMBIGUOUS`. Content streams often draw a
+    word glyph by glyph (`[(Z) -2 (u)] TJ`), and a short term must be a whole word (Grok
+    G0-19), but a word space is often only a large TJ adjustment or a move, which must
+    stay a break (Grok G0-22). Text state and color operators stay inside a word (Grok
+    G0-24); a string shown with `'` or `"` starts a line. Line breaks inside a string
+    are dropped."""
     state = DrawState()
     joints = []
     starts = [0, *(span.end for span in spans)]
     for index, span in enumerate(spans):
-        joint, first_op = gap_break(blob[starts[index] : span.start], state, split)
+        joint, first_op = gap_break(blob[starts[index] : span.start], state)
         if index and first_op in NEXT_LINE_SHOW_OPS:
             joints[index - 1] = "\n"
         joints.append(joint if index else "")
     if spans:
         tail = blob[spans[-1].end : spans[-1].end + MAX_TEXT_GAP]
-        _, first_op = gap_break(tail, dataclasses.replace(state), split)
+        _, first_op = gap_break(tail, dataclasses.replace(state))
         if first_op in NEXT_LINE_SHOW_OPS:
             joints[-1] = "\n"
     return "".join(
@@ -351,16 +368,38 @@ def drawn_text(blob: bytes, spans: list[PdfString], split: bool = False) -> str:
     )
 
 
+def mixed_readings(marked: str) -> str:
+    """Every short word that ambiguous boundaries could make, one per line: in each run
+    of pieces between ambiguous boundaries, the pieces from any one to any later one,
+    up to the length of a short term. A word whose own pieces are placed one by one,
+    next to a word placed after another move, is whole in one of them (Grok G0-29).
+    Longer terms need no word boundary: they match without separators."""
+    readings = []
+    for run in AMBIGUOUS_RUN.finditer(marked):
+        pieces = run.group().split(AMBIGUOUS)
+        for first in range(len(pieces)):
+            length = len(pieces[first])
+            for last in range(first + 1, len(pieces)):
+                length += len(pieces[last])
+                if length >= COMPACT_MIN:
+                    break
+                readings.append("".join(pieces[first : last + 1]))
+    return "\n".join(readings)
+
+
 @dataclass(frozen=True)
 class PdfStringViews:
-    """The PDF strings of some bytes, read four ways."""
+    """The PDF strings of some bytes, read five ways."""
 
     # One string per line, and as drawn: both also searched for patterns (Grok G0-21,
     # G0-23).
     lines: str
     drawn: str
-    # As drawn, with every move a word break.
+    # A horizontal move read as a word break, and the short words a mix of joins and
+    # breaks makes: an ambiguous boundary can add a match, never hide one (Grok G0-25,
+    # G0-26, G0-29).
     split: str
+    mixed: str
     # Innermost literals only, robust to a false "(" in binary data.
     inner: str
 
@@ -369,16 +408,20 @@ def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
     """Every PDF string in `blobs`, decoded. A name stored as a hex string
     (`<FEFF005A…>`) or with octal escapes (`(Jo\\343o)`), the usual forms for a non-ASCII
     name, holds none of its letters in the bytes (Grok G0-14)."""
-    lines, joined, split, inner = [], [], [], []
+    lines, drawn, split, mixed, inner = [], [], [], [], []
     for blob in blobs:
         spans = pdf_string_spans(blob)
         lines.extend(decode_pdf_string(span.value) for span in spans)
-        joined.append(drawn_text(blob, spans))
-        split.append(drawn_text(blob, spans, split=True))
+        marked = drawn_text(blob, spans)
+        drawn.append(marked.replace(AMBIGUOUS, ""))
+        split.append(marked.replace(AMBIGUOUS, "\n"))
+        mixed.append(mixed_readings(marked))
         inner.extend(
             decode_pdf_string(unescape_literal(m)) for m in PDF_INNER_LITERAL.findall(blob)
         )
-    return PdfStringViews("\n".join(lines), "\n".join(joined), "\n".join(split), "\n".join(inner))
+    return PdfStringViews(
+        "\n".join(lines), "\n".join(drawn), "\n".join(split), "\n".join(mixed), "\n".join(inner)
+    )
 
 
 def raw_blobs(data: bytes) -> list[bytes]:
@@ -404,7 +447,7 @@ def raw_readings(data: bytes) -> tuple[list[str], list[str]]:
         blob.decode("utf-16-be", "ignore") for blob in blobs if blob.count(b"\x00") > len(blob) // 4
     )
     strings = pdf_string_views(blobs)
-    texts.extend((strings.lines, strings.drawn, strings.split, strings.inner))
+    texts.extend((strings.lines, strings.drawn, strings.split, strings.mixed, strings.inner))
     return texts, [strings.lines, strings.drawn]
 
 

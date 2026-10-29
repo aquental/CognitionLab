@@ -206,17 +206,17 @@ def test_an_unlisted_directory_fails_the_run(terms, outside_repo, capsys):
 
 
 @pytest.mark.parametrize("option", ["--timeout", "--dpi"])
-@pytest.mark.parametrize("value", ["-1", "0", "ten"])
+@pytest.mark.parametrize("value", ["-1", "0", "ten", "2147483648"])
 def test_a_nonpositive_number_is_a_usage_error(option, value, outside_repo, capsys):
-    # Regression (Grok G0-9): a negative timeout raised ValueError in subprocess: a
-    # traceback with exit 1 ("found").
+    # Regression (Grok G0-9, G0-31): a negative timeout raised ValueError in subprocess,
+    # and a huge one OverflowError: a traceback with exit 1 ("found").
     pdf = outside_repo / "a.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
     with pytest.raises(SystemExit) as exit_:
         main(["verify", "--no-ocr", option, value, str(pdf)])
     assert exit_.value.code == EXIT_USAGE
     err = capsys.readouterr().err
-    assert f"argument {option}: must be a positive whole number" in err
+    assert f"argument {option}: must be a whole number from 1 to" in err
     assert "Traceback" not in err
 
 

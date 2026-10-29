@@ -3,7 +3,9 @@ import time
 import zlib
 
 from anonimizador.channels import (
+    AMBIGUOUS,
     image_metadata,
+    mixed_readings,
     pdf_string_views,
     png_size,
     raw_texts,
@@ -267,3 +269,52 @@ def test_a_line_shown_with_a_quote_operator_continues_after_it():
     ):
         assert count("Zuleo", data) == 1, data
         assert count("Zulea", data) == 0, data
+
+
+def test_a_short_word_placed_piece_by_piece_beside_another_word_is_found():
+    # Regression (Grok G0-29): each horizontal move was read the same way, so a word
+    # whose pieces are positioned one by one, next to a word placed after another move,
+    # was whole in no reading.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    def at(x: int, text: bytes) -> bytes:
+        return b"1 0 0 1 %d 700 Tm %s Tj " % (x, text)
+
+    stream = b"BT " + at(72, b"(Zu)") + at(86, b"(leo)") + at(200, b"(Assunto)") + b"ET"
+    assert count("Zuleo", stream) == 1
+    assert count("Zulea", stream) == 0
+    assert count("Assunto", stream) == 1
+    compressed = b"1 0 obj << >> stream\n" + zlib.compress(stream) + b"endstream\n"
+    assert count("Zuleo", compressed) == 1
+    alone = b"BT " + at(72, b"(Zu)") + at(86, b"(leo)") + b"ET"
+    assert count("Zuleo", alone) == 1
+    td = b"BT 72 700 Td (Z) Tj 7 0 Td (u) Tj 7 0 Td (l) Tj 7 0 Td (e) Tj 7 0 Td (o) Tj"
+    assert count("Zuleo", td + b" 30 0 Td (Assunto) Tj ET") == 1
+
+
+def test_a_long_word_without_ambiguous_marks_is_fast_to_read():
+    # Found while fixing Grok G0-29: the run pattern backtracked over every start and
+    # length of a long word with no mark.
+    started = time.perf_counter()
+    assert mixed_readings("a" * 30_000 + " Zu" + AMBIGUOUS + "leo") == "Zuleo"
+    assert time.perf_counter() - started < 1
+
+
+def test_two_byte_strings_without_a_mark_are_read_as_utf16():
+    # Regression (Grok G0-30): Identity-H content strings hold UTF-16 code units with no
+    # byte order mark; read as Latin-1 they had a NUL between letters.
+    def count(term: str, data: bytes) -> int:
+        return max(Term(term).count(t) for t in raw_texts(data))
+
+    for data in (
+        b"BT <005A0075006C0065006F> Tj ET",
+        b"BT [<005A> -2 <0075> -2 <006C> -2 <0065> -2 <006F>] TJ ET",
+        b"BT (\\000Z\\000u\\000l\\000e\\000o) Tj ET",
+        b"BT <FEFF005A0075006C0065006F> Tj ET",
+    ):
+        assert count("Zuleo", data) == 1, data
+        assert count("Zulea", data) == 0, data
+    hexed = "123.456.789-09".encode("utf-16-be").hex().encode()
+    views = pdf_string_views([b"BT <" + hexed + b"> Tj ET"])
+    assert count_patterns([views.lines, views.drawn]) == {"cpf": 1}
