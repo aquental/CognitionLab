@@ -50,7 +50,7 @@ The owner's real exams, with patient names in file names and content, are in `..
 ## Adversarial review
 
 Each stage of `docs/PLAN.md` goes through the same review loop as `embeddings-fundamentals`:
-1. Grok, then Codex, then Antigravity (`agy`), one at a time and never in parallel. In `embeddings-fundamentals`, agy is told to use the `rust-dev` plugin. For this Python project the owner has not named a plugin yet: ask before assuming one.
+1. Grok, then Codex, then Antigravity (`agy`), one at a time and never in parallel. Tell agy that the code is **Python** and that it must judge it by **Python best practices and idiomatic Python** (owner, 2026-10-29). Do not ask it for the `rust-dev` plugin, which `embeddings-fundamentals` uses.
 2. Fix every valid finding with a regression test, or refute it with evidence.
 3. Repeat until no reviewer has a valid finding.
 

@@ -16,5 +16,4 @@ Every stage ends the same way:
 ## Decisions still open
 
 - **PDF library.** True text removal needs a PDF library with redaction. Compare the candidates' licenses before stage 2; some are AGPL.
-- **Antigravity plugin.** In `embeddings-fundamentals`, agy uses the `rust-dev` plugin. The owner has not named one for Python yet.
 - **Date policy default.** The choice is between shifting and removing (R6).
