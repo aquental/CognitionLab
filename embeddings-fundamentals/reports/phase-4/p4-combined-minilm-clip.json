@@ -61,7 +61,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0e579a13fe78e66d",
+            "record_id": "43e98753dafbe4cf",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-1",
             "modality": "text",
@@ -105,7 +105,7 @@
           },
           {
             "rank": 3,
-            "record_id": "3e0e4de3e724505d",
+            "record_id": "448d902c039ad687",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-1",
             "modality": "text",
@@ -139,7 +139,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "1cfce4d064570641",
+            "record_id": "3220d8c9b123f12d",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-0",
             "modality": "text",
@@ -239,7 +239,7 @@
           },
           {
             "rank": 2,
-            "record_id": "dcdfd8608965bd16",
+            "record_id": "a30081a082fb9cf3",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-1",
             "modality": "text",
@@ -295,9 +295,9 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "8254bae315b9efa9",
-            "source_id": "lab-scanned-002",
-            "chunk_id": "lab-scanned-002-p2-text-2",
+            "record_id": "77779a9b0d2cf167",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-2",
             "modality": "text",
             "page_number": 2,
             "asset_uri": null,
@@ -305,7 +305,7 @@
             "score": 0.016393442,
             "label": 2,
             "labeled": true,
-            "note": "Total cholesterol row recovered by OCR",
+            "note": "Total cholesterol row",
             "fusion": {
               "fused_score": 0.01639344262295082,
               "text": {
@@ -373,28 +373,6 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
-            "source_id": "lab-searchable-001",
-            "chunk_id": "lab-searchable-001-p1-text-4",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
-            "score": 0.016393442,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.35038444
-              },
-              "image": null
-            }
-          },
-          {
-            "rank": 2,
             "record_id": "73644c22cdf2d1b1",
             "source_id": "chest-001",
             "chunk_id": "chest-001-p1-image-0",
@@ -416,8 +394,30 @@
             }
           },
           {
+            "rank": 2,
+            "record_id": "b2fe222366530536",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.35038444
+              },
+              "image": null
+            }
+          },
+          {
             "rank": 3,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -451,6 +451,28 @@
         "results": [
           {
             "rank": 1,
+            "record_id": "0a6bf11640a15d01",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-2",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematócrito | 40,1 | % | 36,0–46,0",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.55590934
+              },
+              "image": null
+            }
+          },
+          {
+            "rank": 2,
             "record_id": "550af807074753e2",
             "source_id": "abd-us-001",
             "chunk_id": "abd-us-001-p1-image-0",
@@ -472,30 +494,8 @@
             }
           },
           {
-            "rank": 2,
-            "record_id": "e1cf2e6b17ba9a77",
-            "source_id": "lab-searchable-001",
-            "chunk_id": "lab-searchable-001-p1-text-2",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nHematócrito | 40,1 | % | 36,0–46,0",
-            "score": 0.016393442,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.55590934
-              },
-              "image": null
-            }
-          },
-          {
             "rank": 3,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -529,7 +529,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -573,24 +573,24 @@
           },
           {
             "rank": 3,
-            "record_id": "550af807074753e2",
-            "source_id": "abd-us-001",
-            "chunk_id": "abd-us-001-p1-image-0",
-            "modality": "image",
+            "record_id": "505f6ea9bc4363ee",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p1-text-4",
+            "modality": "text",
             "page_number": 1,
-            "asset_uri": "assets/8310a398d8e00b187bef59243bec6d2d8998e5e056d02f383d063ee071a7d4dc.png",
-            "chunk_text": null,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm? | 150.000-450.000",
             "score": 0.016129032,
             "label": 0,
             "labeled": false,
             "note": "unlabeled: not judged relevant for this query (label 0)",
             "fusion": {
               "fused_score": 0.016129032258064516,
-              "text": null,
-              "image": {
+              "text": {
                 "rank": 2,
-                "score": 0.216715
-              }
+                "score": 0.52042586
+              },
+              "image": null
             }
           }
         ],
@@ -607,6 +607,28 @@
         "results": [
           {
             "rank": 1,
+            "record_id": "2d108013c5ce04fd",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-3",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.8480835
+              },
+              "image": null
+            }
+          },
+          {
+            "rank": 2,
             "record_id": "550af807074753e2",
             "source_id": "abd-us-001",
             "chunk_id": "abd-us-001-p1-image-0",
@@ -628,55 +650,33 @@
             }
           },
           {
-            "rank": 2,
-            "record_id": "5a4049655f31957b",
+            "rank": 3,
+            "record_id": "838b76b276e030aa",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-3",
             "modality": "text",
             "page_number": 1,
             "asset_uri": null,
             "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
-            "score": 0.016393442,
+            "score": 0.016129032,
             "label": 0,
             "labeled": false,
             "note": "unlabeled: not judged relevant for this query (label 0)",
             "fusion": {
-              "fused_score": 0.01639344262295082,
+              "fused_score": 0.016129032258064516,
               "text": {
-                "rank": 1,
+                "rank": 2,
                 "score": 0.8480835
               },
               "image": null
-            }
-          },
-          {
-            "rank": 3,
-            "record_id": "c5a804a1590d644e",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-image-0",
-            "modality": "image",
-            "page_number": 1,
-            "asset_uri": "assets/70b1a16a5cdbaa3be0bd2a4bad0e2e56f0fbfb30a5a9259452005c0e0f9c42d5.png",
-            "chunk_text": null,
-            "score": 0.016129032,
-            "label": 2,
-            "labeled": true,
-            "note": "Ultrasound image embedded in the ultrasound report",
-            "fusion": {
-              "fused_score": 0.016129032258064516,
-              "text": null,
-              "image": {
-                "rank": 2,
-                "score": 0.23784041
-              }
             }
           }
         ],
         "fewer_than_k": false,
         "metrics": {
-          "precision_at_3": 0.6666666666666666,
+          "precision_at_3": 0.3333333333333333,
           "hit_at_3": 1.0,
-          "ndcg_at_3": 0.8344475896326595
+          "ndcg_at_3": 0.35098520806348704
         }
       },
       {
@@ -685,11 +685,11 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "5a4049655f31957b",
+            "record_id": "2d108013c5ce04fd",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-text-3",
+            "chunk_id": "us-mixed-003-p2-text-3",
             "modality": "text",
-            "page_number": 1,
+            "page_number": 2,
             "asset_uri": null,
             "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
             "score": 0.016393442,
@@ -763,28 +763,6 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
-            "source_id": "lab-searchable-001",
-            "chunk_id": "lab-searchable-001-p1-text-4",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
-            "score": 0.016393442,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)",
-            "fusion": {
-              "fused_score": 0.01639344262295082,
-              "text": {
-                "rank": 1,
-                "score": 0.47532883
-              },
-              "image": null
-            }
-          },
-          {
-            "rank": 2,
             "record_id": "550af807074753e2",
             "source_id": "abd-us-001",
             "chunk_id": "abd-us-001-p1-image-0",
@@ -806,8 +784,30 @@
             }
           },
           {
+            "rank": 2,
+            "record_id": "b2fe222366530536",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p1-text-4",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Hemograma\nExame | Resultado | Unidade | Intervalo de referência\nPlaquetas | 250.000 | /mm³ | 150.000–450.000",
+            "score": 0.016393442,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)",
+            "fusion": {
+              "fused_score": 0.01639344262295082,
+              "text": {
+                "rank": 1,
+                "score": 0.47532883
+              },
+              "image": null
+            }
+          },
+          {
             "rank": 3,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -837,9 +837,9 @@
       }
     ],
     "metrics": {
-      "precision_at_3": 0.29999999999999993,
+      "precision_at_3": 0.26666666666666666,
       "hit_at_3": 0.6,
-      "ndcg_at_3": 0.3882448909606017
+      "ndcg_at_3": 0.3398986528036844
     },
     "fusion": {
       "method": "rrf",
@@ -849,20 +849,20 @@
   },
   "measurements": {
     "cold_start": {
-      "text_model_load_ms": 1116.2344170000001,
-      "image_model_load_ms": 787.766875,
-      "first_query_ms": 39.315999999999995,
-      "total_ms": 1943.3172920000002
+      "text_model_load_ms": 1090.747833,
+      "image_model_load_ms": 758.359333,
+      "first_query_ms": 37.034375000000004,
+      "total_ms": 1886.1415409999997
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 41.589625,
-      "p95_ms": 52.404125
+      "median_ms": 41.62975,
+      "p95_ms": 43.909749999999995
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 1867563008.0,
+      "value": 1876180992.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

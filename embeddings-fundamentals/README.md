@@ -89,21 +89,24 @@ These numbers come from 3 synthetic PDFs (28 text chunks), 3 synthetic images, a
 
 | Configuration | Mode | Precision@3 | Hit@3 | nDCG@3 | Warm median |
 |---|---|---:|---:|---:|---:|
-| MiniLM · EmbedAnything | text-only | 0.333 | 0.500 | 0.409 | 17 ms |
-| MiniLM · FastEmbed | text-only | 0.333 | 0.500 | 0.409 | 34 ms |
-| E5-base · FastEmbed | text-only | **0.433** | 0.700 | **0.540** | 66 ms |
-| CLIP ViT-B/32 | image-only | 0.167 | 0.300 | 0.241 | 38 ms |
-| SigLIP multilingual | image-only | 0.167 | 0.300 | 0.270 | 70 ms |
-| E5-base + SigLIP (RRF) | combined | 0.367 | **0.800** | 0.508 | 98 ms |
-| MiniLM + CLIP (RRF) | combined | 0.300 | 0.600 | 0.388 | 42 ms |
+| MiniLM · EmbedAnything | text-only | 0.333 | 0.500 | 0.409 | 16 ms |
+| MiniLM · FastEmbed | text-only | 0.333 | 0.500 | 0.409 | 32 ms |
+| E5-base · FastEmbed | text-only | **0.433** | 0.700 | 0.540 | 61 ms |
+| CLIP ViT-B/32 | image-only | 0.167 | 0.300 | 0.241 | 35 ms |
+| SigLIP multilingual | image-only | 0.167 | 0.300 | 0.270 | 63 ms |
+| E5-base + SigLIP (RRF) | combined | 0.400 | **0.800** | **0.545** | 95 ms |
+| MiniLM + CLIP (RRF) | combined | 0.267 | 0.600 | 0.340 | 42 ms |
 
-Fusion finds a relevant item for more queries, with Hit@3 rising from 0.70 to 0.80, but it lowers precision.
+Fusion finds a relevant item for more queries: Hit@3 rises above every single leg (0.70 → 0.80 and 0.50 → 0.60), because relevant images reach the top 3 for image queries.
 
-- With RRF over two disjoint lists, the winner of each leg always reaches the top 2.
-- The image leg ranks every image for every query.
-- So on laboratory queries, irrelevant images displace relevant text chunks.
+**Its Precision@3 and nDCG@3 are not robust on this corpus.**
+- The text and image lists share no item, so each fused tie (two items at 1/61 or at 1/62) is decided by the `record_id` tie-break that the PRD fixes.
+- A `record_id` hashes the revision, the chunk, and the space.
+- A chunking-rules revision changed every text revision ID without changing any chunk. That alone moved E5-base + SigLIP from 0.367 / 0.508 to 0.400 / 0.545 (P@3 / nDCG@3).
 
-The report records this as a finding and does not hide it. Latencies come from a shared laptop (Apple M3, CPU inference, moderate load) and are indicative only. The full report, with cold start, memory, index size, cost, fidelity, and the top 3 per query, is in [`reports/phase-4/comparison.md`](reports/phase-4/comparison.md).
+So the gap between combined and text-only quality here is within tie-break noise. The report records this as a finding and does not hide it.
+
+Latencies come from a shared laptop (Apple M3, CPU inference, moderate load) and are indicative only. The full report, with cold start, memory, index size, cost, fidelity, and the top 3 per query, is in [`reports/phase-4/comparison.md`](reports/phase-4/comparison.md).
 
 ## Reliability is part of the experiment
 

@@ -22,7 +22,7 @@
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
   "fingerprints": {
     "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
-    "chunking": "27662ad9577180a704321769c9de39f62f813fc3f8cb2da8d25f44326b07a91f",
+    "chunking": "ab9378502da8626d45923c335a695d1fb5d5396beb8a6cec23ac48be988b7b52",
     "evaluation": "484079928a35cfc9dc25acb54442bfe4ff676466cbdc0c64269b81a0c68af301"
   },
   "evaluation": {
@@ -49,7 +49,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "85fc9e8f38471b73",
+            "record_id": "9d8f04d82186f137",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-1",
             "modality": "text",
@@ -63,7 +63,7 @@
           },
           {
             "rank": 2,
-            "record_id": "884a8be42e349d82",
+            "record_id": "652fb79ba58271c9",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-1",
             "modality": "text",
@@ -77,7 +77,7 @@
           },
           {
             "rank": 3,
-            "record_id": "9a78b69a0f2ce5a8",
+            "record_id": "b3412db9e6bad35a",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-2",
             "modality": "text",
@@ -103,7 +103,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "f063927cebf35b66",
+            "record_id": "0b7d3be19ecdee1b",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-0",
             "modality": "text",
@@ -117,7 +117,7 @@
           },
           {
             "rank": 2,
-            "record_id": "f98b0e05d5bf98d1",
+            "record_id": "d6ac70fdb695b995",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-0",
             "modality": "text",
@@ -131,7 +131,7 @@
           },
           {
             "rank": 3,
-            "record_id": "e25bf292705756b7",
+            "record_id": "299bf7e79411e081",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-3",
             "modality": "text",
@@ -157,7 +157,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "2929193a795cb624",
+            "record_id": "9dfdbb3573523686",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-1",
             "modality": "text",
@@ -171,7 +171,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b74db1d18154f60d",
+            "record_id": "6a1c87a8a904abdc",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-1",
             "modality": "text",
@@ -185,9 +185,9 @@
           },
           {
             "rank": 3,
-            "record_id": "32ffb08aa1f96755",
-            "source_id": "lab-scanned-002",
-            "chunk_id": "lab-scanned-002-p2-text-4",
+            "record_id": "2971a145b5df4803",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-4",
             "modality": "text",
             "page_number": 2,
             "asset_uri": null,
@@ -211,7 +211,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "b83be5d1fcfdfb8a",
+            "record_id": "d3a892c107a6a336",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-3",
             "modality": "text",
@@ -225,7 +225,7 @@
           },
           {
             "rank": 2,
-            "record_id": "e25bf292705756b7",
+            "record_id": "299bf7e79411e081",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-3",
             "modality": "text",
@@ -239,7 +239,7 @@
           },
           {
             "rank": 3,
-            "record_id": "82a47db664f4c5c8",
+            "record_id": "0df18981fc9eee49",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-2",
             "modality": "text",
@@ -265,7 +265,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
+            "record_id": "7a8e7baf220b0cef",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-0",
             "modality": "text",
@@ -279,7 +279,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b50268e1c529b420",
+            "record_id": "eb747daa0f0709ec",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-0",
             "modality": "text",
@@ -293,13 +293,13 @@
           },
           {
             "rank": 3,
-            "record_id": "047fd1406418e876",
+            "record_id": "93c2841fadff6884",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-0",
+            "chunk_id": "us-mixed-003-p1-text-0",
             "modality": "text",
-            "page_number": 2,
+            "page_number": 1,
             "asset_uri": null,
-            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL - SINTETICO\nPaciente: [ANONIMIZADO]",
             "score": 0.7935893,
             "label": 0,
             "labeled": false,
@@ -319,7 +319,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
+            "record_id": "7a8e7baf220b0cef",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-0",
             "modality": "text",
@@ -333,7 +333,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b50268e1c529b420",
+            "record_id": "eb747daa0f0709ec",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-0",
             "modality": "text",
@@ -347,7 +347,7 @@
           },
           {
             "rank": 3,
-            "record_id": "5e58fec379afd386",
+            "record_id": "a7523727fe2ec5ce",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-2",
             "modality": "text",
@@ -373,7 +373,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0a25e12a1b0d9301",
+            "record_id": "7a8e7baf220b0cef",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-0",
             "modality": "text",
@@ -387,7 +387,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b50268e1c529b420",
+            "record_id": "eb747daa0f0709ec",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-0",
             "modality": "text",
@@ -401,13 +401,13 @@
           },
           {
             "rank": 3,
-            "record_id": "047fd1406418e876",
+            "record_id": "93c2841fadff6884",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-0",
+            "chunk_id": "us-mixed-003-p1-text-0",
             "modality": "text",
-            "page_number": 2,
+            "page_number": 1,
             "asset_uri": null,
-            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL - SINTETICO\nPaciente: [ANONIMIZADO]",
             "score": 0.8439126,
             "label": 0,
             "labeled": false,
@@ -427,21 +427,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "5ae3489783a9a3fb",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-text-3",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
-            "score": 0.8725748,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)"
-          },
-          {
-            "rank": 2,
-            "record_id": "847072184ba79f21",
+            "record_id": "331da5726a03a7c5",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p2-text-3",
             "modality": "text",
@@ -454,18 +440,32 @@
             "note": "unlabeled: not judged relevant for this query (label 0)"
           },
           {
-            "rank": 3,
-            "record_id": "047fd1406418e876",
+            "rank": 2,
+            "record_id": "ebd8e45061c92416",
             "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-0",
+            "chunk_id": "us-mixed-003-p1-text-3",
             "modality": "text",
-            "page_number": 2,
+            "page_number": 1,
             "asset_uri": null,
-            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.8725748,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
+            "rank": 3,
+            "record_id": "93c2841fadff6884",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-0",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL - SINTETICO\nPaciente: [ANONIMIZADO]",
             "score": 0.86448926,
             "label": 1,
             "labeled": true,
-            "note": "Title of the abdominal ultrasound report repeated on page 2, not an image"
+            "note": "Title of the abdominal ultrasound report, not an image"
           }
         ],
         "fewer_than_k": false,
@@ -481,21 +481,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "047fd1406418e876",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-0",
-            "modality": "text",
-            "page_number": 2,
-            "asset_uri": null,
-            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
-            "score": 0.8664277,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)"
-          },
-          {
-            "rank": 2,
-            "record_id": "d94473e7777d005b",
+            "record_id": "93c2841fadff6884",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-0",
             "modality": "text",
@@ -508,8 +494,22 @@
             "note": "unlabeled: not judged relevant for this query (label 0)"
           },
           {
+            "rank": 2,
+            "record_id": "fd529481ef162c2e",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-0",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "LAUDO DE ULTRASSONOGRAFIA ABDOMINAL  - SINTETICO\nPaciente: [ANONIMIZADO]",
+            "score": 0.8664277,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
             "rank": 3,
-            "record_id": "0a25e12a1b0d9301",
+            "record_id": "7a8e7baf220b0cef",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-0",
             "modality": "text",
@@ -535,21 +535,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "17b87e09759fdad5",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p2-text-1",
-            "modality": "text",
-            "page_number": 2,
-            "asset_uri": null,
-            "chunk_text": "Técnica\nExame realizado com transdutor convexo de 3,5 MHz, em jejum de 8 horas.",
-            "score": 0.8404061,
-            "label": 2,
-            "labeled": true,
-            "note": "Technique section (OCR page)"
-          },
-          {
-            "rank": 2,
-            "record_id": "7506309d7d2dfbde",
+            "record_id": "6557e58c9357edc0",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-1",
             "modality": "text",
@@ -562,8 +548,22 @@
             "note": "Technique section (transducer and preparation)"
           },
           {
+            "rank": 2,
+            "record_id": "f3e862efe3e774bc",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p2-text-1",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Técnica\nExame realizado com transdutor convexo de 3,5 MHz, em jejum de 8 horas.",
+            "score": 0.8404061,
+            "label": 2,
+            "labeled": true,
+            "note": "Technique section (OCR page)"
+          },
+          {
             "rank": 3,
-            "record_id": "2796e321b5213891",
+            "record_id": "dfda8555deb586de",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -592,42 +592,42 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 3540.08725,
+      "duration_ms": 3344.84175,
       "pages": 6,
       "chunks": 28,
-      "ms_per_page": 590.0145416666667,
-      "chunks_per_second": 7.90940957740519
+      "ms_per_page": 557.473625,
+      "chunks_per_second": 8.3710985728996
     },
-    "ingestion_model_load_ms": 13171.713166,
+    "ingestion_model_load_ms": 8382.783541,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 28,
-      "total_ms": 1002.5269160000001,
-      "mean_batch_latency_ms": 334.1756386666667,
-      "items_per_second": 27.929424689880342,
+      "total_ms": 937.409083,
+      "mean_batch_latency_ms": 312.46969433333334,
+      "items_per_second": 29.869563361164914,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 13171.713166,
-      "first_operation_ms": 375.829833,
+      "model_load_ms": 8382.783541,
+      "first_operation_ms": 360.307458,
       "first_operation_items": 10,
-      "total_ms": 13547.542999
+      "total_ms": 8743.090999
     },
     "query_side_start": {
-      "model_load_ms": 11029.784292,
-      "first_query_ms": 381.383875,
-      "total_ms": 11411.168167
+      "model_load_ms": 7852.781875,
+      "first_query_ms": 68.421125,
+      "total_ms": 7921.2029999999995
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 65.697292,
-      "p95_ms": 87.97049999999999
+      "median_ms": 61.494417000000006,
+      "p95_ms": 65.770458
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 5083480064.0,
+      "value": 6588727296.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

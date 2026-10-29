@@ -26,6 +26,12 @@ use crate::extraction::{BoundingBox, PageText};
 /// Identifier of this strategy, recorded in every record.
 pub const STRATEGY_ID: &str = "structure-aware-v1";
 
+/// Revision of the `structure-aware-v1` rules, part of the chunking fingerprint: a rule
+/// change that alters chunk output must change revision ids, or an unchanged source
+/// would keep chunks made by the old rules. `r2` keeps a table header that no row used
+/// as a paragraph instead of dropping it (found on real sample exams).
+pub const RULES_ID: &str = "structure-aware-v1/r2";
+
 /// Kind of structural unit a chunk came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -349,9 +355,31 @@ impl StructureAwareV1 {
     }
 
     fn units(page: &PageText) -> Vec<Unit> {
+        /// Ends the current table header. A header no row used (a multi-column line
+        /// without digits followed by text, a heading, or the end of the page) is kept
+        /// as a paragraph, so its text is never dropped.
+        fn release_header(
+            header: &mut Option<String>,
+            used: &mut bool,
+            section: Option<&String>,
+            heading_used: &mut bool,
+            units: &mut Vec<Unit>,
+        ) {
+            if let (false, Some(text)) = (*used, header.take()) {
+                *heading_used = true;
+                units.push(Unit {
+                    kind: TextKind::Paragraph,
+                    section: section.cloned(),
+                    lines: vec![text],
+                    bbox: None,
+                });
+            }
+            *used = true;
+        }
         let mut units = Vec::new();
         let mut section: Option<String> = None;
         let mut header: Option<String> = None;
+        let mut header_used = true;
         let mut paragraph: Option<Unit> = None;
         // A heading with no body under it (followed by another heading, or the last
         // content of the page) is kept as a paragraph so its text is never dropped.
@@ -399,11 +427,24 @@ impl StructureAwareV1 {
                 LineKind::Blank => {
                     flush(&mut paragraph, &mut units);
                     if !in_table {
-                        header = None;
+                        release_header(
+                            &mut header,
+                            &mut header_used,
+                            section.as_ref(),
+                            &mut heading_used,
+                            &mut units,
+                        );
                     }
                 }
                 LineKind::Heading => {
                     flush(&mut paragraph, &mut units);
+                    release_header(
+                        &mut header,
+                        &mut header_used,
+                        section.as_ref(),
+                        &mut heading_used,
+                        &mut units,
+                    );
                     keep_unused(&section, &previous_section, heading_used, &mut units);
                     previous_section = section.take();
                     section = Some(text.to_owned());
@@ -412,11 +453,20 @@ impl StructureAwareV1 {
                 }
                 LineKind::TableHeader => {
                     flush(&mut paragraph, &mut units);
+                    release_header(
+                        &mut header,
+                        &mut header_used,
+                        section.as_ref(),
+                        &mut heading_used,
+                        &mut units,
+                    );
                     header = Some(text.to_owned());
+                    header_used = false;
                 }
                 LineKind::TableRow => {
                     flush(&mut paragraph, &mut units);
                     heading_used = true;
+                    header_used = true;
                     let lines = header
                         .iter()
                         .cloned()
@@ -430,8 +480,14 @@ impl StructureAwareV1 {
                     });
                 }
                 LineKind::Text => {
+                    release_header(
+                        &mut header,
+                        &mut header_used,
+                        section.as_ref(),
+                        &mut heading_used,
+                        &mut units,
+                    );
                     heading_used = true;
-                    header = None;
                     let unit = paragraph.get_or_insert_with(|| Unit {
                         kind: TextKind::Paragraph,
                         section: section.clone(),
@@ -444,6 +500,13 @@ impl StructureAwareV1 {
             }
         }
         flush(&mut paragraph, &mut units);
+        release_header(
+            &mut header,
+            &mut header_used,
+            section.as_ref(),
+            &mut heading_used,
+            &mut units,
+        );
         keep_unused(&section, &previous_section, heading_used, &mut units);
         units
     }
@@ -589,6 +652,58 @@ mod tests {
         "Hemoglobina | 13,5 | g/dL | 12,0–16,0",
         "Hematócrito | 40,1 | % | 36,0–46,0",
     ];
+
+    #[test]
+    fn a_table_header_no_row_uses_is_kept_as_text() {
+        // Regression (real sample exams): a multi-column line without digits is a table
+        // header, and it was dropped when text, a heading, a blank line, another header,
+        // or the end of the page followed it instead of a row.
+        let cases: [&[&str]; 5] = [
+            &[
+                "Paciente  Convênio  Médico",
+                "Texto livre do laudo segue aqui.",
+            ],
+            &["Exame | Método | Material", "Conclusão"],
+            &[
+                "Exame | Método | Material",
+                "",
+                "Texto depois da linha em branco.",
+            ],
+            &[
+                "Campo | Valor | Nota",
+                "Exame | Resultado | Unidade | Referência",
+                "Hemoglobina | 13,5 | g/dL | 12,0–16,0",
+            ],
+            &["Achados", "Exame | Método | Material"],
+        ];
+        for lines in cases {
+            let chunks = chunker(false)
+                .chunk(&page(lines), &WhitespaceTokenCounter, None)
+                .expect("chunk");
+            let covered: std::collections::BTreeSet<&str> = chunks
+                .iter()
+                .flat_map(|c| c.text.split_whitespace())
+                .collect();
+            for line in lines {
+                for token in line.split_whitespace() {
+                    assert!(
+                        covered.contains(token),
+                        "{token:?} of {lines:?} was dropped"
+                    );
+                }
+            }
+        }
+        // A header that rows use is still attached to them, not repeated as a paragraph.
+        let chunks = chunker(false)
+            .chunk(&page(LAB), &WhitespaceTokenCounter, None)
+            .expect("chunk");
+        assert!(
+            chunks
+                .iter()
+                .all(|c| c.kind == ChunkKind::TableRow || !c.text.contains("Exame | Resultado")),
+            "{chunks:?}"
+        );
+    }
 
     #[test]
     fn lab_rows_keep_name_value_unit_and_range_with_header_and_section() {

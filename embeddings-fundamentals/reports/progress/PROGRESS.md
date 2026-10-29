@@ -246,6 +246,10 @@ None for Phase 0.
 | Combined cold start = both model loads + the first fused query in a fresh process; warm latency covers both legs and the fusion; index size is the size of the revisions the combined snapshot pins (Grok G4-3); query cost is reported per leg | PRD §9.4 definitions applied to a two-model configuration; costs of different providers are not summed into one number |
 | `ComparisonReport::with_combined` adds combined results to a report. It refuses another corpus, query set, labels, evaluation fingerprint, or machine, and refuses a leg experiment the report shows in another space. The extraction-fingerprint rule now compares only configurations in the same mode | A text run and an image run extract different things, so their extraction fingerprints differ by design. The old rule refused every three-mode report |
 | A combined search scoped to an experiment refuses a snapshot that is not the combined run of its legs and fusion parameters: fusion fingerprint and a pinned revision in each leg's space (`check_combined_snapshot`, exit 3). The CLI reads the snapshot and checks the fusion fingerprint before loading any model (Grok G4-1, G4-2) | The combined id must reproduce the run it names; a different `k` or a missing leg would otherwise change or silently shrink the fused ranking |
+| Owner's real sample exams (`tests/sample-exams/`, git-ignored, added 2026-10-29) enter only local, opt-in, property-based tests (`tests/sample_exams.rs`, `RUN_SAMPLE_EXAMS=1`). Messages name a document by index, never by file name, and nothing derived from them is committed or sent to a reviewer; reviewers run from a clean worktree of the committed branch (`CLAUDE.md`) | PRD §11: real documents without an anonymization review must not be indexed, reported, or shared. The tests check the pipeline's behavior on real layouts without persisting anything |
+| `anonymization::filename_findings` also flags upper-case word sequences (with one-letter particles) and every free-form file name (anything beyond lower-case ASCII letters, digits, `-`, `_`, `.`) | Found by the real exams: none of the 12 real file names, mostly upper-case personal names, was flagged. A finding only asks the reviewer to look, so a conservative rule is safe. The blocking gate is unchanged: without a recorded review a source is refused |
+| Chunking rules `structure-aware-v1/r2` (`chunking::RULES_ID`, part of the chunking fingerprint): a table header that no row uses (a multi-column line without digits followed by text, a heading, a blank line, another header, or the end of the page) is kept as a paragraph | Found by the real exams: 24 such lines on 9 of the 12 documents were silently dropped from every chunk. The rules id enters the fingerprint, so revisions chunked by the old rules are not reused as "unchanged". The synthetic corpus has no such line: its chunks are unchanged, but every text revision id (and so every text record id) changed |
+| `pipeline::extract_pdf`: the per-page native/OCR selection as a public function, used by ingestion and by the real-exam tests | The tests exercise the same selection as ingestion without a manifest, and without bypassing the gate through `Pipeline::extract_source` |
 | BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
 
 ### Implementation
@@ -293,6 +297,14 @@ None for Phase 0.
   - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
   - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
 - `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **16 passed**, including the new real combined CLI chain. The OpenAI live test stays outstanding.
+- `RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored` (local only, real exams): **4 passed**.
+  - Every unreviewed exam is refused before any processing.
+  - Every file name is flagged, and no finding reveals it.
+  - Coverage: 12 documents, 45 pages (39 native, 6 OCR), 739 chunks. Extraction is deterministic; no token is lost without a budget; budgets 16/64/512 are respected with and without truncation.
+  - Images: 348 listed, 94 kept, 27 prepared, all PNGs with only IHDR/IDAT/IEND.
+- Synthetic regressions for the two defects:
+  - `anonymization::tests::identifier_like_filenames_are_flagged`;
+  - `chunking::tests::a_table_header_no_row_uses_is_kept_as_text` (a mutant dropping unused headers fails it).
 - Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 4–11; regenerated after the Grok round 1 fixes).
   - Text and image metrics are identical to Phases 2 and 3:
     - MiniLM (both engines): 0.333 / 0.500 / 0.409;
@@ -300,9 +312,11 @@ None for Phase 0.
     - CLIP: 0.167 / 0.300 / 0.241;
     - SigLIP: 0.167 / 0.300 / 0.270.
   - Combined:
-    - E5-base + SigLIP: 0.367 / **0.800** / 0.508, warm median 98 ms;
-    - MiniLM + CLIP: 0.300 / 0.600 / 0.388, warm median 42 ms.
-  - Fusion raises Hit@3 above every leg. It lowers P@3 and nDCG@3 below the text leg, because irrelevant images displace relevant text chunks at ranks 2–3 on the laboratory queries; the report's limitations explain this per query.
+    - E5-base + SigLIP: 0.400 / **0.800** / 0.545, warm median 95 ms (0.367 / 0.800 / 0.508 before the chunking-rules revision r2);
+    - MiniLM + CLIP: 0.267 / 0.600 / 0.340, warm median 42 ms (0.300 / 0.600 / 0.388 before r2).
+  - Fusion raises Hit@3 above every leg.
+  - Its P@3 and nDCG@3 are within tie-break noise. Every fused tie joins a text and an image item, and the `record_id` tie-break (PRD §6.6) decides it. The r2 rules changed every text record id without changing any chunk, and that alone moved both combined configurations.
+  - The report's limitations explain this per query. A relevance-aware cross-leg tie rule would be a PRD change and is not made here.
 
 ### rust-skills applied
 - `num-float-compare`: `total_cmp`, and float ordering in tests through `total_cmp`.

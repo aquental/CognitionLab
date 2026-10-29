@@ -22,7 +22,7 @@
   "corpus_checksum": "sha256:0f808bc5723251bbe0f43da84de68bfa541075a6bb640e27719a123b12be74b6",
   "fingerprints": {
     "extraction": "c82ad2eb3a9b8602ec79b6ebc432a24bf5bac4bb85b0adaf9faf92a5760fd741",
-    "chunking": "96ccec200c130cb36cfec418158f28b2cd564f0913ab9f1ac12f805352a17581",
+    "chunking": "1be001b75489bf5c5236a8aae303e080e47ac8e39f833b1d5d08d2c4d35d4ef1",
     "evaluation": "484079928a35cfc9dc25acb54442bfe4ff676466cbdc0c64269b81a0c68af301"
   },
   "evaluation": {
@@ -49,7 +49,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "0e579a13fe78e66d",
+            "record_id": "43e98753dafbe4cf",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-1",
             "modality": "text",
@@ -63,7 +63,7 @@
           },
           {
             "rank": 2,
-            "record_id": "3e0e4de3e724505d",
+            "record_id": "448d902c039ad687",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-1",
             "modality": "text",
@@ -77,7 +77,7 @@
           },
           {
             "rank": 3,
-            "record_id": "b02d9808958bc7d4",
+            "record_id": "6b6609cf067cfc32",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-2",
             "modality": "text",
@@ -103,7 +103,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "1cfce4d064570641",
+            "record_id": "3220d8c9b123f12d",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-0",
             "modality": "text",
@@ -117,7 +117,7 @@
           },
           {
             "rank": 2,
-            "record_id": "8f0bfb582c2b337e",
+            "record_id": "cbbe56aa4fe92510",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-0",
             "modality": "text",
@@ -131,9 +131,9 @@
           },
           {
             "rank": 3,
-            "record_id": "8254bae315b9efa9",
-            "source_id": "lab-scanned-002",
-            "chunk_id": "lab-scanned-002-p2-text-2",
+            "record_id": "77779a9b0d2cf167",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-2",
             "modality": "text",
             "page_number": 2,
             "asset_uri": null,
@@ -157,7 +157,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "dcdfd8608965bd16",
+            "record_id": "a30081a082fb9cf3",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-1",
             "modality": "text",
@@ -171,7 +171,7 @@
           },
           {
             "rank": 2,
-            "record_id": "974895be60bcf21d",
+            "record_id": "f52982c2b7577adf",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-1",
             "modality": "text",
@@ -185,9 +185,9 @@
           },
           {
             "rank": 3,
-            "record_id": "414e947e97d9e67d",
-            "source_id": "lab-scanned-002",
-            "chunk_id": "lab-scanned-002-p2-text-4",
+            "record_id": "521691f3b74657b5",
+            "source_id": "lab-searchable-001",
+            "chunk_id": "lab-searchable-001-p2-text-4",
             "modality": "text",
             "page_number": 2,
             "asset_uri": null,
@@ -211,21 +211,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "8254bae315b9efa9",
-            "source_id": "lab-scanned-002",
-            "chunk_id": "lab-scanned-002-p2-text-2",
-            "modality": "text",
-            "page_number": 2,
-            "asset_uri": null,
-            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nColesterol total | 182 | mg/dL | < 190",
-            "score": 0.6704269,
-            "label": 2,
-            "labeled": true,
-            "note": "Total cholesterol row recovered by OCR"
-          },
-          {
-            "rank": 2,
-            "record_id": "920b6228f9a84860",
+            "record_id": "77779a9b0d2cf167",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p2-text-2",
             "modality": "text",
@@ -238,8 +224,22 @@
             "note": "Total cholesterol row"
           },
           {
+            "rank": 2,
+            "record_id": "e27011c1572f715c",
+            "source_id": "lab-scanned-002",
+            "chunk_id": "lab-scanned-002-p2-text-2",
+            "modality": "text",
+            "page_number": 2,
+            "asset_uri": null,
+            "chunk_text": "Bioquímica\nExame | Resultado | Unidade | Intervalo de referência\nColesterol total | 182 | mg/dL | < 190",
+            "score": 0.6704269,
+            "label": 2,
+            "labeled": true,
+            "note": "Total cholesterol row recovered by OCR"
+          },
+          {
             "rank": 3,
-            "record_id": "cb9a6ded500fde5e",
+            "record_id": "67b8f96bb9fc9e43",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p2-text-3",
             "modality": "text",
@@ -265,7 +265,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -279,7 +279,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -293,7 +293,7 @@
           },
           {
             "rank": 3,
-            "record_id": "e1cf2e6b17ba9a77",
+            "record_id": "0a6bf11640a15d01",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-2",
             "modality": "text",
@@ -319,7 +319,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "e1cf2e6b17ba9a77",
+            "record_id": "0a6bf11640a15d01",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-2",
             "modality": "text",
@@ -333,7 +333,7 @@
           },
           {
             "rank": 2,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -347,7 +347,7 @@
           },
           {
             "rank": 3,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -373,7 +373,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -387,7 +387,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -401,7 +401,7 @@
           },
           {
             "rank": 3,
-            "record_id": "8ce8bf26f9f5129a",
+            "record_id": "313b64087bc96cf2",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-3",
             "modality": "text",
@@ -427,21 +427,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "5a4049655f31957b",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-text-3",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
-            "score": 0.8480835,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)"
-          },
-          {
-            "rank": 2,
-            "record_id": "c675a2c41aa585e3",
+            "record_id": "2d108013c5ce04fd",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p2-text-3",
             "modality": "text",
@@ -454,8 +440,22 @@
             "note": "unlabeled: not judged relevant for this query (label 0)"
           },
           {
+            "rank": 2,
+            "record_id": "838b76b276e030aa",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.8480835,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
             "rank": 3,
-            "record_id": "18d0236603c0644c",
+            "record_id": "406cfcf565063ba2",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p1-text-0",
             "modality": "text",
@@ -481,21 +481,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "5a4049655f31957b",
-            "source_id": "us-mixed-003",
-            "chunk_id": "us-mixed-003-p1-text-3",
-            "modality": "text",
-            "page_number": 1,
-            "asset_uri": null,
-            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
-            "score": 0.6252822,
-            "label": 0,
-            "labeled": false,
-            "note": "unlabeled: not judged relevant for this query (label 0)"
-          },
-          {
-            "rank": 2,
-            "record_id": "c675a2c41aa585e3",
+            "record_id": "2d108013c5ce04fd",
             "source_id": "us-mixed-003",
             "chunk_id": "us-mixed-003-p2-text-3",
             "modality": "text",
@@ -508,8 +494,22 @@
             "note": "unlabeled: not judged relevant for this query (label 0)"
           },
           {
+            "rank": 2,
+            "record_id": "838b76b276e030aa",
+            "source_id": "us-mixed-003",
+            "chunk_id": "us-mixed-003-p1-text-3",
+            "modality": "text",
+            "page_number": 1,
+            "asset_uri": null,
+            "chunk_text": "Conclusão\nUltrassonografia abdominal sem alterações significativas.",
+            "score": 0.6252822,
+            "label": 0,
+            "labeled": false,
+            "note": "unlabeled: not judged relevant for this query (label 0)"
+          },
+          {
             "rank": 3,
-            "record_id": "a8106460ac46bbd3",
+            "record_id": "39325b7617bc5a0d",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-3",
             "modality": "text",
@@ -535,7 +535,7 @@
         "results": [
           {
             "rank": 1,
-            "record_id": "4e47edfba5f2ab68",
+            "record_id": "b2fe222366530536",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-4",
             "modality": "text",
@@ -549,7 +549,7 @@
           },
           {
             "rank": 2,
-            "record_id": "b3fab186cec6ef30",
+            "record_id": "505f6ea9bc4363ee",
             "source_id": "lab-scanned-002",
             "chunk_id": "lab-scanned-002-p1-text-4",
             "modality": "text",
@@ -563,7 +563,7 @@
           },
           {
             "rank": 3,
-            "record_id": "e1cf2e6b17ba9a77",
+            "record_id": "0a6bf11640a15d01",
             "source_id": "lab-searchable-001",
             "chunk_id": "lab-searchable-001-p1-text-2",
             "modality": "text",
@@ -592,42 +592,42 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 3058.0872499999996,
+      "duration_ms": 2769.773125,
       "pages": 6,
       "chunks": 28,
-      "ms_per_page": 509.68120833333325,
-      "chunks_per_second": 9.156050076726883
+      "ms_per_page": 461.6288541666667,
+      "chunks_per_second": 10.10913123073934
     },
-    "ingestion_model_load_ms": 1656.4478330000002,
+    "ingestion_model_load_ms": 455.44374999999997,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 28,
-      "total_ms": 381.957625,
-      "mean_batch_latency_ms": 127.31920833333334,
-      "items_per_second": 73.30656116630739,
+      "total_ms": 403.506374,
+      "mean_batch_latency_ms": 134.50212466666667,
+      "items_per_second": 69.39171672167934,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 1656.4478330000002,
-      "first_operation_ms": 132.006667,
+      "model_load_ms": 455.44374999999997,
+      "first_operation_ms": 128.97354099999998,
       "first_operation_items": 10,
-      "total_ms": 1788.4545000000003
+      "total_ms": 584.417291
     },
     "query_side_start": {
-      "model_load_ms": 435.24249999999995,
-      "first_query_ms": 18.035125,
-      "total_ms": 453.27762499999994
+      "model_load_ms": 414.954084,
+      "first_query_ms": 14.929459000000001,
+      "total_ms": 429.88354300000003
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 17.016625,
-      "p95_ms": 26.719583
+      "median_ms": 15.607416,
+      "p95_ms": 17.10475
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 1648328704.0,
+      "value": 1672593408.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

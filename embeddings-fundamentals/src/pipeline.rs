@@ -220,6 +220,34 @@ pub fn check_eligibility(manifest: &LoadedManifest) -> Result<(), ValidationErro
     }
 }
 
+/// Extracts every page of a PDF the way ingestion does: the native text layer when it is
+/// usable (`ExtractionConfig::native_text_is_usable`), otherwise OCR of that page. It
+/// reads no manifest and applies no eligibility gate: callers run the gate first.
+///
+/// # Errors
+///
+/// Returns the first [`crate::extraction::ExtractionError`] of the page count, a native extraction, or an
+/// OCR run.
+pub async fn extract_pdf<T: TextExtractor, O: OcrEngine>(
+    text: &T,
+    ocr: &O,
+    path: &std::path::Path,
+    config: &ExtractionConfig,
+) -> Result<Vec<PageText>, crate::extraction::ExtractionError> {
+    let count = text.page_count(path).await?;
+    let mut pages = Vec::new();
+    for n in 1..=count.get() {
+        let page = NonZeroU32::new(n).unwrap_or(NonZeroU32::MIN);
+        let native = text.extract_page(path, page).await?;
+        pages.push(if config.native_text_is_usable(&native.text()) {
+            native
+        } else {
+            ocr.ocr_page(path, page).await?
+        });
+    }
+    Ok(pages)
+}
+
 /// Per-page extraction outcome.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PageReport {
@@ -361,6 +389,7 @@ struct ExtractionFingerprintInput<'a> {
 #[derive(Serialize)]
 struct ChunkingFingerprintInput<'a> {
     config: &'a ChunkingConfig,
+    rules: &'static str,
     tokenizer: &'a str,
     budget: Option<usize>,
 }
@@ -514,6 +543,7 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
                     })?,
                     Fingerprint::of(&ChunkingFingerprintInput {
                         config: &settings.chunking,
+                        rules: crate::chunking::RULES_ID,
                         tokenizer: self.embedder.token_counter().id(),
                         budget,
                     })?,
@@ -626,35 +656,15 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
         config: &ExtractionConfig,
         report: &mut SourceReport,
     ) -> Result<Vec<PageText>, String> {
-        let count = self
-            .text
-            .page_count(path)
+        let pages = extract_pdf(self.text, self.ocr, path, config)
             .await
             .map_err(|e| e.to_string())?;
-        let mut pages = Vec::new();
-        for n in 1..=count.get() {
-            let page = NonZeroU32::new(n).unwrap_or(NonZeroU32::MIN);
-            let native = self
-                .text
-                .extract_page(path, page)
-                .await
-                .map_err(|e| e.to_string())?;
-            let text = if config.native_text_is_usable(&native.text()) {
-                native
-            } else {
-                self.ocr
-                    .ocr_page(path, page)
-                    .await
-                    .map_err(|e| e.to_string())?
-            };
-            report.pages.push(PageReport {
-                page: n,
-                method: text.method,
-                unreadable: text.is_blank(),
-                confidence: text.confidence,
-            });
-            pages.push(text);
-        }
+        report.pages.extend(pages.iter().map(|text| PageReport {
+            page: text.page.get(),
+            method: text.method,
+            unreadable: text.is_blank(),
+            confidence: text.confidence,
+        }));
         Ok(pages)
     }
 
