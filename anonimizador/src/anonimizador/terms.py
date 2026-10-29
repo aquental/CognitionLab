@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 # Identifier patterns counted as hints. They are noisy (an exam date is a date), so
@@ -126,14 +127,23 @@ class Term:
         return 0
 
 
-def count_patterns(texts: list[str], joins: list[str] | tuple[str, ...] = ()) -> dict[str, int]:
+# Patterns that are not numbers: searched in fully joined text too, which glues the
+# numbers of a whole page together (Grok G0-40).
+TEXT_PATTERNS = frozenset(("email", "crm"))
+
+
+def count_patterns(
+    texts: list[str], joins: Sequence[str] = (), joined: Sequence[str] = ()
+) -> dict[str, int]:
     """The largest count of each pattern over `texts`, zero counts left out. In `joins`
     (readings that hold one occurrence in several overlapping joins, see
-    `channels.mixed_readings`), distinct matches are counted."""
+    `channels.mixed_readings`), distinct matches are counted. `joined` is searched for
+    `TEXT_PATTERNS` only."""
     counts = {}
     for name, pattern in PATTERNS.items():
+        plain = [*texts, *joined] if name in TEXT_PATTERNS else texts
         n = max(
-            max((len(pattern.findall(fold(t))) for t in texts), default=0),
+            max((len(pattern.findall(fold(t))) for t in plain), default=0),
             max((len(set(pattern.findall(fold(t)))) for t in joins), default=0),
         )
         if n:

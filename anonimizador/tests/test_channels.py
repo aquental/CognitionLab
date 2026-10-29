@@ -31,9 +31,9 @@ IHDR = (b"IHDR", struct.pack(">IIBBBBB", 40, 30, 8, 2, 0, 0, 0))
 
 def raw_count(term: str, data: bytes) -> int:
     """The raw count `check_file` gives `term` in `data`."""
-    texts, _, word_texts = raw_readings(data)
+    raw = raw_readings(data)
     found = Term(term)
-    return max(found.count(t) for t in [*texts, *(word_texts if found.whole_word else [])])
+    return max(found.count(t) for t in [*raw.texts, *(raw.joins if found.whole_word else [])])
 
 
 def test_png_text_metadata_is_read_plain_and_compressed(tmp_path):
@@ -212,9 +212,8 @@ def test_text_state_and_same_baseline_keep_a_word_whole():
         b"BT (Zu) Tj (leo) ' (Assunto) Tj ET",
     ):
         assert raw_count("Zuleo", moved) == 1, moved
-    # Only bytes that are no content-stream syntax (another stream's binary data)
-    # separate strings for sure.
-    assert raw_count("Zuleo", b"BT (Zu) Tj ET \x00\x9c\xff BT (leo) Tj ET") == 0
+    # No gap is a sure break, not even other bytes (Grok G0-39).
+    assert raw_count("Zuleo", b"BT (Zu) Tj ET \x00\x9c\xff BT (leo) Tj ET") == 1
 
 
 def test_a_number_drawn_glyph_by_glyph_is_a_pattern_hint():
@@ -386,3 +385,39 @@ def test_a_long_gap_keeps_the_open_array_and_stays_ambiguous():
     cpf = b"BT [(123) -2 (.) -2 (456) -2 (.) -2 (789) -2 (-) -2 (09) -300 (99)] TJ ET"
     views = pdf_string_views([page + filler + cpf])
     assert count_patterns(views.for_patterns, [views.mixed]) == {"cpf": 1}
+
+
+def test_comments_nul_and_other_bytes_between_glyphs_keep_a_word():
+    # Regression (Grok G0-39): a comment, a NUL (PDF whitespace), a comma, or a brace
+    # between glyph strings was a sure break, so a short name drawn in a TJ array
+    # counted 0.
+    for gap in (b"%\n", b"\x00", b",", b"{"):
+        data = b"BT /F1 24 Tf 72 700 Td [(Z) -2 (u)" + gap + b" -2 (l) -2 (e) -2 (o)] TJ ET"
+        assert raw_count("Zuleo", data) == 1, gap
+        assert raw_count("Zulea", data) == 0, gap
+        stream = b"1 0 obj << >> stream\n" + zlib.compress(data) + b"endstream\n"
+        assert raw_count("Zuleo", stream) == 1, gap
+    # A comment and a NUL are whitespace: the glyphs around them simply continue.
+    for gap in (b"%\n", b"\x00"):
+        data = b"BT [(Z) -2 (u)" + gap + b" -2 (l) -2 (e) -2 (o)] TJ ET"
+        assert pdf_string_views([data]).split == "Zuleo", gap
+    # A comment's brackets change nothing: a large adjustment stays a possible space.
+    data = b"BT [(Z) -2 (u) -2 (l) -2 (e) -2 (o) % ]\n -300 (A) -2 (s) -2 (s) -2 (u) -2 (n)"
+    data += b" -2 (t) -2 (o)] TJ ET"
+    assert raw_count("Zuleo", data) == 1
+    assert raw_count("Assunto", data) == 1
+
+
+def test_an_email_split_by_a_move_is_a_hint_whatever_its_length():
+    # Regression (Grok G0-40): an e-mail longer than a join was whole only in the fully
+    # joined reading, which was not searched for patterns.
+    for address in (b"ana.silva@hospital.com", b"fulano.silva@clinica.example.com"):
+        at = address.index(b"@")
+        data = b"BT 72 700 Td (" + address[:at] + b") Tj 4 0 Td (" + address[at:] + b") Tj ET"
+        views = pdf_string_views([data])
+        hints = count_patterns(views.for_patterns, [views.mixed], [views.drawn])
+        assert hints == {"email": 1}, address
+    # Numbers are not searched in the fully joined reading: separate numbers stay apart.
+    numbers = b"BT (123.456) Tj 9 0 Td (789-09) Tj 9 0 Td (12) Tj ET"
+    views = pdf_string_views([numbers])
+    assert count_patterns([], (), [views.drawn]) == {}
