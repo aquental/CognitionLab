@@ -193,6 +193,24 @@ PDF_STRING_OPENER = re.compile(rb"[(<]")
 # `(Concei\\347\\343o (mae))` is one string (Grok G0-20). Deeper nesting is rare, and a
 # regular expression keeps binary streams fast to scan.
 PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOTALL)
+# Each alternation starts with a lookahead on its first bytes, which lets the regular
+# expression engine skip the other bytes fast.
+PDF_STRING = re.compile(
+    rb"(?=[(<])(?:(?P<literal>"
+    + PDF_LITERAL.pattern
+    + rb")|(?P<hex>"
+    + PDF_HEX_STRING.pattern
+    + rb"))",
+    re.DOTALL,
+)
+# The strings of PDF bytes and what surrounds them: comments (whose "(" starts no
+# string), dictionary delimiters, and the stream keywords, at which binary data that
+# looked like an open dictionary ends.
+PDF_STRUCTURE = re.compile(
+    rb"(?=[%<>(es])(?:(?P<comment>%[^\r\n]*)|(?P<open><<)|(?P<close>>>)"
+    rb"|(?P<stream>(?:end)?stream\b)|" + PDF_STRING.pattern + rb")",
+    re.DOTALL,
+)
 # The tokens between two strings of a content stream: whitespace, array brackets,
 # names, numbers, operators, and anything else (which ends the drawn text).
 GAP_TOKEN = re.compile(
@@ -267,20 +285,32 @@ class PdfString:
     value: bytes
 
 
+def string_of(token: re.Match[bytes]) -> PdfString:
+    body = token.group()[1:-1]
+    value = unescape_literal(body) if token.lastgroup == "literal" else hex_string(body)
+    return PdfString(token.start(), token.end(), value)
+
+
 def pdf_string_spans(blob: bytes) -> list[PdfString]:
     """The hex and literal strings of `blob`, in order."""
+    return [string_of(token) for token in PDF_STRING.finditer(blob)]
+
+
+def drawn_spans(blob: bytes) -> list[PdfString]:
+    """The strings of `blob` a reader may draw: not in a comment, and not in a dictionary
+    (a marked-content property such as `<< /Lang (pt) >> BDC`) (Grok G0-44)."""
     spans = []
-    pos = 0
-    while opener := PDF_STRING_OPENER.search(blob, pos):
-        start = opener.start()
-        pos = start + 1
-        if blob[start] == ord("("):
-            if literal := PDF_LITERAL.match(blob, start):
-                spans.append(PdfString(start, literal.end(), unescape_literal(literal.group(1))))
-                pos = literal.end()
-        elif hexed := PDF_HEX_STRING.match(blob, start):
-            spans.append(PdfString(start, hexed.end(), hex_string(hexed.group(1))))
-            pos = hexed.end()
+    depth = 0
+    for token in PDF_STRUCTURE.finditer(blob):
+        kind = token.lastgroup
+        if kind == "open":
+            depth += 1
+        elif kind == "close":
+            depth = max(0, depth - 1)
+        elif kind == "stream":
+            depth = 0
+        elif kind != "comment" and not depth:
+            spans.append(string_of(token))
     return spans
 
 
@@ -289,6 +319,8 @@ AMBIGUOUS = "\x1f"
 # The longest join of pieces read across ambiguous boundaries: longer than a short term
 # and than any identifier pattern (a CPF is 14 characters, a CNS 18).
 MAX_MIXED_READING = 20
+# What a piece adds to a join: its first word, after at most one space.
+MIXED_HEAD = re.compile(r"\s?\S*")
 
 
 def gap_joint(gap: bytes) -> str:
@@ -308,12 +340,14 @@ def gap_joint(gap: bytes) -> str:
     return ""
 
 
-def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
+def drawn_text(blob: bytes) -> str:
     """The strings of `blob` as drawn, with `AMBIGUOUS` wherever they might not be one
     word. Content streams often draw a word glyph by glyph (`[(Z) -2 (u)] TJ`), and a
     short term must be a whole word (Grok G0-19); a word space is often only a move
-    (Grok G0-22). Line breaks inside a string are dropped."""
+    (Grok G0-22). Strings that are not drawn are left out, and their gap is read like
+    any other (Grok G0-44). Line breaks inside a string are dropped."""
     parts = []
+    spans = drawn_spans(blob)
     for index, span in enumerate(spans):
         if index:
             parts.append(gap_joint(blob[spans[index - 1].end : span.start]))
@@ -323,24 +357,35 @@ def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
 
 def mixed_readings(marked: str) -> str:
     """Every way the ambiguous boundaries of `marked` could join its pieces, one reading
-    per line, each up to `MAX_MIXED_READING` characters: the end of one piece (after its
-    last space), the pieces after it, and the start of the last one (before its first
-    space). A short term, or a number drawn group by group, is whole in one of them
-    whatever each move is (Grok G0-29, G0-34, G0-35). Longer terms need no boundary."""
+    per line, each up to `MAX_MIXED_READING` characters: the end of one piece (see
+    `join_starts`), the pieces after it, and the start of the last one (its first word,
+    after at most one space). A short term, or a number drawn group by group, is whole
+    in one of them whatever each move is (Grok G0-29, G0-34, G0-35), and so is a number
+    whose own space is drawn at the move (Grok G0-45). Longer terms need no boundary."""
     readings = []
     for line in marked.split("\n"):
         pieces = line.split(AMBIGUOUS)
         for first in range(len(pieces) - 1):
-            reading = re.split(r"\s", pieces[first])[-1]
-            for piece in pieces[first + 1 :]:
-                head = re.split(r"\s", piece, maxsplit=1)
-                reading += head[0]
-                if len(reading) > MAX_MIXED_READING:
-                    break
-                readings.append(reading)
-                if len(head) > 1:
-                    break
+            for reading in join_starts(pieces[first]):
+                for piece in pieces[first + 1 :]:
+                    head = MIXED_HEAD.match(piece)
+                    reading += head.group()
+                    if len(reading) > MAX_MIXED_READING:
+                        break
+                    readings.append(reading)
+                    if head.end() < len(piece):
+                        break
     return "\n".join(readings)
+
+
+def join_starts(piece: str) -> list[str]:
+    """Where a join may start in `piece`: after its last space and, when the piece ends
+    with one space, at its last word too, so that a number keeps its own space (Grok
+    G0-45) and a long last word does not use up the length of a join."""
+    starts = [re.split(r"\s", piece)[-1]]
+    if piece[-1:].isspace() and not piece[-2:-1].isspace():
+        starts.append(re.split(r"\s", piece[:-1])[-1] + piece[-1])
+    return starts
 
 
 @dataclass(frozen=True)
@@ -372,9 +417,8 @@ def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
     name, holds none of its letters in the bytes (Grok G0-14)."""
     lines, drawn, split, mixed, inner = [], [], [], [], []
     for blob in blobs:
-        spans = pdf_string_spans(blob)
-        lines.extend(decode_pdf_string(span.value) for span in spans)
-        marked = drawn_text(blob, spans)
+        lines.extend(decode_pdf_string(span.value) for span in pdf_string_spans(blob))
+        marked = drawn_text(blob)
         drawn.append(marked.replace(AMBIGUOUS, ""))
         split.append(marked.replace(AMBIGUOUS, "\n"))
         mixed.append(mixed_readings(marked))
