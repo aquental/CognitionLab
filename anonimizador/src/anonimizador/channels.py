@@ -77,13 +77,14 @@ class Reading:
     def __init__(self) -> None:
         self.texts: Texts = {channel: [] for channel in CHANNELS}
         self.errors: list[str] = []
-        # The decoded PDF strings, searched for patterns: an identifier left in an old
-        # object reaches no other pattern channel (Grok G0-21).
-        self.strings: list[str] = []
-        # The joins that ambiguous boundaries could make: searched for terms that must
-        # be whole words, and for patterns by distinct match. A term matched without
-        # separators would count each occurrence once per join.
-        self.raw_joins: list[str] = []
+        # The raw bytes read every way: the raw channel searches `raw.texts`; patterns
+        # also search the decoded PDF strings, since an identifier left in an old object
+        # reaches no other pattern channel (Grok G0-21).
+        self.raw = RawReading([], [], [], [])
+
+    def take_raw(self, raw: RawReading) -> None:
+        self.raw = raw
+        self.texts["raw"] = raw.texts
 
     @contextlib.contextmanager
     def channel(self, name: str) -> Iterator[None]:
@@ -195,22 +196,21 @@ PDF_LITERAL = re.compile(rb"\(((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*)\)", re.DOT
 # The tokens between two strings of a content stream: whitespace, array brackets,
 # names, numbers, operators, and anything else (which ends the drawn text).
 GAP_TOKEN = re.compile(
-    rb"(?P<space>\s+)|(?P<open>\[)|(?P<close>\])|(?P<name>/[^\s/\[\]()<>{}%]*)"
+    rb"(?P<space>[\s\x00]+|%[^\r\n]*)|(?P<bracket>[\[\]])|(?P<name>/[^\s/\[\]()<>{}%]*)"
     rb"|(?P<number>[-+]?(?:\d+\.?\d*|\.\d+))|(?P<op>[A-Za-z*'\"]+)|(?P<other>.)",
     re.DOTALL,
 )
 # Text-showing, text-state, and color operators: the text continues where it was.
 SAME_TEXT_OPS = frozenset(b"Tj TJ Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC scn SCN".split())
-# Any other operator between two strings (a move, a new text object, a saved graphics
-# state, marked content) may or may not separate words: only the fonts' widths and the
-# positions, which are not read, tell. It is ambiguous (Grok G0-25, G0-26, G0-29,
-# G0-32, G0-38). So is a TJ adjustment at or below this (thousandths of an em, moving
-# right), which may be a word space.
+# Anything else between two strings (a move, a new text object, a saved graphics state,
+# marked content, other bytes) may or may not separate words: only the fonts' widths
+# and the positions, which are not read, tell. It is ambiguous; no gap is a sure break
+# (Grok G0-25, G0-26, G0-29, G0-32, G0-37, G0-38, G0-39). So is a number at or below
+# this: in a TJ array (thousandths of an em, moving right) it may be a word space, and
+# elsewhere it is an operand, whose operator is ambiguous anyway.
 WORD_SPACE_ADJUSTMENT = -200
-# Bytes that are no content-stream syntax: between them, strings are not one text.
-NOT_SYNTAX = re.compile(rb"[^\s\w.+\-\[\]/*'\"<>#]")
-# A gap of syntax longer than this holds operators, so it is ambiguous without being
-# tokenized (binary-sized gaps stay fast).
+# A gap longer than this is ambiguous without being tokenized (binary-sized gaps stay
+# fast).
 MAX_TEXT_GAP = 256
 PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
 
@@ -289,47 +289,32 @@ AMBIGUOUS = "\x1f"
 MAX_MIXED_READING = 20
 
 
-def array_open_after(gap: bytes, in_array: bool) -> bool:
-    """Whether a TJ array is open after `gap`: its last bracket decides (Grok G0-37)."""
-    opened, closed = gap.rfind(b"["), gap.rfind(b"]")
-    return in_array if opened == closed else opened > closed
-
-
-def gap_joint(gap: bytes, in_array: bool) -> tuple[str, bool]:
+def gap_joint(gap: bytes) -> str:
     """How the strings before and after `gap` are joined: "" when the text simply
-    continues (text-showing, text-state, and color operators, small TJ kerning),
-    `AMBIGUOUS` for any other operator or a large TJ adjustment, "\\n" across bytes that
-    are no content-stream syntax (binary data: another stream). Also whether a TJ array
-    is open after the gap."""
-    if NOT_SYNTAX.search(gap):
-        return "\n", array_open_after(gap, in_array)
+    continues (whitespace, comments, brackets, small TJ kerning, text-showing,
+    text-state, and color operators), `AMBIGUOUS` otherwise."""
     if len(gap) > MAX_TEXT_GAP:
-        return AMBIGUOUS, array_open_after(gap, in_array)
-    joint = ""
+        return AMBIGUOUS
     for token in GAP_TOKEN.finditer(gap):
         kind, value = token.lastgroup, token.group()
-        if kind == "open":
-            in_array = True
-        elif kind == "close":
-            in_array = False
-        elif kind == "number":
-            if in_array and float(value) <= WORD_SPACE_ADJUSTMENT:
-                joint = AMBIGUOUS
-        elif kind == "op" and value not in SAME_TEXT_OPS:
-            joint = AMBIGUOUS
-    return joint, in_array
+        if (
+            kind == "other"
+            or (kind == "op" and value not in SAME_TEXT_OPS)
+            or (kind == "number" and float(value) <= WORD_SPACE_ADJUSTMENT)
+        ):
+            return AMBIGUOUS
+    return ""
 
 
 def drawn_text(blob: bytes, spans: list[PdfString]) -> str:
-    """The strings of `blob` as drawn, with `AMBIGUOUS` where the text position moves.
-    Content streams often draw a word glyph by glyph (`[(Z) -2 (u)] TJ`), and a short
-    term must be a whole word (Grok G0-19); a word space is often only a move (Grok
-    G0-22). Line breaks inside a string are dropped."""
-    parts, in_array = [], False
+    """The strings of `blob` as drawn, with `AMBIGUOUS` wherever they might not be one
+    word. Content streams often draw a word glyph by glyph (`[(Z) -2 (u)] TJ`), and a
+    short term must be a whole word (Grok G0-19); a word space is often only a move
+    (Grok G0-22). Line breaks inside a string are dropped."""
+    parts = []
     for index, span in enumerate(spans):
-        start = spans[index - 1].end if index else 0
-        joint, in_array = gap_joint(blob[start : span.start], in_array)
-        parts.append(joint if index else "")
+        if index:
+            parts.append(gap_joint(blob[spans[index - 1].end : span.start]))
         parts.append(re.sub(r"[\r\n]", "", decode_pdf_string(span.value)))
     return "".join(parts)
 
@@ -372,9 +357,10 @@ class PdfStringViews:
 
     @property
     def for_patterns(self) -> list[str]:
-        """The readings searched for identifier patterns (Grok G0-21, G0-23, G0-34),
-        with `mixed` counted by distinct match: not the fully joined one, which glues the
-        numbers of a whole table together."""
+        """The readings searched for every identifier pattern (Grok G0-21, G0-23, G0-34),
+        with `mixed` counted by distinct match. The fully joined reading glues the
+        numbers of a whole page together, so it is searched for text patterns only (an
+        e-mail longer than a join, Grok G0-40)."""
         return [self.lines, self.split]
 
 
@@ -412,9 +398,24 @@ def raw_blobs(data: bytes) -> list[bytes]:
     return blobs
 
 
-def raw_readings(data: bytes) -> tuple[list[str], list[str], list[str]]:
-    """The raw texts of a file, its PDF strings for patterns, and the joins of their
-    ambiguous boundaries."""
+@dataclass(frozen=True)
+class RawReading:
+    """What the bytes of a file hold, read every way."""
+
+    # Searched for every term.
+    texts: list[str]
+    # PDF strings, searched for every pattern.
+    strings: list[str]
+    # Joins of ambiguous boundaries: searched for terms that must be whole words, and
+    # for patterns by distinct match.
+    joins: list[str]
+    # PDF strings fully joined: searched for text patterns.
+    drawn: list[str]
+
+
+def raw_readings(data: bytes) -> RawReading:
+    """The raw bytes of a PDF or an image file, read every way (Grok G0-41: an image's
+    bytes can hold content-stream text too)."""
     blobs = raw_blobs(data)
     texts = decode_both(blobs)
     texts.extend(
@@ -422,14 +423,14 @@ def raw_readings(data: bytes) -> tuple[list[str], list[str], list[str]]:
     )
     strings = pdf_string_views(blobs)
     texts.extend((strings.lines, strings.drawn, strings.split, strings.inner))
-    return texts, strings.for_patterns, [strings.mixed]
+    return RawReading(texts, strings.for_patterns, [strings.mixed], [strings.drawn])
 
 
 def raw_texts(data: bytes) -> list[str]:
     """The file bytes and every zlib stream in it, decoded the ways text is stored:
     leftover incremental updates, uncompressed content streams, XMP packets, PNG text,
     and PDF strings (hex and escaped literals)."""
-    return raw_readings(data)[0]
+    return raw_readings(data).texts
 
 
 def image_metadata(data: bytes) -> list[str]:
@@ -471,7 +472,7 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        texts["raw"], reading.strings, reading.raw_joins = raw_readings(f.read())
+        reading.take_raw(raw_readings(f.read()))
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
@@ -505,7 +506,7 @@ def read_image(path: str, name: str, lang: str, use_ocr: bool, timeout: int) -> 
         data = f.read()
     reading.texts["name"] = [name]
     reading.texts["metadata"] = image_metadata(data)
-    reading.texts["raw"] = raw_texts(data)
+    reading.take_raw(raw_readings(data))
     if use_ocr:
         with reading.channel("ocr"):
             reading.texts["ocr"] = [ocr(path, lang, timeout)]

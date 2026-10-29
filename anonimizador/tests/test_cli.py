@@ -265,3 +265,24 @@ def test_a_leftover_kerned_word_and_cpf_are_found(outside_repo, capsys):
     assert "    term 1: raw=1\n" in out
     assert "possible identifiers (patterns): cpf=1" in out
     assert "Zuleo" not in out and "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_an_image_file_is_read_like_a_pdf_in_raw_bytes(outside_repo, capsys):
+    # Regression (Grok G0-41): an image's raw bytes were read without the joins of
+    # ambiguous boundaries and without its PDF strings for patterns.
+    jpeg = outside_repo / "a.jpg"
+    jpeg.write_bytes(
+        b"\xff\xd8\xff\xdb\x00\x03\x00"
+        b"BT (Zu) Tj 7 0 Td (leo) Tj 30 0 Td (Assunto) Tj ET "
+        b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj 6 0 Td (789) Tj"
+        b" 22 0 Td (-) Tj 6 0 Td (09) Tj ET\xff\xd9"
+    )
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\nZulea\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(jpeg)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out and "term 2" not in out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "Zuleo" not in out and "123" not in out.replace("[1]", "")
