@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes the synthetic masked-image PDF used by the C3-6 regression tests.
 
-One page with a usable native text line and two 96x96 RGB images, red on the left half
+One page with a usable native text layer and two 96x96 RGB images, red on the left half
 and blue on the right half:
 
 - Im1 has a soft mask (/SMask, 48x48 DeviceGray): alpha 0 on the left half, 255 on the
@@ -47,10 +47,18 @@ def stream(dictionary, data):
 
 
 def main():
+    # Enough text (>= 200 visible characters) for the native text layer to be usable,
+    # so an image run keeps the page's images.
+    lines = [
+        b"Laudo sintetico de ultrassonografia com camada de texto nativa usavel.",
+        b"Este documento ficticio existe apenas para testar mascaras de imagem em PDF.",
+        b"A metade esquerda de cada imagem e vermelha e fica oculta pela mascara.",
+        b"A metade direita de cada imagem e azul e permanece visivel ao leitor.",
+    ]
+    text = b"".join(b"(%s) Tj T*\n" % line for line in lines)
     content = (
-        b"BT /F1 12 Tf 20 760 Td (Laudo sintetico com camada de texto nativa usavel "
-        b"e duas imagens mascaradas.) Tj ET\n"
-        b"q 200 0 0 200 50 500 cm /Im1 Do Q\nq 200 0 0 200 300 500 cm /Im2 Do Q\n"
+        b"BT /F1 11 Tf 14 TL 20 760 Td\n" + text + b"ET\n"
+        b"q 200 0 0 200 50 450 cm /Im1 Do Q\nq 200 0 0 200 300 450 cm /Im2 Do Q\n"
     )
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
