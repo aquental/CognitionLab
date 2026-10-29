@@ -202,8 +202,14 @@ def image_metadata(data: bytes) -> list[str]:
         pos = 2
         while pos + 4 <= len(data) and data[pos] == 0xFF:
             marker = data[pos + 1]
+            if marker == 0xFF:  # a fill byte before a marker: it has no length (Grok G0-12)
+                pos += 1
+                continue
             if marker == 0xDA:  # start of scan: no metadata after this
                 break
+            if marker == 0x01 or 0xD0 <= marker <= 0xD7:  # standalone markers: no length
+                pos += 2
+                continue
             (length,) = struct.unpack(">H", data[pos + 2 : pos + 4])
             if 0xE1 <= marker <= 0xEF or marker == 0xFE:
                 blobs.append(data[pos + 4 : pos + 2 + length])

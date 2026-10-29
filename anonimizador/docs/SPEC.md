@@ -35,8 +35,10 @@ Count each term in six places: the file name, the metadata, the text layer, the 
 - Identifier patterns are counted as hints.
 - A place that cannot be read is an error, never an empty place. This covers a failed or timed-out tool, an encrypted PDF, missing OCR language data, and pages that did not render. The file is reported `ERROR` with the place and the tool, never the path, and the run exits 2 (Grok G4-5).
 - The file name is the path relative to the directory searched, so directory names are searched too (Grok G4-6).
-- Directories are walked recursively, following symbolic links once per real directory. Every other relative path that reaches a directory is searched as a name of the files under it (Grok G0-7). A directory that cannot be listed is an error that stops the run, never a skipped place (Grok G0-3).
+- Directories are walked recursively, following symbolic links once per real directory. Every other relative path that reaches a directory is searched as a name of the files under it (Grok G0-7). A directory that cannot be listed, or a link that leads nowhere, is an error that stops the run, never a skipped place (Grok G0-3, G0-11). A file reached by several arguments is searched under every name they give it (Grok G0-13).
 - Metadata and raw bytes are also read through their UTF-16 runs, so a short term stored as UTF-16 is a whole word (Grok G0-8).
+- Raw bytes are searched for every term of 4 letters or digits or more. Shorter terms are not: on the synthetic fixtures, 9 of 10 three-letter names matched binary data by chance (Grok G0-10).
+- JPEG fill bytes and standalone markers are skipped while reading metadata segments (Grok G0-12).
 - A terms file that is not UTF-8 is refused with exit 2 and no traceback (Grok G0-4).
 - A numeric option that is not a positive whole number (`--timeout`, `--dpi`) is a usage error: exit 2, no traceback (Grok G0-9).
 

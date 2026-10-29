@@ -83,3 +83,15 @@ def test_a_short_name_in_utf16_metadata_is_a_whole_word():
     body = b"Exif\x00\x00UNICODE\x00" + "Zuleo".encode("utf-16-le") + b"\x00\x00Make\x00"
     exif = b"\xff\xd8\xff\xe1" + struct.pack(">H", len(body) + 2) + body + b"\xff\xda"
     assert max(short.count(t) for t in image_metadata(exif)) == 1
+
+
+def test_jpeg_fill_bytes_and_standalone_markers_are_skipped():
+    # Regression (Grok G0-12): a fill byte (0xFF) before a marker was read as a marker
+    # with a length, so the walker jumped over the EXIF segment.
+    body = b"Exif\x00\x00Artist=Fulano Ficticio"
+    app1 = b"\xe1" + struct.pack(">H", len(body) + 2) + body
+    for fill in (b"\xff", b"\xff\xff\xff"):
+        jpeg = b"\xff\xd8" + fill + app1 + b"\xff\xda"
+        assert max(NAME.count(t) for t in image_metadata(jpeg)) == 1, fill
+    restart = b"\xff\xd8\xff\xd0\xff" + app1 + b"\xff\xda"
+    assert max(NAME.count(t) for t in image_metadata(restart)) == 1
