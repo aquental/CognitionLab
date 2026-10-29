@@ -18,6 +18,7 @@ pub mod evaluation;
 pub mod experiment;
 pub mod extraction;
 pub mod fidelity;
+pub mod fusion;
 pub mod ids;
 pub mod measurement;
 pub mod pipeline;

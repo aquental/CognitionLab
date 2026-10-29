@@ -23,6 +23,22 @@ Feature: Compare text, image, and combined retrieval fairly
       | mode       |
       | image-only |
 
+    @m4
+    Examples: Combined
+      | mode       |
+      | combined   |
+
+  @m4
+  Scenario: Fuse rankings without comparing incompatible raw scores
+    Given text ranking "A,B,E" and image ranking "C,E,D"
+    And reciprocal rank fusion with k equal to 60 and ranks starting at 1
+    When I combine the rankings
+    Then the fused score of each item is the sum of 1 / (60 + rank) over every list containing it
+    And the fused scores are "A=1/61, B=1/62, C=1/61, D=1/63, E=1/62+1/63" within 0.000001
+    And the result order is "E,A,C,B,D" by descending fused score, breaking equal-score ties by ascending record ID
+    When I multiply all raw text similarity scores by 100 without changing their order
+    Then the fused scores and result order are unchanged
+
   @m2
   Scenario: Report low relevance without hiding a completed experiment
     Given a completed fixture evaluation whose retrieved items all have relevance label 0

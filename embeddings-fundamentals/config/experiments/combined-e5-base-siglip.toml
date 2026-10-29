@@ -1,0 +1,12 @@
+# Stage 4 combined retrieval (PRD §10): the strongest Stage 2 text configuration
+# (multilingual E5-base on FastEmbed) fused with the multilingual cross-modal model of
+# Stage 3 (SigLIP on EmbedAnything). Each leg queries its own index space with its own
+# model; only ranks are fused (RRF, PRD §6.6), never raw scores.
+text = "text-fastembed-e5-base.toml"
+image = "image-siglip-multilingual.toml"
+
+[fusion]
+method = "rrf"
+k = 60
+# Each leg contributes its full candidate list (PRD §6.6 default).
+depth = "all"

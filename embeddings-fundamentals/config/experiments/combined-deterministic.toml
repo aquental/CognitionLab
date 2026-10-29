@@ -1,0 +1,9 @@
+# Deterministic combined stand-in: exercises combined retrieval end to end without a
+# model download. It measures nothing about retrieval quality.
+text = "deterministic.toml"
+image = "image-deterministic.toml"
+
+[fusion]
+method = "rrf"
+k = 60
+depth = "all"

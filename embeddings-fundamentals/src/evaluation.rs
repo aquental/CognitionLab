@@ -21,11 +21,15 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::domain::Modality;
 use crate::embedding::EmbeddingStrategy;
+use crate::fusion::FusionParams;
 use crate::ids::{
     Checksum, ChunkId, EmbeddingSpaceId, Fingerprint, IdError, QueryId, RecordId, SourceId,
 };
 use crate::record::Record;
-use crate::retrieval::{Scope, SearchError, SearchHit, read_records, search_images, search_text};
+use crate::retrieval::{
+    FusionTrace, Leg, Scope, SearchError, SearchHit, read_records, search_combined, search_images,
+    search_text,
+};
 use crate::storage::FsRecordStore;
 
 /// Cut-off of every metric.
@@ -415,6 +419,9 @@ pub struct ResultEntry {
     pub labeled: bool,
     /// Relevance or failure note.
     pub note: String,
+    /// Leg ranks and exact fused score of a combined-mode result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<FusionTrace>,
 }
 
 /// Evaluation of one query.
@@ -472,6 +479,10 @@ pub struct EvaluationReport {
     pub queries: Vec<QueryEntry>,
     /// Macro-averaged metrics.
     pub metrics: Metrics,
+    /// Fusion parameters of a combined-mode evaluation (PRD §6.6: recorded in every
+    /// combined-mode report); absent for single-modality modes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<FusionParams>,
 }
 
 /// Evaluates `rankings` (one list per query id, best first) against the dataset.
@@ -537,6 +548,7 @@ pub fn evaluate(
                         || "unlabeled: not judged relevant for this query (label 0)".to_owned(),
                         |l| l.note.clone(),
                     ),
+                    fusion: hit.fusion.clone(),
                 })
             })
             .collect::<Result<_, EvalError>>()?;
@@ -578,6 +590,7 @@ pub fn evaluate(
         k: K,
         queries: entries,
         metrics,
+        fusion: None,
     })
 }
 
@@ -780,6 +793,60 @@ pub async fn evaluate_images(
     )
 }
 
+/// Runs every frozen query in combined mode (PRD §6.6: the text leg against its text
+/// index, the image leg against its cross-modal image index, fused with RRF; top 3)
+/// and evaluates the fused results. The report names both spaces, text first, and
+/// records the fusion parameters.
+///
+/// # Errors
+///
+/// Returns [`EvalError::Search`] when a leg's model does not belong to its space or the
+/// image leg's model has no compatible text-to-image space (both before any index
+/// read), [`EvalError::LabelNotApplicable`] when a text label does not apply to the
+/// text index or an image label to the image index, and [`EvalError::Search`] when a
+/// query fails.
+pub async fn evaluate_combined(
+    store: &Arc<FsRecordStore>,
+    text: Leg<'_>,
+    image: Leg<'_>,
+    fusion: FusionParams,
+    dataset: &Dataset,
+    scope: Scope<'_>,
+) -> Result<EvaluationReport, EvalError> {
+    for leg in [text, image] {
+        let query = &leg.embedder.model_info().embedding_space_id;
+        if query != leg.space {
+            return Err(EvalError::Search(SearchError::SpaceMismatch {
+                index: leg.space.clone(),
+                query: query.clone(),
+            }));
+        }
+    }
+    image
+        .embedder
+        .capabilities()
+        .require(
+            crate::embedding::Capability::TextToImage,
+            image.embedder.model_info(),
+        )
+        .map_err(|e| EvalError::Search(SearchError::Embedding(e)))?;
+    check_text_labels(dataset, &read_records(store, text.space, scope).await?)?;
+    check_image_labels(dataset, &read_records(store, image.space, scope).await?)?;
+    let mut rankings = BTreeMap::new();
+    for query in &dataset.queries.value.queries {
+        let hits = search_combined(store, text, image, fusion, &query.text, K, scope).await?;
+        rankings.insert(query.id.clone(), hits);
+    }
+    let mut report = evaluate(
+        EvaluationMode::Combined,
+        dataset,
+        vec![text.space.clone(), image.space.clone()],
+        &rankings,
+    )?;
+    report.fusion = Some(fusion);
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,6 +995,7 @@ mod tests {
             asset_uri: r.asset_uri,
             original: None,
             score: 0.9,
+            fusion: None,
         }
     }
 

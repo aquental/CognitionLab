@@ -9,6 +9,10 @@
 //! records. Both embed the query through the model's text-query path
 //! (`embed_queries`); image search additionally requires a model whose text queries
 //! and images share one compatible space.
+//!
+//! Combined search runs both legs, each against its own index space with its own
+//! query model, and fuses their rankings with RRF (PRD §6.6): only ranks are fused,
+//! never the raw scores of the two models.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -17,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::Modality;
 use crate::embedding::{Capability, EmbeddingError, EmbeddingStrategy, TextInput, validate_batch};
+use crate::fusion::{FusionParams, rrf};
 use crate::ids::{ChunkId, EmbeddingSpaceId, ItemId, RecordId, RevisionId, SourceId};
 use crate::storage::{ExperimentSnapshot, FsRecordStore, StoreError};
 
@@ -55,7 +60,31 @@ pub struct SearchHit {
     /// Reference to the original image (image records, see
     /// [`crate::record::OriginalAsset::reference`]).
     pub original: Option<String>,
-    /// Cosine similarity.
+    /// Cosine similarity; for a combined result, the fused RRF score.
+    pub score: f32,
+    /// How a combined result was fused from the two legs; absent for single-modality
+    /// results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<FusionTrace>,
+}
+
+/// Provenance of a fused result: its exact fused score and its place in each leg.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusionTrace {
+    /// Exact fused score (`score` holds it rounded to `f32`).
+    pub fused_score: f64,
+    /// Rank and cosine score in the text leg, when the text leg returned it.
+    pub text: Option<LegTrace>,
+    /// Rank and cosine score in the image leg, when the image leg returned it.
+    pub image: Option<LegTrace>,
+}
+
+/// Position of a result in one leg of a combined search.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LegTrace {
+    /// 1-based rank in the leg.
+    pub rank: usize,
+    /// Cosine similarity in the leg's space.
     pub score: f32,
 }
 
@@ -203,6 +232,7 @@ fn rank(
                     .as_ref()
                     .map(crate::record::OriginalAsset::reference),
                 score,
+                fusion: None,
             }
         })
         .collect())
@@ -333,4 +363,113 @@ pub async fn search_vector(
         return Ok(Vec::new());
     }
     rank(records, index_space, query_vector, limit)
+}
+
+/// One leg of a combined search: an index space and the query model of that space.
+#[derive(Clone, Copy)]
+pub struct Leg<'a> {
+    /// Index space of the leg.
+    pub space: &'a EmbeddingSpaceId,
+    /// Query model; must belong to `space`.
+    pub embedder: &'a dyn EmbeddingStrategy,
+}
+
+impl std::fmt::Debug for Leg<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Leg")
+            .field("space", self.space)
+            .field("model", &self.embedder.model_info().model_id)
+            .finish()
+    }
+}
+
+/// Fuses a text ranking and an image ranking (each best first) with RRF and returns
+/// the top `limit` fused results.
+///
+/// A result's `rank` is its fused rank and its `score` the fused score; `fusion` keeps
+/// the exact fused score and the rank and cosine score it held in each leg. The legs'
+/// own scores never enter the fusion, only their positions.
+#[must_use]
+pub fn fuse(
+    text: &[SearchHit],
+    image: &[SearchHit],
+    params: FusionParams,
+    limit: usize,
+) -> Vec<SearchHit> {
+    let keys = |hits: &[SearchHit]| -> Vec<RecordId> {
+        hits.iter().map(|h| h.record_id.clone()).collect()
+    };
+    let (text_keys, image_keys) = (keys(text), keys(image));
+    let lookup = |hits: &[SearchHit], rank: Option<usize>| -> Option<(SearchHit, LegTrace)> {
+        let rank = rank?;
+        let hit = hits.get(rank.checked_sub(1)?)?;
+        Some((
+            hit.clone(),
+            LegTrace {
+                rank,
+                score: hit.score,
+            },
+        ))
+    };
+    rrf(&[&text_keys, &image_keys], params)
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(i, fused)| {
+            let rank_in = |leg: usize| fused.ranks.get(leg).copied().flatten();
+            let from_text = lookup(text, rank_in(0));
+            let from_image = lookup(image, rank_in(1));
+            let (hit, _) = from_text.clone().or_else(|| from_image.clone())?;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "an RRF score is at most the number of legs divided by k + 1"
+            )]
+            let score = fused.score as f32;
+            Some(SearchHit {
+                rank: i + 1,
+                score,
+                fusion: Some(FusionTrace {
+                    fused_score: fused.score,
+                    text: from_text.map(|(_, t)| t),
+                    image: from_image.map(|(_, t)| t),
+                }),
+                ..hit
+            })
+        })
+        .collect()
+}
+
+/// Combined search (PRD §6.6): the text leg ranks the text records of its space, the
+/// image leg the image records of its cross-modal space, each with its own query
+/// model; each leg contributes its top `params.depth` candidates and the rankings are
+/// fused with RRF. Both legs search the same `scope`.
+///
+/// # Errors
+///
+/// Before any store read or query embedding, returns [`SearchError::SpaceMismatch`]
+/// when a leg's query model does not belong to its index space, and
+/// [`SearchError::Embedding`] with [`EmbeddingError::Unsupported`] when the image
+/// leg's model has no compatible text-to-image space. Otherwise returns the errors of
+/// [`search_text`] and [`search_images`].
+pub async fn search_combined(
+    store: &Arc<FsRecordStore>,
+    text: Leg<'_>,
+    image: Leg<'_>,
+    params: FusionParams,
+    query: &str,
+    limit: usize,
+    scope: Scope<'_>,
+) -> Result<Vec<SearchHit>, SearchError> {
+    guard_space(text.space, &text.embedder.model_info().embedding_space_id)?;
+    guard_space(image.space, &image.embedder.model_info().embedding_space_id)?;
+    image
+        .embedder
+        .capabilities()
+        .require(Capability::TextToImage, image.embedder.model_info())?;
+    let depth = params.depth.limit();
+    let (text_hits, image_hits) = tokio::try_join!(
+        search_text(store, text.space, text.embedder, query, depth, scope),
+        search_images(store, image.space, image.embedder, query, depth, scope),
+    )?;
+    Ok(fuse(&text_hits, &image_hits, params, limit))
 }

@@ -798,3 +798,142 @@ async fn siglip_loads_the_pinned_checkpoint_and_embeds_queries_and_images() {
         "SigLIP ranks the chest image first for the Portuguese chest query"
     );
 }
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1, poppler + tesseract, and downloads MiniLM and CLIP"]
+async fn the_cli_runs_combined_retrieval_over_real_text_and_image_runs() {
+    // Phase 4 end to end with real tools and models: a MiniLM text run and a CLIP image
+    // run into one store, the combined run over both snapshots, a combined search by
+    // the combined id, and the three-mode comparison report.
+    require_integration();
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let store = dir.path().join("store");
+    let manifest = corpus("manifest.toml");
+    let run = |args: &[&std::ffi::OsStr]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"))
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("run the command");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    let os = |s: &str| std::ffi::OsString::from(s);
+    let path = |p: &Path| p.as_os_str().to_owned();
+    let mut results = Vec::new();
+    for (config, id) in [
+        (
+            "config/experiments/baseline-text-embed-anything.toml",
+            "it-minilm",
+        ),
+        ("config/experiments/image-clip-vit-b32.toml", "it-clip"),
+    ] {
+        let report = dir.path().join(format!("{id}.json"));
+        let args = [
+            os("experiment"),
+            os("--manifest"),
+            path(&manifest),
+            os("--config"),
+            os(config),
+            os("--store"),
+            path(&store),
+            os("--experiment"),
+            os(id),
+            os("--latency-repeats"),
+            os("1"),
+            os("--report"),
+            path(&report),
+        ];
+        let refs: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsString::as_os_str).collect();
+        run(&refs);
+        results.push(report);
+    }
+    let combined = dir.path().join("it-combined.json");
+    let args = [
+        os("combine"),
+        os("--manifest"),
+        path(&manifest),
+        os("--config"),
+        os("config/experiments/combined-minilm-clip.toml"),
+        os("--store"),
+        path(&store),
+        os("--text-experiment"),
+        os("it-minilm"),
+        os("--image-experiment"),
+        os("it-clip"),
+        os("--experiment"),
+        os("it-combined"),
+        os("--latency-repeats"),
+        os("1"),
+        os("--report"),
+        path(&combined),
+    ];
+    let refs: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsString::as_os_str).collect();
+    run(&refs);
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&combined).expect("result")).expect("json");
+    assert_eq!(json["evaluation"]["mode"], "combined");
+    assert_eq!(json["fusion"]["k"], 60);
+    assert_eq!(json["fusion"]["depth"], "all");
+    let queries = json["evaluation"]["queries"].as_array().expect("queries");
+    assert_eq!(queries.len(), 10);
+    let mut modalities = std::collections::BTreeSet::new();
+    for q in queries {
+        let results = q["results"].as_array().expect("results");
+        assert_eq!(results.len(), 3, "{}", q["query_id"]);
+        for r in results {
+            modalities.insert(r["modality"].as_str().expect("modality").to_owned());
+            assert!(r["fusion"]["fused_score"].as_f64().expect("fused score") > 0.0);
+        }
+    }
+    assert_eq!(
+        modalities.into_iter().collect::<Vec<_>>(),
+        ["image", "text"],
+        "the fused top 3 mixes both legs"
+    );
+
+    let args = [
+        os("search"),
+        os("--mode"),
+        os("combined"),
+        os("--config"),
+        os("config/experiments/combined-minilm-clip.toml"),
+        os("--store"),
+        path(&store),
+        os("--experiment"),
+        os("it-combined"),
+        os("--query"),
+        os("Mostre a radiografia de tórax"),
+    ];
+    let refs: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsString::as_os_str).collect();
+    let hits: serde_json::Value =
+        serde_json::from_slice(&run(&refs).stdout).expect("search output");
+    assert_eq!(hits.as_array().expect("hits").len(), 3);
+
+    let (markdown, report_json) = (dir.path().join("r.md"), dir.path().join("r.json"));
+    let args = [
+        os("report"),
+        os("--result"),
+        path(&results[0]),
+        os("--result"),
+        path(&results[1]),
+        os("--combined"),
+        path(&combined),
+        os("--markdown"),
+        path(&markdown),
+        os("--json"),
+        path(&report_json),
+    ];
+    let refs: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsString::as_os_str).collect();
+    run(&refs);
+    let md = std::fs::read_to_string(&markdown).expect("markdown");
+    assert!(
+        md.contains("## Retrieval modes compared") && md.contains("| it-combined | combined |")
+    );
+}

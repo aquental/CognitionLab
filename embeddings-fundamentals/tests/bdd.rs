@@ -80,6 +80,23 @@ pub struct LabWorld {
     pub other_embedders: Vec<Arc<DeterministicEmbedder>>,
     /// Cross-modal adapter of image runs (its own embedding space), when a step sets one.
     pub image_embedder: Option<Arc<DeterministicEmbedder>>,
+    /// Rankings and fused results of the rank-fusion scenario.
+    pub fusion: FusionState,
+}
+
+/// Inputs and outputs of the rank-fusion scenario (US-03).
+#[derive(Debug, Default)]
+pub struct FusionState {
+    /// Text ranking, best first.
+    pub text: Vec<SearchHit>,
+    /// Image ranking, best first.
+    pub image: Vec<SearchHit>,
+    /// Fusion parameters.
+    pub params: embeddings_fundamentals::fusion::FusionParams,
+    /// Latest fused result.
+    pub fused: Vec<SearchHit>,
+    /// Fused result before the raw scores were rescaled.
+    pub before_rescaling: Option<Vec<SearchHit>>,
 }
 
 impl LabWorld {
@@ -106,6 +123,7 @@ impl LabWorld {
             comparison: None,
             engine_config: None,
             other_embedders: Vec::new(),
+            fusion: FusionState::default(),
             image_embedder: None,
         })
     }
