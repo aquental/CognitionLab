@@ -8,7 +8,14 @@ Invoke `/rust-skills` before implementing, modifying, reviewing, debugging, or t
 
 ## Current state
 
-The specification is complete, but the code is not written yet. `src/main.rs` is a starter binary. Everything in the architecture section below is the **planned** design from `spec/PLAN.md`. Check what actually exists before assuming a module, test target, or command is there.
+Phases 0–4 are implemented and every milestone (`@m1`–`@m4`) is in the acceptance suite (`config/acceptance.toml`, `milestone = 4`).
+
+- **Evidence.** All evidence comes from the **synthetic** fixture corpus. The owner corpus, labels, and fidelity sample are still outstanding, and so is the live OpenAI run (no key, no `remote_allowed`).
+- **Where to look.**
+  - final comparison: `reports/phase-4/comparison.md`;
+  - criteria-to-evidence map: `reports/ACCEPTANCE.md`;
+  - reproduction steps: `reports/README.md`.
+- **Before assuming a module, test target, or command exists, check the code.**
 
 - `spec/PRD.md` holds the requirements and the acceptance contract (Gherkin scenarios in §5). **The Gherkin there is normative.** Feature files are copied from it, and the BDD inventory is derived from it.
 - `spec/PLAN.md` holds the implementation plan: Phase 0 (harness) followed by Phases 1–4, which map to milestones `@m1`–`@m4`. It also fixes defaults (models, OCR commands, IDs, retry policy) and logs the adversarial review in §9.
@@ -42,7 +49,15 @@ cargo run --release --features engine-embed-anything -- experiment --manifest te
     --config config/experiments/image-clip-vit-b32.toml --store store --experiment <id> --report <out>.json
 cargo run --release --features engine-embed-anything -- search --mode image \
     --config config/experiments/image-clip-vit-b32.toml --store store --query "Mostre a radiografia de tórax"
+# Combined run (RRF over a text run and an image run in the same store; no ingestion):
+cargo run --release --features engine-embed-anything,engine-fastembed -- combine --manifest tests/fixtures/corpus/manifest.toml \
+    --config config/experiments/combined-e5-base-siglip.toml --store store \
+    --text-experiment <text id> --image-experiment <image id> --experiment <id> --report <out>.json
+cargo run --release --features engine-embed-anything,engine-fastembed -- search --mode combined \
+    --config config/experiments/combined-e5-base-siglip.toml --store store --experiment <combined id> --query "..."
 ```
+
+The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonimizador verify` tool, is the job of the sibling project `../anonimizador`.
 
 Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
 
@@ -52,9 +67,22 @@ The engine adapters sit behind Cargo features (`engine-embed-anything`, `engine-
 
 External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `tesseract` with `por` data (`brew install tesseract tesseract-lang`), both installed here.
 
+### Real sample exams (`tests/sample-exams/`): never leave this machine
+
+The owner keeps **real medical exams, with patient names in file names and content,** in `tests/sample-exams/`. The directory is git-ignored (`/embeddings-fundamentals/tests/sample-exams/` in the root `.gitignore`), and the following rules apply even so:
+
+- **No commits.** Never commit, push, or upload these files, or anything derived from them: extracted text, OCR output, images, renders, records, vectors, file names, or per-document numbers that identify a file. Stage only explicit paths (`git add <path>`), never `git add -A` or `git add .`, and check `git diff --cached --name-only` before every commit.
+- **No external services.** Never send these files or their content to reviewers (Grok, Codex, Antigravity) or to any remote engine (`remote_allowed` stays false for them). Run reviewers from a clean worktree of the committed branch (`git worktree add --detach <dir> <commit>`), which does not contain the directory.
+- **Local tests only.**
+  - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
+  - They work on temporary copies only and never persist outputs in the repository.
+  - Their assertion and log messages name a document by its index or checksum prefix, never by file name, and never print its text.
+  - They assert properties (the anonymization gate refuses the files, extraction and chunking invariants hold), never document-specific values.
+- **No reading into notes.** Do not read their content into conversation notes, reports, or memory. Aggregate counts (pages, characters, images) are fine.
+
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
-## Architecture (PLAN §1–§4; Phases 1–3 implemented: corpus, extraction, chunking, store, pipeline, text and image retrieval, evaluation, measurement, CLI)
+## Architecture (PLAN §1–§4; Phases 1–4 implemented: corpus, extraction, chunking, store, pipeline, text/image/combined retrieval, RRF fusion, evaluation, measurement, CLI)
 
 The pipeline runs Corpus manifest → anonymization/eligibility gate → extraction (native text or OCR, chosen per page) → structure-aware chunking → `EmbeddingStrategy` adapter → vector validation → atomic store → retrieval (text / image / RRF combined) → evaluation report.
 
@@ -77,6 +105,50 @@ Invariants that span several modules and are easy to break:
 - **Failure semantics.** Only transient errors are retried (`max_attempts = 3`, including the first attempt). Independent sources continue after a failure. Any failed required source makes the run `Incomplete` (exit code 2). Vectors are validated (dimensions, NaN, ±inf) before staging. Empty OCR output is flagged `unreadable`. Truncation is counted in model tokens, and when truncation is disabled, oversized input fails at stage `chunking`.
 - **Ranking.** Single-modality results sort by descending cosine score, with ties broken by ascending `record_id`. RRF uses `1/(60+rank)` with rank starting at 1, sums across lists, and uses the same tie-break.
 - **Data handling.** `remote_allowed` defaults to false and is checked before any remote client is built or any credential is read. Logs carry IDs and counts only, never chunk text. Stored image assets are re-encoded without metadata.
+
+## Adversarial review per phase (spec/prompt/execute.md §7, extended by the owner)
+
+Each phase is reviewed by three independent external reviewers, **one at a time and never in parallel**:
+
+**Grok → Codex → Antigravity (`agy`)**
+
+The owner added Antigravity on 2026-10-29, starting with Phase 4. It runs after the Grok → Codex order that execute.md fixes.
+
+- **Package.** Every reviewer gets the same review package, built with `scripts/review-package.sh`:
+  - the phase objective and acceptance criteria;
+  - the complete diff since the phase began, including new files;
+  - the reviewed commit;
+  - the evidence of the executed checks;
+  - the findings history.
+
+  Grep the package for secrets before sending it. Never send credentials or medical documents.
+- **Each reviewer works the same way.** It performs an adversarial review of the whole phase, not only a check of earlier fixes. It lists findings with:
+  - ID;
+  - severity;
+  - file and line;
+  - description and impact;
+  - a reproduction scenario or verifiable rationale;
+  - a validation suggestion.
+
+  Claude then handles every finding, including low-severity ones:
+  - fixes a valid finding with a regression test (and a mutant check where it fits);
+  - refutes a false positive with verifiable evidence.
+
+  The same reviewer then confirms closure.
+- **Antigravity.** Run it read-only (`agy --print --mode plan`). The prompt tells it to use the **`rust-dev`** plugin (skills `rust-async-and-errors`, `rust-ownership-and-perf`, `rust-cargo-quality` and its rule) together with PLAN §2.2/§2.3.
+- **Loop.** Repeat Grok → Codex → Antigravity until no reviewer has an unresolved valid finding on the final state. When a later reviewer's fixes change behavior, contracts, or evidence that an earlier reviewer already reviewed, resubmit to the earlier reviewers in order. Unresolved disagreements stay explicit.
+- **Records.** Save each raw report as `reports/reviews/phase-N/{grok,codex,agy}-roundK.md`. Track every finding in `reports/reviews/phase-N/FINDINGS.md`, with these columns:
+  - ID (`G`/`C`/`A` prefixes);
+  - reviewer;
+  - severity;
+  - resolution or refutation;
+  - files;
+  - validation;
+  - confirmation;
+  - status.
+
+  When a phase is approved, add its table to `REVISION.md` (one row per reviewer finding: reviewer, ID, severity, finding summary, solution summary).
+- **No simulation.** Never simulate a review. An unavailable reviewer blocks phase approval. The only exception is a Codex usage-quota error, recorded as an owner waiver; Grok and Antigravity are always required.
 
 ## BDD contract (PRD §5.7, PLAN §5.2)
 

@@ -51,10 +51,10 @@ echo; echo "===== PRD §5.7 BDD contract ====="
 section "^### 5\\.7 " "^## 6\\. " spec/PRD.md
 echo; echo "===== PROGRESS RECORD (implementer's claims + validation evidence) ====="
 cat reports/progress/PROGRESS.md
-echo; echo "===== BINARY / LOCK FILES CHANGED (not inlined) ====="
-git diff --stat "${base}...HEAD" -- '*.pdf' '*.png' '*.jpg' '*Cargo.lock' | cat
+echo; echo "===== BINARY / LOCK / RESULT-JSON FILES CHANGED (not inlined; result JSONs are rendered in the inlined comparison.md) ====="
+git diff --stat "${base}...HEAD" -- '*.pdf' '*.png' '*.jpg' '*Cargo.lock' 'reports/phase-*/*.json' | cat
 echo; echo "===== COMPLETE PHASE DIFF (${base}...HEAD, text files) ====="
-git diff "${base}...HEAD" -- . ':(exclude)*.pdf' ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*Cargo.lock' ':(exclude)reports/reviews/**' | cat
+git diff "${base}...HEAD" -- . ':(exclude)*.pdf' ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*Cargo.lock' ':(exclude)reports/reviews/**' ':(exclude)reports/phase-*/*.json' | cat
 git diff "${base}...HEAD" -- ../.github | cat
 } > "$out"
 wc -c "$out"

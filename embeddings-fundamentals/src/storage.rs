@@ -191,6 +191,34 @@ pub struct ExperimentSnapshot {
     /// ingestion that no evaluation belongs to.
     #[serde(default)]
     pub evaluation: Option<EvaluationProvenance>,
+    /// Outcome of the run that pinned these revisions: `incomplete` when a required
+    /// source failed. `None` for snapshots written before it was recorded (Codex C4-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_status: Option<crate::domain::RunStatus>,
+}
+
+/// Fingerprint of a set of revisions, independent of their order: what a result
+/// searched, so that a report can tell two runs over different revisions apart even
+/// when their experiment ids and spaces match (Codex C4-3).
+///
+/// # Errors
+///
+/// Returns [`crate::ids::IdError`] when the canonical encoding fails.
+pub fn revisions_fingerprint(
+    revisions: &[RevisionRef],
+) -> Result<Fingerprint, crate::ids::IdError> {
+    let mut keys: Vec<(&str, &str, &str)> = revisions
+        .iter()
+        .map(|r| {
+            (
+                r.space.as_str(),
+                r.source_id.as_str(),
+                r.revision_id.as_str(),
+            )
+        })
+        .collect();
+    keys.sort_unstable();
+    Fingerprint::of(&keys)
 }
 
 /// Exact query set and labels an experiment evaluated, by version and file checksum.
@@ -420,9 +448,20 @@ impl FsRecordStore {
     ///
     /// Returns [`StoreError`] when a pointer or revision directory cannot be read.
     pub fn index_size_bytes(&self, space: &EmbeddingSpaceId) -> Result<u64, StoreError> {
+        self.revisions_size_bytes(&self.active(space)?)
+    }
+
+    /// Bytes on disk of the given revisions (for example those an experiment snapshot
+    /// pins, which later publishes may have replaced as active).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] when a revision directory cannot be read.
+    pub fn revisions_size_bytes(&self, revisions: &[RevisionRef]) -> Result<u64, StoreError> {
         let mut total = 0_u64;
-        for revision in self.active(space)? {
-            let dir = self.revision_dir(space, &revision.source_id, &revision.revision_id);
+        for revision in revisions {
+            let dir =
+                self.revision_dir(&revision.space, &revision.source_id, &revision.revision_id);
             for entry in std::fs::read_dir(&dir).map_err(io(&dir))? {
                 let path = entry.map_err(io(&dir))?.path();
                 total += std::fs::metadata(&path).map_err(io(&path))?.len();
@@ -1230,6 +1269,7 @@ mod tests {
             fingerprints: BTreeMap::new(),
             corpus_checksum: Checksum::of_bytes(b"c"),
             evaluation: None,
+            run_status: None,
         };
         store.save_experiment(&snapshot).expect("save");
         assert!(matches!(

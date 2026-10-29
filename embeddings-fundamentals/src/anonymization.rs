@@ -33,15 +33,43 @@ fn finding(area: &'static str, detail: impl Into<String>) -> Finding {
     }
 }
 
-/// Flags filename patterns that look like identifiers (CPF, dates, two capitalized
-/// words). The match itself is not reported.
+/// Flags path components that look like identifiers (CPF, dates, two capitalized
+/// words, two or more consecutive upper-case words such as `MARIA DA SILVA`), and any
+/// free-form name: anything beyond lower-case ASCII letters, digits, `-`, `_`, and `.`
+/// (spaces, capitals, accents), where a name can hide in a form no pattern anticipates.
+///
+/// Every component of `file` is checked, directories included, because a manifest
+/// records the whole relative path (Grok G4-6: `MARIA SILVA/lab-001.pdf`). Pass the
+/// path as the manifest records it, relative to the manifest, not an absolute path.
+/// The match itself is never reported. A finding asks a reviewer to look; it never
+/// decides.
 #[must_use]
 pub fn filename_findings(file: &Path) -> Vec<Finding> {
-    let name = file
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let patterns: [(&str, &str); 3] = [
+    let components: Vec<_> = file
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    let last = components.len().saturating_sub(1);
+    components
+        .iter()
+        .enumerate()
+        .flat_map(|(i, name)| {
+            let what = if i == last {
+                "filename"
+            } else {
+                "directory name"
+            };
+            component_findings(name, what)
+        })
+        .collect()
+}
+
+/// The findings of one path component (`what` is `filename` or `directory name`).
+fn component_findings(name: &str, what: &str) -> Vec<Finding> {
+    let patterns: [(&str, &str); 4] = [
         (r"\d{3}\.?\d{3}\.?\d{3}-?\d{2}", "CPF-like number"),
         (
             r"\d{2}[/._-]\d{2}[/._-]\d{4}|\d{4}-\d{2}-\d{2}",
@@ -51,12 +79,26 @@ pub fn filename_findings(file: &Path) -> Vec<Finding> {
             r"\b[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+[ _-][A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+\b",
             "capitalized name pair",
         ),
+        (
+            r"(?:^|[^\p{L}])\p{Lu}{2,}(?:[ _.-]+\p{Lu}+)*[ _.-]+\p{Lu}{2,}(?:$|[^\p{L}])",
+            "upper-case word sequence (possible name)",
+        ),
     ];
-    patterns
+    let mut findings: Vec<Finding> = patterns
         .iter()
-        .filter(|(pattern, _)| Regex::new(pattern).is_ok_and(|re| re.is_match(&name)))
-        .map(|(_, label)| finding("filename", format!("filename contains a {label}")))
-        .collect()
+        .filter(|(pattern, _)| Regex::new(pattern).is_ok_and(|re| re.is_match(name)))
+        .map(|(_, label)| finding("filename", format!("{what} contains a {label}")))
+        .collect();
+    let slug = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'));
+    if !slug {
+        findings.push(finding(
+            "filename",
+            format!("free-form {what} (spaces, capitals, or accents) may hold a name"),
+        ));
+    }
+    findings
 }
 
 /// Element and attribute names (`prefix:name`) inside an XMP packet, excluding the
@@ -313,13 +355,63 @@ mod tests {
 
     #[test]
     fn identifier_like_filenames_are_flagged() {
-        assert_eq!(filename_findings(Path::new("123.456.789-09.pdf")).len(), 1);
-        assert_eq!(
-            filename_findings(Path::new("laudo-12-03-2024.pdf")).len(),
-            1
+        let labels = |name: &str| -> Vec<String> {
+            filename_findings(Path::new(name))
+                .into_iter()
+                .map(|f| f.detail)
+                .collect()
+        };
+        assert_eq!(labels("123.456.789-09.pdf").len(), 1);
+        assert_eq!(labels("laudo-12-03-2024.pdf").len(), 1);
+        let pair = labels("Maria Silva.pdf");
+        assert!(
+            pair.iter().any(|d| d.contains("capitalized name pair")),
+            "{pair:?}"
         );
-        assert_eq!(filename_findings(Path::new("Maria Silva.pdf")).len(), 1);
+        assert!(pair.iter().any(|d| d.contains("free-form")), "{pair:?}");
         assert!(filename_findings(Path::new("lab-searchable-001.pdf")).is_empty());
+        assert!(filename_findings(Path::new("labs/2024/lab-searchable-001.pdf")).is_empty());
+        // Regression (Grok G4-6): a directory component is checked like the file name.
+        let nested = filename_findings(Path::new("sub/FULANO DE TAL/lab-001.pdf"));
+        assert!(
+            nested
+                .iter()
+                .any(|f| f.detail.starts_with("directory name contains")
+                    && f.detail.contains("upper-case word sequence")),
+            "{nested:?}"
+        );
+        assert!(nested.iter().all(|f| !f.detail.contains("FULANO")));
+        // Regression (real sample exams): names in upper case, with accents and
+        // particles, were not flagged at all.
+        for name in [
+            "MARIA DA SILVA - LAUDO.pdf",
+            "JOÃO P. SOUZA - RELATORIO.pdf",
+            "ANA_LIMA_exame.pdf",
+            "EXAME E CONTROLE.pdf",
+        ] {
+            let findings = filename_findings(Path::new(name));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.detail.contains("upper-case word sequence")),
+                "{name}: {findings:?}"
+            );
+            assert!(
+                findings
+                    .iter()
+                    .all(|f| !f.detail.contains("MARIA") && !f.detail.contains("SOUZA")),
+                "the match itself is never reported"
+            );
+        }
+        // A single upper-case token (an acronym) is not a name sequence, but any capital
+        // makes the name free-form.
+        assert_eq!(
+            labels("RX-001.png"),
+            ["free-form filename (spaces, capitals, or accents) may hold a name"]
+        );
+        // Lower-case words with spaces or accents are free-form too.
+        assert_eq!(labels("maria silva.pdf").len(), 1);
+        assert_eq!(labels("joão-silva.pdf").len(), 1);
     }
 
     #[test]

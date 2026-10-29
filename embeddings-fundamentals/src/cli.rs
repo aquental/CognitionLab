@@ -14,12 +14,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::adapters;
 use crate::anonymization;
-use crate::config::ExperimentConfig;
+use crate::config::{CombinedConfig, EngineConfig, ExperimentConfig};
 use crate::corpus::LoadedManifest;
 use crate::extraction::poppler::{PopplerImageExtractor, PopplerTextExtractor, TesseractOcr};
 use crate::ids::{EmbeddingSpaceId, ExperimentId};
 use crate::pipeline::{Pipeline, TokioSleeper, ValidationError, check_remote_permission};
-use crate::retrieval::{Scope, search_images, search_text};
+use crate::retrieval::{Leg, Scope, search_combined, search_images, search_text};
 use crate::storage::FsRecordStore;
 use crate::tools;
 
@@ -52,8 +52,80 @@ pub enum Command {
     Search(SearchArgs),
     /// Ingest, evaluate the frozen queries, and measure one configuration.
     Experiment(ExperimentArgs),
+    /// Evaluate and measure combined retrieval (RRF) over a text run and an image run.
+    Combine(CombineArgs),
     /// Combine experiment results into a comparison report (JSON and Markdown).
     Report(ReportArgs),
+    /// Draft a corpus manifest for a directory of anonymized files (`TESTS.md`).
+    DraftManifest(DraftManifestArgs),
+    /// Draft relevance labels pooled from the top results of indexed runs
+    /// (`TESTS.md`).
+    DraftLabels(DraftLabelsArgs),
+}
+
+/// Arguments of `draft-manifest`.
+#[derive(Debug, Clone, Args)]
+pub struct DraftManifestArgs {
+    /// Directory of the anonymized corpus files (PDF, PNG, JPEG), searched
+    /// recursively; the manifest belongs in it.
+    #[arg(long)]
+    pub dir: PathBuf,
+    /// Corpus identifier.
+    #[arg(long)]
+    pub corpus_id: String,
+    /// Configuration whose extraction settings decide which pages have a usable text
+    /// layer; the default settings otherwise.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Write the draft to this new file (an existing file is never overwritten)
+    /// instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Write the draft even when file names were flagged for review.
+    #[arg(long)]
+    pub allow_flagged_names: bool,
+}
+
+/// Arguments of `draft-labels`.
+#[derive(Debug, Clone, Args)]
+pub struct DraftLabelsArgs {
+    /// Store root directory.
+    #[arg(long, default_value = "store")]
+    pub store: PathBuf,
+    /// A pooled run as `<experiment>=<configuration>` (repeatable): the revisions the
+    /// experiment pinned are searched with the configuration's query model and
+    /// modality.
+    #[arg(long = "run", required = true, value_parser = parse_run)]
+    pub runs: Vec<(ExperimentId, PathBuf)>,
+    /// Frozen query set.
+    #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
+    pub queries: PathBuf,
+    /// Results pooled from each run for every query.
+    #[arg(long, default_value = "10")]
+    pub depth: std::num::NonZeroUsize,
+    /// Corpus the labels describe (its `corpus_id`).
+    #[arg(long)]
+    pub corpus: String,
+    /// Write the draft to this new file (an existing file is never overwritten)
+    /// instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Corpus manifest of the index; required for a remote engine, whose permission
+    /// is granted per corpus.
+    #[arg(long)]
+    pub manifest: Option<PathBuf>,
+}
+
+/// Parses `<experiment>=<configuration>`.
+fn parse_run(value: &str) -> Result<(ExperimentId, PathBuf), String> {
+    let (id, config) = value
+        .split_once('=')
+        .ok_or_else(|| "expected <experiment>=<configuration>".to_owned())?;
+    let id = id.parse::<ExperimentId>().map_err(|e| e.to_string())?;
+    if config.is_empty() {
+        return Err("expected <experiment>=<configuration>".to_owned());
+    }
+    Ok((id, PathBuf::from(config)))
 }
 
 /// Arguments of `experiment`.
@@ -79,12 +151,56 @@ pub struct ExperimentArgs {
     pub fidelity: Option<PathBuf>,
 }
 
+/// Arguments of `combine`.
+#[derive(Debug, Clone, Args)]
+pub struct CombineArgs {
+    /// Corpus manifest both leg runs indexed (checksum and remote permission).
+    #[arg(long)]
+    pub manifest: PathBuf,
+    /// Saved combined configuration (text leg, image leg, fusion).
+    #[arg(long)]
+    pub config: PathBuf,
+    /// Store root holding both leg runs.
+    #[arg(long, default_value = "store")]
+    pub store: PathBuf,
+    /// Text run (`experiment`) whose pinned revisions the text leg searches.
+    #[arg(long)]
+    pub text_experiment: ExperimentId,
+    /// Image run (`experiment`) whose pinned revisions the image leg searches.
+    #[arg(long)]
+    pub image_experiment: ExperimentId,
+    /// Id of this combined run (snapshots are create-only).
+    #[arg(long)]
+    pub experiment: ExperimentId,
+    /// Write the JSON result here instead of stdout.
+    #[arg(long)]
+    pub report: Option<PathBuf>,
+    /// Frozen query set.
+    #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
+    pub queries: PathBuf,
+    /// Frozen relevance labels.
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v4.toml")]
+    pub labels: PathBuf,
+    /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
+    #[arg(long, default_value_t = 20)]
+    pub latency_repeats: usize,
+    /// Price table of the text leg's provider (remote engines).
+    #[arg(long)]
+    pub text_price: Option<PathBuf>,
+    /// Price table of the image leg's provider (remote engines).
+    #[arg(long)]
+    pub image_price: Option<PathBuf>,
+}
+
 /// Arguments of `report`.
 #[derive(Debug, Clone, Args)]
 pub struct ReportArgs {
     /// Experiment result files written by `experiment --report`, in report order.
     #[arg(long = "result", required = true)]
     pub results: Vec<PathBuf>,
+    /// Combined result files written by `combine --report`, in report order.
+    #[arg(long = "combined")]
+    pub combined: Vec<PathBuf>,
     /// Markdown output.
     #[arg(long)]
     pub markdown: PathBuf,
@@ -135,7 +251,8 @@ pub struct IngestArgs {
 /// Arguments of `search`.
 #[derive(Debug, Args)]
 pub struct SearchArgs {
-    /// Saved experiment configuration (selects the query model and index space).
+    /// Saved experiment configuration (selects the query model and index space); a
+    /// combined configuration in `combined` mode.
     #[arg(long)]
     pub config: PathBuf,
     /// Store root directory.
@@ -169,6 +286,8 @@ pub enum SearchMode {
     Text,
     /// Text queries against image records (needs a cross-modal model).
     Image,
+    /// Both legs of a combined configuration, fused with RRF.
+    Combined,
 }
 
 /// Runs the parsed command.
@@ -186,9 +305,16 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Validate(args) => validate(&args).await,
         Command::Ingest(args) => ingest(&args).await,
-        Command::Search(args) => search(&args).await,
+        Command::Search(args) => match args.mode {
+            SearchMode::Text => search(&args, crate::domain::Modality::Text).await,
+            SearchMode::Image => search(&args, crate::domain::Modality::Image).await,
+            SearchMode::Combined => search_fused(&args).await,
+        },
         Command::Experiment(args) => experiment(&args).await,
+        Command::Combine(args) => combine(&args).await,
         Command::Report(args) => blocking(move || report(&args)).await,
+        Command::DraftManifest(args) => draft_manifest(&args).await,
+        Command::DraftLabels(args) => draft_labels(&args).await,
     }
 }
 
@@ -442,55 +568,305 @@ fn print_sources(report: &crate::pipeline::RunReport) {
     }
 }
 
-async fn search(args: &SearchArgs) -> Result<ExitCode> {
-    let path = args.config.clone();
-    let config = blocking(move || Ok(ExperimentConfig::load(&path)?)).await?;
-    let engine = &config.engine;
-    if engine.engine.execution() == crate::domain::Execution::Remote {
-        // The permission model is per corpus: a remote query model needs the manifest
-        // of the indexed corpus, checked before any client or credential exists.
-        let Some(path) = &args.manifest else {
-            eprintln!(
-                "validation failed: a remote engine needs --manifest for its permission check"
-            );
-            return Ok(ExitCode::from(EXIT_VALIDATION));
-        };
-        let path = path.clone();
-        let manifest = blocking(move || Ok(LoadedManifest::load(&path)?)).await?;
+/// What the manifest of a remote permission check must be the corpus of.
+#[derive(Clone, Copy)]
+enum Searched<'a> {
+    /// The command ingests or combines that very corpus (it checks the snapshots
+    /// itself).
+    Manifest,
+    /// The revisions these experiments pinned.
+    Snapshots(&'a [&'a crate::storage::ExperimentSnapshot]),
+    /// The active revisions, whose corpus no record names.
+    Active,
+}
+
+/// Checks the per-corpus permission of every remote engine among `engines` before any
+/// client or credential exists; local engines need no manifest. The manifest must be
+/// the corpus actually searched (Codex C4-2): every searched snapshot must have
+/// indexed it, and an active-revision search, whose corpus cannot be checked, is
+/// refused for a remote engine. Returns the refusal to report, if any.
+async fn remote_permission(
+    engines: &[&EngineConfig],
+    manifest: Option<&Path>,
+    searched: Searched<'_>,
+) -> Result<Option<String>> {
+    let remote: Vec<&&EngineConfig> = engines
+        .iter()
+        .filter(|e| e.engine.execution() == crate::domain::Execution::Remote)
+        .collect();
+    if remote.is_empty() {
+        return Ok(None);
+    }
+    // The permission model is per corpus: a remote query model needs the manifest of
+    // the indexed corpus.
+    let Some(path) = manifest else {
+        return Ok(Some(
+            "a remote engine needs --manifest for its permission check".to_owned(),
+        ));
+    };
+    let path = path.to_owned();
+    let manifest = blocking(move || Ok(LoadedManifest::load(&path)?)).await?;
+    for engine in remote {
         if let Err(e) = check_remote_permission(
             &manifest,
             engine.engine.execution(),
             engine.engine.as_str(),
             &engine.model_id,
         ) {
+            return Ok(Some(e.to_string()));
+        }
+    }
+    match searched {
+        Searched::Manifest => {}
+        Searched::Active => {
+            return Ok(Some(
+                "a remote engine needs --experiment: the corpus of the active revisions cannot be checked against --manifest".to_owned(),
+            ));
+        }
+        Searched::Snapshots(snapshots) => {
+            if let Some(other) = snapshots
+                .iter()
+                .find(|s| s.corpus_checksum != manifest.manifest_checksum)
+            {
+                return Ok(Some(format!(
+                    "experiment {} indexed another corpus than --manifest, whose permission does not apply to it",
+                    other.experiment_id
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Writes `content` to a new file, never overwriting one, or to stdout.
+async fn write_new(path: Option<&Path>, content: String) -> Result<()> {
+    match path {
+        Some(path) => {
+            let path = path.to_owned();
+            blocking(move || {
+                use std::io::Write as _;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .with_context(|| {
+                        format!(
+                            "create {} (an existing file is never overwritten)",
+                            path.display()
+                        )
+                    })?;
+                file.write_all(content.as_bytes())
+                    .with_context(|| format!("write {}", path.display()))?;
+                Ok(())
+            })
+            .await
+        }
+        None => {
+            print!("{content}");
+            Ok(())
+        }
+    }
+}
+
+/// `draft-manifest`: measures the files of a corpus directory and drafts their
+/// manifest entries. Flagged file names are refused unless allowed, because the
+/// manifest is tracked.
+async fn draft_manifest(args: &DraftManifestArgs) -> Result<ExitCode> {
+    let extraction = match &args.config {
+        Some(path) => {
+            let path = path.clone();
+            blocking(move || Ok(ExperimentConfig::load(&path)?.extraction)).await?
+        }
+        None => crate::extraction::ExtractionConfig::default(),
+    };
+    let dir = args.dir.clone();
+    let files = blocking(move || Ok(crate::drafts::corpus_files(&dir)?)).await?;
+    let text = PopplerTextExtractor::detect().await;
+    let images = PopplerImageExtractor::detect().await;
+    let draft = crate::drafts::draft_manifest(
+        &text,
+        &images,
+        &args.dir,
+        &files,
+        &extraction,
+        &crate::extraction::images::ImageFilter::default(),
+        &args.corpus_id,
+    )
+    .await?;
+    let flagged: Vec<String> = draft
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.name_flagged())
+        .map(|(i, _)| (i + 1).to_string())
+        .collect();
+    if !flagged.is_empty() && !args.allow_flagged_names {
+        eprintln!(
+            "validation failed: the file names of sources {} (in path order) were flagged for review; rename them to neutral names (TESTS.md) or pass --allow-flagged-names",
+            flagged.join(", ")
+        );
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    write_new(args.out.as_deref(), draft.render()).await?;
+    eprintln!(
+        "drafted {} source(s); none is eligible until its anonymization review is recorded",
+        draft.sources.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `draft-labels`: pools the top results of every run for every frozen query into a
+/// label file to judge.
+async fn draft_labels(args: &DraftLabelsArgs) -> Result<ExitCode> {
+    use crate::drafts::{DraftError, PoolRun};
+    let paths: Vec<PathBuf> = args.runs.iter().map(|(_, p)| p.clone()).collect();
+    let queries_path = args.queries.clone();
+    let (configs, queries) = blocking(move || {
+        let configs = paths
+            .iter()
+            .map(|p| ExperimentConfig::load(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((configs, crate::evaluation::load_queries(&queries_path)?))
+    })
+    .await?;
+    // Every snapshot is read before any model loads, so a missing experiment is
+    // refused without a model load or download.
+    let (root, ids) = (
+        args.store.clone(),
+        args.runs
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let (store, snapshots) = blocking(move || {
+        let store = FsRecordStore::open_reader(&root)?;
+        let snapshots = ids
+            .iter()
+            .map(|id| store.load_experiment(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((Arc::new(store), snapshots))
+    })
+    .await?;
+    let engines: Vec<&EngineConfig> = configs.iter().map(|c| &c.engine).collect();
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshots.iter().collect();
+    if let Some(refusal) = remote_permission(
+        &engines,
+        args.manifest.as_deref(),
+        Searched::Snapshots(&pinned),
+    )
+    .await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    let mut embedders = Vec::with_capacity(configs.len());
+    for config in &configs {
+        match adapters::build(&config.engine).await {
+            Ok(adapter) => embedders.push(adapter),
+            Err(e) => return Ok(build_failure(&e)),
+        }
+    }
+    let spaces: Vec<EmbeddingSpaceId> = embedders
+        .iter()
+        .map(|e| e.model_info().embedding_space_id.clone())
+        .collect();
+    // A run whose experiment pinned nothing in its model's space would pool nothing,
+    // silently: refuse the pairing instead.
+    for (((id, config), space), snapshot) in args
+        .runs
+        .iter()
+        .map(|(id, config)| (id, config))
+        .zip(&spaces)
+        .zip(&snapshots)
+    {
+        if !snapshot.revisions.iter().any(|r| &r.space == space) {
+            eprintln!(
+                "validation failed: experiment {id} pins no revision in the space {space} of {}",
+                config.display()
+            );
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    }
+    let runs: Vec<PoolRun<'_>> = args
+        .runs
+        .iter()
+        .zip(&configs)
+        .zip(&embedders)
+        .zip(&spaces)
+        .zip(&snapshots)
+        .map(|((((run, config), embedder), space), snapshot)| PoolRun {
+            experiment: &run.0,
+            modality: config
+                .ingest
+                .modality
+                .unwrap_or(crate::domain::Modality::Text),
+            space,
+            embedder: &**embedder,
+            scope: Scope::Experiment(snapshot),
+        })
+        .collect();
+    let draft = match crate::drafts::draft_labels(
+        &store,
+        &queries.value,
+        &runs,
+        args.depth.get(),
+        &args.corpus,
+    )
+    .await
+    {
+        Ok(draft) => draft,
+        Err(DraftError::Search(
+            e @ crate::retrieval::SearchError::Embedding(
+                crate::embedding::EmbeddingError::Unsupported { .. },
+            ),
+        )) => {
             eprintln!("validation failed: {e}");
             return Ok(ExitCode::from(EXIT_VALIDATION));
         }
+        Err(e) => return Err(e.into()),
+    };
+    write_new(args.out.as_deref(), draft.render()).await?;
+    let candidates: usize = draft.queries.iter().map(|q| q.candidates.len()).sum();
+    eprintln!(
+        "drafted {candidates} candidate(s) for {} queries; replace every \"TODO\" before using the file",
+        draft.queries.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Single-modality search: text records, or image records of a cross-modal space.
+async fn search(args: &SearchArgs, modality: crate::domain::Modality) -> Result<ExitCode> {
+    let path = args.config.clone();
+    let config = blocking(move || Ok(ExperimentConfig::load(&path)?)).await?;
+    // The store and snapshot are read before any model loads, so a missing experiment
+    // is refused without a model load or download.
+    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshot.iter().collect();
+    let searched = if snapshot.is_some() {
+        Searched::Snapshots(&pinned)
+    } else {
+        Searched::Active
+    };
+    if let Some(refusal) =
+        remote_permission(&[&config.engine], args.manifest.as_deref(), searched).await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
     }
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
     };
-    let (root, experiment) = (args.store.clone(), args.experiment.clone());
-    let (store, snapshot) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let store = FsRecordStore::open_reader(&root)?;
-        let snapshot = experiment
-            .as_ref()
-            .map(|id| store.load_experiment(id))
-            .transpose()?;
-        Ok((Arc::new(store), snapshot))
-    })
-    .await??;
     let space = args
         .space
         .clone()
         .unwrap_or_else(|| embedder.model_info().embedding_space_id.clone());
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
-    let outcome = match args.mode {
-        SearchMode::Text => {
+    let outcome = match modality {
+        crate::domain::Modality::Text => {
             search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await
         }
-        SearchMode::Image => {
+        crate::domain::Modality::Image => {
             search_images(&store, &space, &*embedder, &args.query, args.limit, scope).await
         }
     };
@@ -507,6 +883,207 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
         Err(e) => return Err(e.into()),
     };
     println!("{}", serde_json::to_string_pretty(&hits)?);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Opens the store read-only with the snapshot of `experiment`, if one is named.
+async fn open_scope(
+    root: &Path,
+    experiment: Option<&ExperimentId>,
+) -> Result<(
+    Arc<FsRecordStore>,
+    Option<crate::storage::ExperimentSnapshot>,
+)> {
+    let (root, experiment) = (root.to_owned(), experiment.cloned());
+    blocking(move || {
+        let store = FsRecordStore::open_reader(&root)?;
+        let snapshot = experiment
+            .as_ref()
+            .map(|id| store.load_experiment(id))
+            .transpose()?;
+        Ok((Arc::new(store), snapshot))
+    })
+    .await
+}
+
+/// Loads a combined configuration on the blocking pool; a refused leg pairing is a
+/// validation failure (exit 3), reported before any model is loaded.
+async fn load_combined(path: &Path) -> Result<Result<CombinedConfig, String>> {
+    let path = path.to_owned();
+    blocking(move || match CombinedConfig::load(&path) {
+        Ok(config) => Ok(Ok(config)),
+        Err(e @ crate::config::ConfigError::Combination { .. }) => Ok(Err(e.to_string())),
+        Err(e) => Err(e.into()),
+    })
+    .await
+}
+
+/// `search --mode combined`: both legs of a combined configuration, fused with RRF.
+async fn search_fused(args: &SearchArgs) -> Result<ExitCode> {
+    if args.space.is_some() {
+        eprintln!(
+            "validation failed: --space names one index; a combined search uses the space of each leg's model"
+        );
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    let config = match load_combined(&args.config).await? {
+        Ok(config) => config,
+        Err(refusal) => {
+            eprintln!("validation failed: {refusal}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    };
+    // Snapshot first: a missing experiment, or one that is not a combined run with these
+    // fusion parameters, is refused before either model loads. Its leg spaces are
+    // checked by `search_combined` once the models give them.
+    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
+    let pinned: Vec<&crate::storage::ExperimentSnapshot> = snapshot.iter().collect();
+    let searched = if snapshot.is_some() {
+        Searched::Snapshots(&pinned)
+    } else {
+        Searched::Active
+    };
+    if let Some(refusal) = remote_permission(
+        &[&config.text.engine, &config.image.engine],
+        args.manifest.as_deref(),
+        searched,
+    )
+    .await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    if let Some(snapshot) = &snapshot
+        && let Err(e) = crate::retrieval::check_fusion_pinned(snapshot, config.fusion)
+    {
+        eprintln!("validation failed: {e}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    let text = match adapters::build(&config.text.engine).await {
+        Ok(adapter) => adapter,
+        Err(e) => return Ok(build_failure(&e)),
+    };
+    let image = match adapters::build(&config.image.engine).await {
+        Ok(adapter) => adapter,
+        Err(e) => return Ok(build_failure(&e)),
+    };
+    let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
+    let (text_space, image_space) = (
+        text.model_info().embedding_space_id.clone(),
+        image.model_info().embedding_space_id.clone(),
+    );
+    let outcome = search_combined(
+        &store,
+        Leg {
+            space: &text_space,
+            embedder: &*text,
+        },
+        Leg {
+            space: &image_space,
+            embedder: &*image,
+        },
+        config.fusion,
+        &args.query,
+        args.limit,
+        scope,
+    )
+    .await;
+    let hits = match outcome {
+        Ok(hits) => hits,
+        Err(
+            e @ (crate::retrieval::SearchError::Embedding(
+                crate::embedding::EmbeddingError::Unsupported { .. },
+            )
+            | crate::retrieval::SearchError::SnapshotMismatch { .. }),
+        ) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    println!("{}", serde_json::to_string_pretty(&hits)?);
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn combine(args: &CombineArgs) -> Result<ExitCode> {
+    use crate::experiment::{CombinedInputs, ExperimentError, Instruments};
+    let config = match load_combined(&args.config).await? {
+        Ok(config) => config,
+        Err(refusal) => {
+            eprintln!("validation failed: {refusal}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    };
+    // The manifest is the corpus combined: `run_combined` refuses legs of another one.
+    if let Some(refusal) = remote_permission(
+        &[&config.text.engine, &config.image.engine],
+        Some(&args.manifest),
+        Searched::Manifest,
+    )
+    .await?
+    {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    let Some(repeats) = std::num::NonZeroUsize::new(args.latency_repeats) else {
+        eprintln!("validation failed: --latency-repeats must be at least 1");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    };
+    let inputs = args.clone();
+    let (manifest, dataset, text_price, image_price) = blocking(move || {
+        let price = |path: Option<&Path>| path.map(crate::cost::PriceTable::load).transpose();
+        Ok((
+            LoadedManifest::load(&inputs.manifest)?,
+            crate::evaluation::Dataset::load(&inputs.queries, &inputs.labels)?,
+            price(inputs.text_price.as_deref())?,
+            price(inputs.image_price.as_deref())?,
+        ))
+    })
+    .await?;
+    let store = open_writer(&args.store).await?;
+    let instruments = Instruments {
+        clock: Arc::new(crate::measurement::SystemClock::new()),
+        memory: crate::measurement::RusageProbe,
+        hardware: crate::measurement::Hardware::detect().await,
+    };
+    let outcome = crate::experiment::run_combined(
+        &store,
+        async || adapters::build(&config.text.engine).await,
+        async || adapters::build(&config.image.engine).await,
+        &instruments,
+        CombinedInputs {
+            experiment_id: &args.experiment,
+            text_experiment: &args.text_experiment,
+            image_experiment: &args.image_experiment,
+            corpus_checksum: &manifest.manifest_checksum,
+            dataset: &dataset,
+            fusion: config.fusion,
+            latency_repeats: repeats,
+            text_price: text_price.as_ref(),
+            image_price: image_price.as_ref(),
+        },
+    )
+    .await;
+    let result = match outcome {
+        Ok(result) => result,
+        Err(ExperimentError::Build(e)) => return Ok(build_failure(&e)),
+        Err(e @ ExperimentError::Combination(_)) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    write_json(args.report.as_deref(), &result).await?;
+    let m = &result.evaluation.metrics;
+    eprintln!(
+        "combined {}: P@3 {:.4} Hit@3 {:.4} nDCG@3 {:.4} | cold start {:.0} ms | warm median {:.2} ms",
+        result.experiment_id,
+        m.precision_at_3,
+        m.hit_at_3,
+        m.ndcg_at_3,
+        result.measurements.cold_start.total_ms,
+        result.measurements.warm_query_latency.median_ms
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -623,7 +1200,17 @@ fn report(args: &ReportArgs) -> Result<ExitCode> {
             serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
         );
     }
-    let report = match crate::report::ComparisonReport::new(results, args.notes.clone()) {
+    let mut combined = Vec::with_capacity(args.combined.len());
+    for path in &args.combined {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        combined.push(
+            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
+        );
+    }
+    let report = match crate::report::ComparisonReport::new(results, args.notes.clone())
+        .and_then(|report| report.with_combined(combined))
+    {
         Ok(report) => report,
         Err(e) => {
             eprintln!("validation failed: {e}");
