@@ -13,6 +13,7 @@ pub mod config;
 pub mod corpus;
 pub mod cost;
 pub mod domain;
+pub mod drafts;
 pub mod embedding;
 pub mod evaluation;
 pub mod experiment;

@@ -22,3 +22,18 @@ The owner asked for the real sample exams in `tests/sample-exams/` (git-ignored,
 |---|---|---|---|---|---|---|---|
 | S4-1 | real-exam test | high | `filename_findings` flagged none of the 12 real file names, which are mostly upper-case personal names | The rule now flags upper-case word sequences with one-letter particles, and every free-form name (anything beyond lower-case ASCII letters, digits, `-`, `_`, `.`). The gate is unchanged: no review, no processing | `src/anonymization.rs` | `anonymization::tests::identifier_like_filenames_are_flagged` (synthetic names); real: `every_real_exam_name_is_flagged_for_review_without_revealing_it` | fixed |
 | S4-2 | real-exam test | high | A table header that no row used was dropped from every chunk: 24 lines on 9 of the 12 real documents | Kept as a paragraph. The chunking rules id `structure-aware-v1/r2` enters the chunking fingerprint, so old revisions are not reused. The combined BDD fixture was re-derived because text record ids changed | `src/chunking.rs`, `src/pipeline.rs`, `tests/fixtures/metrics/combined*.toml` | `chunking::tests::a_table_header_no_row_uses_is_kept_as_text` (a mutant fails it); real: `real_exams_extract_deterministically_and_chunk_within_the_invariants` | fixed |
+
+## Grok round 3 (`grok-round3.md`, reviewed `b14c7d1`)
+
+| ID | Reviewer | Severity | Description | Resolution / refutation | Files | Validation evidence | Reviewer confirmation | Status |
+|---|---|---|---|---|---|---|---|---|
+| G4-4 | Grok | low | Since the `extract_pdf` refactor (`b14c7d1`), page reports were written only after every page extracted. A tool error on a later page (a `pdftotext` or `tesseract` failure or timeout) failed the source with `pages == []`, and the reason did not name the page | Valid. `extract_pdf` takes an `on_page` callback that sees each page as soon as it is extracted, and its error (`PdfExtractionError`) names the failing page (`page 2: tesseract failed: …`); the page count error is unchanged | `src/pipeline.rs`, `tests/sample_exams.rs` | `tests/pipeline.rs::a_failed_source_keeps_the_pages_extracted_before_the_failure`: OCR fails on page 2; the failed source keeps page 1 and the reason names page 2. A mutant reporting pages only after full success fails it (0 pages instead of 1) | pending (next Grok round) | fixed |
+
+## Owner-requested corpus tools (after Grok round 3)
+
+The owner asked for a local anonymization verifier, generators for the manifest and label drafts, and `TESTS.md`, which covers anonymization, building the corpus, and an automatic anonymizer design. They enter the next review round together with the G4-4 fix:
+
+- `scripts/anonymization-verify.py`. It prints counts only, in six places: name, metadata, text layer, OCR, embedded images, and raw bytes. It refuses a terms file that git could commit.
+- `scripts/make-covered-name-pdf.py` writes the synthetic fixture `tests/fixtures/anonymization/covered-name.pdf`, a name hidden under a drawn box.
+- `src/drafts.rs`, with the CLI commands `draft-manifest` and `draft-labels`.
+- Tests: `tests/drafts.rs` (3), `drafts::tests` (5, including a proptest that every proposed anchor is found by the evaluator), and 2 integration tests.

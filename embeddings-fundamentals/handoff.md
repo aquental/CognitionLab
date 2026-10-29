@@ -16,7 +16,7 @@ Updated: 2026-10-29. Use this file to resume `spec/prompt/execute.md` in a new s
 | Phase | Branch | PR | Status |
 |---|---|---|---|
 | 0–3 | — | #3–#8 | Approved and merged to `main` (Phase 3 via PR #8, `e1abe6f`) |
-| 4 Combined + publication (`@m4`) | `phase-4/combined-retrieval` | — | Implemented and validated; reviews Grok → Codex → Antigravity in progress |
+| 4 Combined + publication (`@m4`) | `phase-4/combined-retrieval` | — | Implemented and validated. Grok rounds 1–3 done (G4-1..G4-4 fixed; G4-4 awaits confirmation). Owner-requested corpus tools added (`TESTS.md`). Next: Grok round 4, then Codex, then Antigravity |
 
 The review loop now has a third reviewer, Antigravity (`agy`), after Grok and Codex (see `CLAUDE.md`).
 

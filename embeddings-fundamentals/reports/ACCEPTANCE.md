@@ -19,7 +19,7 @@ Test commands are in [`README.md`](README.md#tests). Scenario names refer to `te
 
 | # | Deliverable | Status | Evidence |
 |---|---|---|---|
-| 1 | Rust CLI for ingestion, indexing, querying, and evaluation | Met | `src/cli.rs`. The commands are `doctor`, `manifest`, `anonymization-check`, `validate`, `ingest`, `search --mode text\|image\|combined`, `experiment`, `combine`, and `report`; [README](README.md#reproducing-the-final-comparison) shows their use. Real CLI chain: `tests/integration.rs::the_cli_runs_combined_retrieval_over_real_text_and_image_runs` |
+| 1 | Rust CLI for ingestion, indexing, querying, and evaluation | Met | `src/cli.rs`. The commands are `doctor`, `manifest`, `anonymization-check`, `validate`, `ingest`, `search --mode text\|image\|combined`, `experiment`, `combine`, `report`, and, for the owner corpus, `draft-manifest` and `draft-labels` ([`TESTS.md`](../TESTS.md)); [README](README.md#reproducing-the-final-comparison) shows their use. Real CLI chain: `tests/integration.rs::the_cli_runs_combined_retrieval_over_real_text_and_image_runs` |
 | 2 | Embedding strategy interface with provider adapters | Met | `src/embedding/mod.rs` (`EmbeddingStrategy`, the single `#[async_trait]` dyn trait). Adapters: `embed_anything.rs` and `vision.rs` (EmbedAnything text and cross-modal), `fastembed.rs`, `openai.rs`, `deterministic.rs`. One factory: `src/adapters.rs` |
 | 3 | Versioned corpus manifest | Met (synthetic) | `tests/fixtures/corpus/manifest.toml` (checksums and anonymization review per source); `src/corpus.rs` |
 | 4 | Indexed-record schema and an actual indexed-record example | Met (synthetic) | Schema: `src/record.rs`. Example: [`examples/record-001.json`](examples/record-001.json) |
@@ -47,7 +47,7 @@ Test commands are in [`README.md`](README.md#tests). Scenario names refer to `te
 | Reingesting unchanged inputs creates no duplicates | Met | `us01.feature` "Reingestion is idempotent"; `tests/pipeline.rs::unchanged_reingestion_skips_extraction_and_embedding` |
 | All required §5 scenarios pass with no missing, ambiguous, or skipped steps and no empty required suite | Met | `bdd inventory: milestone 4, 35 required, 38 executed` (38 scenarios, 241 steps passed); `tests/bdd_selftest.rs` proves that the runner fails on undefined, ambiguous, skipped, or missing scenarios and on an empty required suite |
 | Failure injection proves bounded retries, atomic revision updates, invalid-vector rejection, and explicit incomplete runs | Met | `rel01.feature`: "Recover from a transient embedding failure within the limit", "Stop retrying and continue independent sources", "A failed replacement preserves the committed revision", and "Reject invalid embedding vectors"; incomplete runs: `the_experiment_command_reports_a_failed_labeled_source_with_exit_2` and `tests/experiment.rs` |
-| Real adapter integration evidence accompanies deterministic BDD; unavailable or unauthorized remote runs remain outstanding | Met; OpenAI live outstanding | `RUN_INTEGRATION=1 … --test integration -- --include-ignored`: 16 passed on the final state (real poppler and Tesseract, EmbedAnything MiniLM, FastEmbed MiniLM and E5, CLIP, SigLIP, the combined CLI chain). `openai_live_embeddings_rank_sensibly` is outstanding (no key or permission) |
+| Real adapter integration evidence accompanies deterministic BDD; unavailable or unauthorized remote runs remain outstanding | Met; OpenAI live outstanding | `RUN_INTEGRATION=1 … --test integration -- --include-ignored`: 18 passed on the final state (real poppler and Tesseract, EmbedAnything MiniLM, FastEmbed MiniLM and E5, CLIP, SigLIP, the combined CLI chain). `openai_live_embeddings_rank_sensibly` is outstanding (no key or permission) |
 
 Low retrieval quality is a valid result (PRD §13). On the synthetic corpus, combined retrieval raises Hit@3 above every leg. Its Precision@3 and nDCG@3 depend on how the `record_id` tie-break orders the text and image items at equal fused scores, so they are within tie-break noise; [`phase-4/comparison.md`](phase-4/comparison.md) explains why.
 
@@ -64,4 +64,4 @@ These tests found two defects, both fixed with synthetic regression tests:
 - upper-case and free-form file names were not flagged;
 - a table header that no data row used was dropped from the chunks.
 
-They are not retrieval-quality evidence: the exams have no anonymization review and no relevance labels.
+They are not retrieval-quality evidence: the exams have no anonymization review and no relevance labels. [`TESTS.md`](../TESTS.md) describes how to anonymize them and turn them into an evaluable corpus. The steps are `scripts/anonymization-verify.py`, `draft-manifest`, the review, `draft-labels`, and the judgments.

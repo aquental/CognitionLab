@@ -56,6 +56,76 @@ pub enum Command {
     Combine(CombineArgs),
     /// Combine experiment results into a comparison report (JSON and Markdown).
     Report(ReportArgs),
+    /// Draft a corpus manifest for a directory of anonymized files (`TESTS.md`).
+    DraftManifest(DraftManifestArgs),
+    /// Draft relevance labels pooled from the top results of indexed runs
+    /// (`TESTS.md`).
+    DraftLabels(DraftLabelsArgs),
+}
+
+/// Arguments of `draft-manifest`.
+#[derive(Debug, Clone, Args)]
+pub struct DraftManifestArgs {
+    /// Directory of the anonymized corpus files (PDF, PNG, JPEG), searched
+    /// recursively; the manifest belongs in it.
+    #[arg(long)]
+    pub dir: PathBuf,
+    /// Corpus identifier.
+    #[arg(long)]
+    pub corpus_id: String,
+    /// Configuration whose extraction settings decide which pages have a usable text
+    /// layer; the default settings otherwise.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+    /// Write the draft to this new file (an existing file is never overwritten)
+    /// instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Write the draft even when file names were flagged for review.
+    #[arg(long)]
+    pub allow_flagged_names: bool,
+}
+
+/// Arguments of `draft-labels`.
+#[derive(Debug, Clone, Args)]
+pub struct DraftLabelsArgs {
+    /// Store root directory.
+    #[arg(long, default_value = "store")]
+    pub store: PathBuf,
+    /// A pooled run as `<experiment>=<configuration>` (repeatable): the revisions the
+    /// experiment pinned are searched with the configuration's query model and
+    /// modality.
+    #[arg(long = "run", required = true, value_parser = parse_run)]
+    pub runs: Vec<(ExperimentId, PathBuf)>,
+    /// Frozen query set.
+    #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
+    pub queries: PathBuf,
+    /// Results pooled from each run for every query.
+    #[arg(long, default_value = "10")]
+    pub depth: std::num::NonZeroUsize,
+    /// Corpus the labels describe (its `corpus_id`).
+    #[arg(long)]
+    pub corpus: String,
+    /// Write the draft to this new file (an existing file is never overwritten)
+    /// instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Corpus manifest of the index; required for a remote engine, whose permission
+    /// is granted per corpus.
+    #[arg(long)]
+    pub manifest: Option<PathBuf>,
+}
+
+/// Parses `<experiment>=<configuration>`.
+fn parse_run(value: &str) -> Result<(ExperimentId, PathBuf), String> {
+    let (id, config) = value
+        .split_once('=')
+        .ok_or_else(|| "expected <experiment>=<configuration>".to_owned())?;
+    let id = id.parse::<ExperimentId>().map_err(|e| e.to_string())?;
+    if config.is_empty() {
+        return Err("expected <experiment>=<configuration>".to_owned());
+    }
+    Ok((id, PathBuf::from(config)))
 }
 
 /// Arguments of `experiment`.
@@ -243,6 +313,8 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Experiment(args) => experiment(&args).await,
         Command::Combine(args) => combine(&args).await,
         Command::Report(args) => blocking(move || report(&args)).await,
+        Command::DraftManifest(args) => draft_manifest(&args).await,
+        Command::DraftLabels(args) => draft_labels(&args).await,
     }
 }
 
@@ -530,6 +602,195 @@ async fn remote_permission(
         }
     }
     Ok(None)
+}
+
+/// Writes `content` to a new file, never overwriting one, or to stdout.
+async fn write_new(path: Option<&Path>, content: String) -> Result<()> {
+    match path {
+        Some(path) => {
+            let path = path.to_owned();
+            blocking(move || {
+                use std::io::Write as _;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .with_context(|| {
+                        format!(
+                            "create {} (an existing file is never overwritten)",
+                            path.display()
+                        )
+                    })?;
+                file.write_all(content.as_bytes())
+                    .with_context(|| format!("write {}", path.display()))?;
+                Ok(())
+            })
+            .await
+        }
+        None => {
+            print!("{content}");
+            Ok(())
+        }
+    }
+}
+
+/// `draft-manifest`: measures the files of a corpus directory and drafts their
+/// manifest entries. Flagged file names are refused unless allowed, because the
+/// manifest is tracked.
+async fn draft_manifest(args: &DraftManifestArgs) -> Result<ExitCode> {
+    let extraction = match &args.config {
+        Some(path) => {
+            let path = path.clone();
+            blocking(move || Ok(ExperimentConfig::load(&path)?.extraction)).await?
+        }
+        None => crate::extraction::ExtractionConfig::default(),
+    };
+    let dir = args.dir.clone();
+    let files = blocking(move || Ok(crate::drafts::corpus_files(&dir)?)).await?;
+    let text = PopplerTextExtractor::detect().await;
+    let images = PopplerImageExtractor::detect().await;
+    let draft = crate::drafts::draft_manifest(
+        &text,
+        &images,
+        &args.dir,
+        &files,
+        &extraction,
+        &crate::extraction::images::ImageFilter::default(),
+        &args.corpus_id,
+    )
+    .await?;
+    let flagged: Vec<String> = draft
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.name_flagged())
+        .map(|(i, _)| (i + 1).to_string())
+        .collect();
+    if !flagged.is_empty() && !args.allow_flagged_names {
+        eprintln!(
+            "validation failed: the file names of sources {} (in path order) were flagged for review; rename them to neutral names (TESTS.md) or pass --allow-flagged-names",
+            flagged.join(", ")
+        );
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    write_new(args.out.as_deref(), draft.render()).await?;
+    eprintln!(
+        "drafted {} source(s); none is eligible until its anonymization review is recorded",
+        draft.sources.len()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `draft-labels`: pools the top results of every run for every frozen query into a
+/// label file to judge.
+async fn draft_labels(args: &DraftLabelsArgs) -> Result<ExitCode> {
+    use crate::drafts::{DraftError, PoolRun};
+    let paths: Vec<PathBuf> = args.runs.iter().map(|(_, p)| p.clone()).collect();
+    let queries_path = args.queries.clone();
+    let (configs, queries) = blocking(move || {
+        let configs = paths
+            .iter()
+            .map(|p| ExperimentConfig::load(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((configs, crate::evaluation::load_queries(&queries_path)?))
+    })
+    .await?;
+    let engines: Vec<&EngineConfig> = configs.iter().map(|c| &c.engine).collect();
+    if let Some(refusal) = remote_permission(&engines, args.manifest.as_deref()).await? {
+        eprintln!("validation failed: {refusal}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
+    // Every snapshot is read before any model loads, so a missing experiment is
+    // refused without a model load or download.
+    let (root, ids) = (
+        args.store.clone(),
+        args.runs
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let (store, snapshots) = blocking(move || {
+        let store = FsRecordStore::open_reader(&root)?;
+        let snapshots = ids
+            .iter()
+            .map(|id| store.load_experiment(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((Arc::new(store), snapshots))
+    })
+    .await?;
+    let mut embedders = Vec::with_capacity(configs.len());
+    for config in &configs {
+        match adapters::build(&config.engine).await {
+            Ok(adapter) => embedders.push(adapter),
+            Err(e) => return Ok(build_failure(&e)),
+        }
+    }
+    let spaces: Vec<EmbeddingSpaceId> = embedders
+        .iter()
+        .map(|e| e.model_info().embedding_space_id.clone())
+        .collect();
+    // A run whose experiment pinned nothing in its model's space would pool nothing,
+    // silently: refuse the pairing instead.
+    for (((id, config), space), snapshot) in args
+        .runs
+        .iter()
+        .map(|(id, config)| (id, config))
+        .zip(&spaces)
+        .zip(&snapshots)
+    {
+        if !snapshot.revisions.iter().any(|r| &r.space == space) {
+            eprintln!(
+                "validation failed: experiment {id} pins no revision in the space {space} of {}",
+                config.display()
+            );
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+    }
+    let runs: Vec<PoolRun<'_>> = args
+        .runs
+        .iter()
+        .zip(&configs)
+        .zip(&embedders)
+        .zip(&spaces)
+        .zip(&snapshots)
+        .map(|((((run, config), embedder), space), snapshot)| PoolRun {
+            experiment: &run.0,
+            modality: config
+                .ingest
+                .modality
+                .unwrap_or(crate::domain::Modality::Text),
+            space,
+            embedder: &**embedder,
+            scope: Scope::Experiment(snapshot),
+        })
+        .collect();
+    let draft = match crate::drafts::draft_labels(
+        &store,
+        &queries.value,
+        &runs,
+        args.depth.get(),
+        &args.corpus,
+    )
+    .await
+    {
+        Ok(draft) => draft,
+        Err(DraftError::Search(
+            e @ crate::retrieval::SearchError::Embedding(
+                crate::embedding::EmbeddingError::Unsupported { .. },
+            ),
+        )) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    write_new(args.out.as_deref(), draft.render()).await?;
+    let candidates: usize = draft.queries.iter().map(|q| q.candidates.len()).sum();
+    eprintln!(
+        "drafted {candidates} candidate(s) for {} queries; replace every \"TODO\" before using the file",
+        draft.queries.len()
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Single-modality search: text records, or image records of a cross-modal space.
