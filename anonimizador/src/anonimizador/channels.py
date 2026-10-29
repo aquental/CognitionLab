@@ -8,6 +8,7 @@ as an error, never as an empty place: an unread channel proves nothing (Grok G4-
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import re
 import struct
@@ -793,6 +794,18 @@ def image_metadata_blocks(data: bytes) -> list[list[str]]:
     return [decode_both([blob]) for blob in blobs]
 
 
+# What reading malformed bytes can raise: they are unread, never a traceback.
+PARSE_ERRORS = (ValueError, TypeError, OverflowError, RecursionError, IndexError, KeyError)
+
+
+def take_raw(reading: Reading, data: bytes) -> None:
+    """The raw readings of `data` into `reading`, or the raw channel's error."""
+    try:
+        reading.take_raw(raw_readings(data))
+    except PARSE_ERRORS as e:
+        reading.errors.append(f"raw: the bytes cannot be parsed ({type(e).__name__})")
+
+
 def read_pdf(
     path: str, name: str, tmp: str, lang: str, dpi: int, use_ocr: bool, timeout: int, pool: Executor
 ) -> Reading:
@@ -802,7 +815,8 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        reading.take_raw(raw_readings(f.read()))
+        data = f.read()
+    take_raw(reading, data)
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
@@ -846,22 +860,23 @@ ADAM7 = (
 )
 
 
-def png_pixel_bytes(width: int, height: int, color: int, depth: int, interlaced: bool) -> int:
-    """The size of a PNG's filtered pixel data: each row of each pass, with its filter
-    byte."""
+def png_rows(width: int, height: int, color: int, depth: int, interlaced: bool) -> list[int]:
+    """The size of each row of a PNG's filtered pixel data, pass by pass, its filter
+    byte included."""
     passes = ADAM7 if interlaced else ((0, 0, 1, 1),)
-    total = 0
+    rows = []
     for x, y, dx, dy in passes:
-        columns, rows = -(-(width - x) // dx), -(-(height - y) // dy)
-        if columns > 0 and rows > 0:
-            total += rows * (1 + -(-(columns * PNG_CHANNELS[color] * depth) // 8))
-    return total
+        columns, count = -(-(width - x) // dx), -(-(height - y) // dy)
+        if columns > 0 and count > 0:
+            rows += [1 + -(-(columns * PNG_CHANNELS[color] * depth) // 8)] * count
+    return rows
 
 
 def png_is_whole(data: bytes) -> bool:
     """A PNG signature; chunks within the bytes, with their checksums; a valid header
     first and an end chunk last; a palette when the colors need one; and image data
-    that inflates to exactly the pixels the header gives (Codex C0-9)."""
+    that inflates to exactly the pixels the header gives, each row with a known filter
+    (Codex C0-9)."""
     if data[:8] != PNG_SIGNATURE:
         return False
     chunks, pos = [], 8
@@ -885,18 +900,24 @@ def png_is_whole(data: bytes) -> bool:
         return False
     if method or filtering or interlace > 1 or (color == 3 and b"PLTE" not in kinds):
         return False
-    expected = png_pixel_bytes(width, height, color, depth, bool(interlace))
+    rows = png_rows(width, height, color, depth, bool(interlace))
+    expected = sum(rows)
     inflater = zlib.decompressobj()
     try:
         pixels = inflater.decompress(b"".join(b for k, b in chunks if k == b"IDAT"), expected + 1)
     except zlib.error:
         return False
-    return inflater.eof and len(pixels) == expected
+    if not inflater.eof or len(pixels) != expected:
+        return False
+    # Each row starts with its filter type, 0 to 4.
+    starts = itertools.accumulate(rows[:-1], initial=0)
+    return all(pixels[start] <= 4 for start in starts)
 
 
 def jpeg_is_whole(data: bytes) -> bool:
-    """A JPEG start, a frame header and a scan within the bytes, and an end after the
-    scan."""
+    """A JPEG start; segments within the bytes; a frame header with a width and its
+    components, and a scan header with its components, each of its own length; and an
+    end after the scan."""
     if data[:2] != b"\xff\xd8":
         return False
     pos, frame = 2, False
@@ -909,11 +930,16 @@ def jpeg_is_whole(data: bytes) -> bool:
             pos += 2
             continue
         (length,) = struct.unpack(">H", data[pos + 2 : pos + 4])
-        if pos + 2 + length > len(data):
+        segment = data[pos + 4 : pos + 2 + length]
+        if length < 2 or pos + 2 + length > len(data):
             return False
         if marker == 0xDA:
-            return frame and b"\xff\xd9" in data[pos + 2 + length :]
-        frame = frame or (0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC))
+            scan = len(segment) >= 1 and 1 <= segment[0] <= 4 and length == 6 + 2 * segment[0]
+            return frame and scan and b"\xff\xd9" in data[pos + 2 + length :]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            if len(segment) < 6 or not segment[5] or length != 8 + 3 * segment[5]:
+                return False
+            frame = struct.unpack(">H", segment[3:5])[0] > 0
         pos += 2 + length
     return False
 
@@ -931,7 +957,7 @@ def read_image(path: str, name: str, lang: str, use_ocr: bool, timeout: int) -> 
     reading.texts["name"] = [name]
     reading.blocks["metadata"] = image_metadata_blocks(data)
     reading.texts["metadata"] = [text for block in reading.blocks["metadata"] for text in block]
-    reading.take_raw(raw_readings(data))
+    take_raw(reading, data)
     if use_ocr:
         with reading.channel("ocr"):
             reading.texts["ocr"] = [ocr(path, lang, timeout)]

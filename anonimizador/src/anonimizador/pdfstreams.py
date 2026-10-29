@@ -50,13 +50,19 @@ TOKEN = re.compile(
 KEYWORDS = {b"true": True, b"false": False, b"null": None}
 # The bytes that nest a literal string: parentheses, and escapes, which do not.
 PAREN = re.compile(rb"\\.|[()]", re.DOTALL)
-# Dictionaries and arrays nest this deep at most.
-MAX_DEPTH = 32
-OBJECT_HEADER = re.compile(rb"(?<![0-9])(\d+)[\s\x00]+(\d+)[\s\x00]+obj(?![A-Za-z0-9])")
+# Dictionaries and arrays nest this deep at most (each level is a Python call).
+MAX_DEPTH = 256
+# An object header; object numbers have 10 digits at most, so a long run of digits is
+# no header (and no number too long to convert).
+OBJECT_HEADER = re.compile(rb"(?<![0-9])(\d{1,10})[\s\x00]+(\d{1,5})[\s\x00]+obj(?![A-Za-z0-9])")
+# How many object headers before a stream are tried for its dictionary: a string in
+# the dictionary can look like a header (`(9 0 obj)`).
+HEADER_TRIES = 16
 # The start of a stream's data: the keyword ends with CRLF, LF, or (accepted by
 # readers) CR alone (Grok G0-43); `endstream` is not one.
 STREAM_START = re.compile(rb"(?<![A-Za-z])stream(?:\r\n|\r|\n)")
 STREAM_END = re.compile(rb"[\s\x00]*endstream")
+SPACE = b" \t\r\n\f\x00"
 
 
 def name_of(token: bytes) -> bytes:
@@ -145,15 +151,16 @@ class Document:
     def stream_dictionary(self, keyword: int) -> dict[bytes, object] | None:
         """The dictionary of the stream whose keyword starts at `keyword`: the object
         before it, when it is a dictionary that ends right at the keyword."""
-        index = bisect.bisect_right(self.starts, keyword) - 1
-        if index < 0:
-            return None
-        try:
-            value, end = parse_object(self.data, self.headers[index].end())
-        except ValueError:
-            return None
-        between = self.data[end:keyword]
-        return value if isinstance(value, dict) and not between.strip(b" \t\r\n\f\x00") else None
+        last = bisect.bisect_right(self.starts, keyword) - 1
+        for index in range(last, max(-1, last - HEADER_TRIES), -1):
+            try:
+                value, end = parse_object(self.data, self.headers[index].end())
+            except ValueError:
+                continue
+            between = self.data[end:keyword]
+            if isinstance(value, dict) and not between.strip(SPACE):
+                return value
+        return None
 
 
 def lzw_decode(data: bytes, early_change: int = 1) -> bytes:
@@ -186,10 +193,12 @@ def lzw_decode(data: bytes, early_change: int = 1) -> bytes:
             previous = entry
             if len(table) + early_change >= 1 << width and width < 12:
                 width += 1
-    return bytes(out)
+    # No end-of-data code: the data stops short.
+    raise Unread(bytes(out))
 
 
 def run_length_decode(data: bytes) -> bytes:
+    """Run-length data, which must end with its end-of-data byte (128)."""
     out = bytearray()
     pos = 0
     while pos < len(data) and (length := data[pos]) != 128:
@@ -199,6 +208,8 @@ def run_length_decode(data: bytes) -> bytes:
         else:
             out += data[pos + 1 : pos + 2] * (257 - length)
             pos += 2
+    if pos >= len(data):
+        raise Unread(bytes(out))
     return bytes(out)
 
 
@@ -216,19 +227,28 @@ def flate_decode(data: bytes) -> bytes:
 
 
 def ascii_hex_decode(data: bytes) -> bytes:
-    digits = re.sub(rb"[\s\x00]", b"", data.split(b">")[0])
+    """ASCIIHex data, which must end with ">"."""
+    body, end, _ = data.partition(b">")
+    digits = re.sub(rb"[\s\x00]", b"", body)
     try:
-        return bytes.fromhex((digits + b"0" * (len(digits) % 2)).decode("ascii"))
+        out = bytes.fromhex((digits + b"0" * (len(digits) % 2)).decode("ascii"))
     except (UnicodeDecodeError, ValueError):
         raise Unread() from None
+    if not end:
+        raise Unread(out)
+    return out
 
 
 def ascii85_decode(data: bytes) -> bytes:
-    body = data.split(b"~>")[0].strip().removeprefix(b"<~")
+    """ASCII85 data, which must end with "~>"."""
+    body, end, _ = data.partition(b"~>")
     try:
-        return base64.a85decode(body, ignorechars=b" \t\n\r\v\f\x00")
+        out = base64.a85decode(body.strip().removeprefix(b"<~"), ignorechars=b" \t\n\r\v\f\x00")
     except ValueError:
         raise Unread() from None
+    if not end:
+        raise Unread(out)
+    return out
 
 
 def number(parameters: dict[bytes, object], key: bytes, default: int) -> int:
@@ -248,7 +268,7 @@ def unpredict(data: bytes, parameters: dict[bytes, object]) -> bytes:
     columns = number(parameters, b"Columns", 1)
     row = (colors * bits * columns + 7) // 8
     pixel = max(1, (colors * bits + 7) // 8)
-    if not row:
+    if not 0 < row <= len(data) or bits not in (1, 2, 4, 8, 16):
         raise Unread(data)
     out = bytearray()
     if predictor == 2 and bits == 8:
@@ -320,10 +340,10 @@ def decode_stream(document: Document, entries: dict[bytes, object], body: bytes)
         # inflated, without undoing a predictor, which would only cost time.
         parameters = [None] * len(filters)
     for filter_name, given in zip(filters, parameters, strict=False):
-        if filter_name in IMAGE_FILTERS:
-            return None
         if not isinstance(filter_name, Name) or not isinstance(given, dict | None):
             raise Unread()
+        if filter_name in IMAGE_FILTERS:
+            return None
         identity = given is None or given.get(b"Name", b"Identity") == b"Identity"
         if filter_name == b"Crypt" and identity:
             continue
@@ -343,7 +363,8 @@ def stream_end(document: Document, entries: dict[bytes, object] | None, start: i
             length = document.resolve(entries.get(b"Length"))
         except ValueError:
             length = None
-        whole = isinstance(length, int) and not isinstance(length, bool) and length >= 0
+        size = len(document.data) - start
+        whole = isinstance(length, int) and not isinstance(length, bool) and 0 <= length <= size
         if whole and STREAM_END.match(document.data, start + length):
             return start + length
     return document.data.find(b"endstream", start)
@@ -352,7 +373,8 @@ def stream_end(document: Document, entries: dict[bytes, object] | None, start: i
 def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
     """Every stream of `data` decoded, and how many could not be. A stream with no
     filter, or whose dictionary is not found, is still tried as zlib data, silently:
-    some writers leave the filter out."""
+    some writers leave the filter out. But a dictionary that cannot be read (nested too
+    deep, malformed) before data that is no zlib stream is an unread stream."""
     document = Document(data)
     decoded, unread = [], 0
     pos = 0
@@ -369,6 +391,7 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
                 decoded.append(flate_decode(body))
             except Unread as e:
                 decoded.extend([e.partial] if e.partial else [])
+                unread += entries is None and data[: keyword.start()].rstrip(SPACE).endswith(b">>")
             continue
         try:
             if (stream := decode_stream(document, entries, body)) is not None:
