@@ -374,7 +374,9 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
     """Every stream of `data` decoded, and how many could not be. A stream with no
     filter, or whose dictionary is not found, is still tried as zlib data, silently:
     some writers leave the filter out. But a dictionary that cannot be read (nested too
-    deep, malformed) before data that is no zlib stream is an unread stream."""
+    deep, malformed) before data that is no zlib stream is an unread stream. A stream the
+    file is cut in, with no `endstream`, runs to the end of the file; unless it decodes
+    whole, it is unread too (Antigravity round 1)."""
     document = Document(data)
     decoded, unread = [], 0
     pos = 0
@@ -382,8 +384,9 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
         start = keyword.end()
         entries = document.stream_dictionary(keyword.start())
         end = stream_end(document, entries, start)
-        if end < 0:
-            break
+        cut = end < 0
+        if cut:
+            end = len(data)
         pos = end
         body = data[start:end]
         if entries is None or entries.get(b"Filter") is None:
@@ -391,7 +394,9 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
                 decoded.append(flate_decode(body))
             except Unread as e:
                 decoded.extend([e.partial] if e.partial else [])
-                unread += entries is None and data[: keyword.start()].rstrip(SPACE).endswith(b">>")
+                unread += cut or (
+                    entries is None and data[: keyword.start()].rstrip(SPACE).endswith(b">>")
+                )
             continue
         try:
             if (stream := decode_stream(document, entries, body)) is not None:

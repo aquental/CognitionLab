@@ -281,3 +281,15 @@ On 2026-10-29 Codex round 3 stopped at its usage limit ("try again at 11:14 PM")
 Noise check, local real exams, aggregate counts only: all 12 files are `ok`, no stream unread, totals unchanged.
 
 Validation: `uv run pytest` 114 passed, 1 skipped (opt-in); ruff clean; `RUN_SAMPLE_EXAMS=1` local real exams 1 passed. Every fix's mutant is caught.
+
+## Antigravity round 1 (not completed, state `0e230b3`)
+
+On 2026-10-29 the first attempt stopped with "The stream was interrupted" (exit 3) and wrote nothing. The second attempt (`agy-round1-incomplete.md`, its whole output, with the worktree path shortened) read the package and the code, wrote that it had found a flaw in how `decoded_streams` and `Document.stream_dictionary` locate streams and advance the scan position, said it would check it with a read-only command, and stopped without a verdict. It reported no finding, so nothing is recorded as Antigravity's. The implementer examined that code on synthetic bytes and fixed what reproduced (ID `IA1-n`, implementer, from that output):
+
+| ID | Reviewer | Severity | Description | Resolution | Files | Validation evidence | Reviewer confirmation | Status |
+|---|---|---|---|---|---|---|---|---|
+| IA1-1 | Implementer (Antigravity round 1 output) | high | The last stream of a cut file, with no `endstream` after it, was dropped: nothing of it was decoded and nothing was counted as unread, so a name in it was missed without an error | Valid. A stream with no `endstream` runs to the end of the file and is decoded as usual; unless it decodes whole, it is an unread stream, and what of it decodes is still searched | `src/anonimizador/pdfstreams.py`, `docs/SPEC.md` | `tests/test_channels.py::test_a_stream_the_file_is_cut_in_is_read_or_unread` (whole Flate data with and without a filter: found, not unread; cut Flate data: unread, with and without a partial match; cut plain data: unread). The mutants that stop at the cut stream, or do not count it, fail it | pending (Antigravity, Codex, Grok) | fixed |
+
+Noise check, local real exams, aggregate counts only: all 12 files are `ok`, no stream unread, totals unchanged.
+
+Validation: `uv run pytest` 115 passed, 1 skipped (opt-in); ruff clean; `RUN_SAMPLE_EXAMS=1` local real exams 1 passed. Every fix's mutant is caught.
