@@ -811,11 +811,12 @@ pub async fn evaluate_images(
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Search`] when a leg's model does not belong to its space or the
-/// image leg's model has no compatible text-to-image space (both before any index
-/// read), [`EvalError::LabelNotApplicable`] when a text label does not apply to the
-/// text index or an image label to the image index, and [`EvalError::Search`] when a
-/// query fails.
+/// Returns [`EvalError::Search`] when a leg's model does not belong to its space, the
+/// image leg's model has no compatible text-to-image space, or an experiment scope is
+/// not the combined run of these legs and fusion parameters
+/// ([`SearchError::SnapshotMismatch`]), all before any index read;
+/// [`EvalError::LabelNotApplicable`] when a text label does not apply to the text index
+/// or an image label to the image index; and [`EvalError::Search`] when a query fails.
 pub async fn evaluate_combined(
     store: &Arc<FsRecordStore>,
     text: Leg<'_>,
@@ -841,6 +842,12 @@ pub async fn evaluate_combined(
             image.embedder.model_info(),
         )
         .map_err(|e| EvalError::Search(SearchError::Embedding(e)))?;
+    // The snapshot is checked before any record is read (Antigravity A4-1): a snapshot
+    // missing a leg would otherwise read as an empty index and fail as an inapplicable
+    // label, and with no query it would never reach `search_combined`'s own check.
+    if let Scope::Experiment(snapshot) = scope {
+        crate::retrieval::check_combined_snapshot(snapshot, text.space, image.space, fusion)?;
+    }
     check_text_labels(dataset, &read_records(store, text.space, scope).await?)?;
     check_image_labels(dataset, &read_records(store, image.space, scope).await?)?;
     let mut rankings = BTreeMap::new();
