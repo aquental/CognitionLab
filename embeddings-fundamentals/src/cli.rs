@@ -10,16 +10,16 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::adapters;
 use crate::anonymization;
 use crate::config::ExperimentConfig;
 use crate::corpus::LoadedManifest;
-use crate::extraction::poppler::{PopplerTextExtractor, TesseractOcr};
+use crate::extraction::poppler::{PopplerImageExtractor, PopplerTextExtractor, TesseractOcr};
 use crate::ids::{EmbeddingSpaceId, ExperimentId};
 use crate::pipeline::{Pipeline, TokioSleeper, ValidationError, check_remote_permission};
-use crate::retrieval::{Scope, search_text};
+use crate::retrieval::{Scope, search_images, search_text};
 use crate::storage::FsRecordStore;
 use crate::tools;
 
@@ -47,7 +47,8 @@ pub enum Command {
     Validate(RunArgs),
     /// Extract, chunk, embed, and publish every eligible source.
     Ingest(IngestArgs),
-    /// Search an index with a text query.
+    /// Search an index with a text query (text records, or image records of a
+    /// cross-modal space).
     Search(SearchArgs),
     /// Ingest, evaluate the frozen queries, and measure one configuration.
     Experiment(ExperimentArgs),
@@ -65,7 +66,7 @@ pub struct ExperimentArgs {
     #[arg(long, default_value = "config/evaluation/queries-v1.toml")]
     pub queries: PathBuf,
     /// Frozen relevance labels.
-    #[arg(long, default_value = "config/evaluation/labels-synthetic-v2.toml")]
+    #[arg(long, default_value = "config/evaluation/labels-synthetic-v4.toml")]
     pub labels: PathBuf,
     /// Warm repetitions of every frozen query (PRD §9.4 default: 20).
     #[arg(long, default_value_t = 20)]
@@ -143,6 +144,9 @@ pub struct SearchArgs {
     /// Query text.
     #[arg(long)]
     pub query: String,
+    /// Records to search: text chunks, or images through the model's text-query path.
+    #[arg(long, value_enum, default_value_t = SearchMode::Text)]
+    pub mode: SearchMode,
     /// Maximum number of results.
     #[arg(long, default_value_t = 3)]
     pub limit: usize,
@@ -156,6 +160,15 @@ pub struct SearchArgs {
     /// is granted per corpus.
     #[arg(long)]
     pub manifest: Option<PathBuf>,
+}
+
+/// Retrieval mode of `search`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SearchMode {
+    /// Text queries against text records.
+    Text,
+    /// Text queries against image records (needs a cross-modal model).
+    Image,
 }
 
 /// Runs the parsed command.
@@ -363,9 +376,11 @@ async fn ingest(args: &IngestArgs) -> Result<ExitCode> {
     let store = open_writer(&args.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
+    let images = PopplerImageExtractor::detect().await;
     let pipeline = Pipeline {
         text: &text,
         ocr: &ocr,
+        images: &images,
         sleeper: &TokioSleeper,
         store,
         embedder,
@@ -471,7 +486,26 @@ async fn search(args: &SearchArgs) -> Result<ExitCode> {
         .clone()
         .unwrap_or_else(|| embedder.model_info().embedding_space_id.clone());
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
-    let hits = search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await?;
+    let outcome = match args.mode {
+        SearchMode::Text => {
+            search_text(&store, &space, &*embedder, &args.query, args.limit, scope).await
+        }
+        SearchMode::Image => {
+            search_images(&store, &space, &*embedder, &args.query, args.limit, scope).await
+        }
+    };
+    let hits = match outcome {
+        Ok(hits) => hits,
+        Err(
+            e @ crate::retrieval::SearchError::Embedding(
+                crate::embedding::EmbeddingError::Unsupported { .. },
+            ),
+        ) => {
+            eprintln!("validation failed: {e}");
+            return Ok(ExitCode::from(EXIT_VALIDATION));
+        }
+        Err(e) => return Err(e.into()),
+    };
     println!("{}", serde_json::to_string_pretty(&hits)?);
     Ok(ExitCode::SUCCESS)
 }
@@ -509,6 +543,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
     let store = open_writer(&args.ingest.store).await?;
     let text = PopplerTextExtractor::detect().await;
     let ocr = TesseractOcr::detect(config.extraction.clone()).await;
+    let images = PopplerImageExtractor::detect().await;
     let settings = config.ingest_settings(args.ingest.experiment.clone());
     let instruments = Instruments {
         clock: Arc::new(crate::measurement::SystemClock::new()),
@@ -519,6 +554,7 @@ async fn experiment(args: &ExperimentArgs) -> Result<ExitCode> {
         Tools {
             text: &text,
             ocr: &ocr,
+            images: &images,
             sleeper: &TokioSleeper,
         },
         &store,

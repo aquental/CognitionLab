@@ -108,50 +108,50 @@ struct ModelFiles {
     tokenizer_config: PathBuf,
 }
 
-/// Serializes downloads within the process: hf-hub's file lock gives up after about
-/// five seconds instead of waiting for a concurrent download of the same blob.
-static FETCH: Mutex<()> = Mutex::new(());
-
-/// Attempts per file while another process holds the blob lock (about 5 s each).
-const LOCK_ATTEMPTS: u32 = 120;
-
 /// Downloads (or reuses from the Hugging Face cache) the files at `revision`.
 fn fetch(model_id: &str, revision: &str, weights: &str) -> Result<ModelFiles, LoadError> {
-    let fail = |file: &str, reason: String| LoadError::Fetch {
+    let files = super::hf::download(
+        model_id,
+        revision,
+        &[
+            weights,
+            "tokenizer.json",
+            "config.json",
+            "special_tokens_map.json",
+            "tokenizer_config.json",
+        ],
+    )
+    .map_err(|e| match e {
+        super::hf::HfError::Fetch {
+            model,
+            file,
+            reason,
+        } => LoadError::Fetch {
+            model,
+            file,
+            reason,
+        },
+        other => LoadError::Model {
+            model: model_id.to_owned(),
+            reason: other.to_string(),
+        },
+    })?;
+    let [
+        weights,
+        tokenizer,
+        config,
+        special_tokens_map,
+        tokenizer_config,
+    ] = <[PathBuf; 5]>::try_from(files).map_err(|_| LoadError::Model {
         model: model_id.to_owned(),
-        file: file.to_owned(),
-        reason,
-    };
-    // A poisoned guard only means another download panicked; the cache is still valid.
-    let _guard = FETCH
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .with_progress(false)
-        .build()
-        .map_err(|e| fail("*", e.to_string()))?;
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        model_id.to_owned(),
-        hf_hub::RepoType::Model,
-        revision.to_owned(),
-    ));
-    let get = |file: &str| {
-        let mut attempt = 1;
-        loop {
-            match repo.get(file) {
-                Err(hf_hub::api::sync::ApiError::LockAcquisition(_)) if attempt < LOCK_ATTEMPTS => {
-                    attempt += 1;
-                }
-                other => return other.map_err(|e| fail(file, e.to_string())),
-            }
-        }
-    };
+        reason: "download returned another number of files".to_owned(),
+    })?;
     Ok(ModelFiles {
-        weights: get(weights)?,
-        tokenizer: get("tokenizer.json")?,
-        config: get("config.json")?,
-        special_tokens_map: get("special_tokens_map.json")?,
-        tokenizer_config: get("tokenizer_config.json")?,
+        weights,
+        tokenizer,
+        config,
+        special_tokens_map,
+        tokenizer_config,
     })
 }
 

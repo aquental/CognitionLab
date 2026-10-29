@@ -1,15 +1,18 @@
 //! Deterministic extractor that replays captured tool output (PLAN §0.1).
 //!
 //! Pages are keyed by the PDF file stem, so a copied fixture keeps its extraction. The
-//! directory layout is `<root>/<file-stem>/p<N>.native.txt` and `p<N>.ocr.tsv`, captured
-//! from the real tools by `cargo run --example capture_extraction`. OCR replays go
-//! through the same TSV parser as live OCR.
+//! directory layout is `<root>/<file-stem>/p<N>.native.txt` and `p<N>.ocr.tsv`, plus
+//! `images.list` (`pdfimages -list`) and `img-p<N>-<position>.png` for the embedded
+//! images an image run keeps, all captured from the real tools by
+//! `cargo run --example capture_extraction`. OCR and image-list replays go through the
+//! same parsers as the live tools.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use super::images::{ImageExtractor, ImageInfo, parse_list};
 use super::poppler::native_lines;
 use super::{ExtractionError, OcrEngine, PageText, TextExtractor, tsv};
 use crate::domain::ExtractionMethod;
@@ -20,6 +23,8 @@ pub const FIXTURE_NATIVE_ENGINE: &str = "fixture-pdftotext";
 pub const FIXTURE_OCR_ENGINE: &str = "fixture-tesseract";
 /// Resolution the captured OCR boxes refer to.
 pub const FIXTURE_OCR_DPI: u32 = 300;
+/// Engine id recorded for replayed embedded images.
+pub const FIXTURE_IMAGE_ENGINE: &str = "fixture-pdfimages";
 
 #[derive(Debug, Default, Clone)]
 struct FixturePage {
@@ -34,6 +39,10 @@ struct State {
     ocr_calls: Vec<(String, u32)>,
     text_calls: usize,
     failing: BTreeMap<String, String>,
+    /// Captured `pdfimages -list` output per file stem.
+    image_lists: BTreeMap<String, String>,
+    /// Captured PNG bytes per (file stem, page, position on page).
+    images: BTreeMap<(String, u32, u32), Vec<u8>>,
 }
 
 /// Replays captured extraction output; steps may also register pages directly.
@@ -72,6 +81,19 @@ impl FixtureExtractor {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                if name == "images.list" {
+                    extractor.set_image_list(&file, &std::fs::read_to_string(&path)?);
+                    continue;
+                }
+                if let Some((page, position)) = name
+                    .strip_prefix("img-p")
+                    .and_then(|r| r.strip_suffix(".png"))
+                    .and_then(|r| r.split_once('-'))
+                    .and_then(|(p, i)| Some((p.parse::<u32>().ok()?, i.parse::<u32>().ok()?)))
+                {
+                    extractor.set_image(&file, page, position, std::fs::read(&path)?);
+                    continue;
+                }
                 let Some(rest) = name.strip_prefix('p') else {
                     continue;
                 };
@@ -115,6 +137,20 @@ impl FixtureExtractor {
             .or_default()
             .ocr_tsv = Some(tsv.to_owned());
         Self::bump_count(&mut state, file, page);
+    }
+
+    /// Registers the `pdfimages -list` output of a PDF.
+    pub fn set_image_list(&self, file: &str, list: &str) {
+        self.state()
+            .image_lists
+            .insert(file.to_owned(), list.to_owned());
+    }
+
+    /// Registers the PNG of the image at `position` on `page`.
+    pub fn set_image(&self, file: &str, page: u32, position: u32, png: Vec<u8>) {
+        self.state()
+            .images
+            .insert((file.to_owned(), page, position), png);
     }
 
     /// Makes every extraction of `file` fail with `reason`.
@@ -209,5 +245,37 @@ impl OcrEngine for FixtureExtractor {
             page: page.get(),
         })?;
         tsv::parse(&tsv_text, page, FIXTURE_OCR_DPI, FIXTURE_OCR_ENGINE)
+    }
+}
+
+impl ImageExtractor for FixtureExtractor {
+    fn engine_id(&self) -> String {
+        FIXTURE_IMAGE_ENGINE.to_owned()
+    }
+
+    async fn list_images(&self, pdf: &Path) -> Result<Vec<ImageInfo>, ExtractionError> {
+        let file = stem(pdf);
+        self.check_failing(&file)?;
+        let list = self.state().image_lists.get(&file).cloned();
+        let list = list.ok_or(ExtractionError::MissingFixture { file, page: 0 })?;
+        parse_list(&list)
+    }
+
+    async fn extract_image(
+        &self,
+        pdf: &Path,
+        image: &ImageInfo,
+    ) -> Result<Vec<u8>, ExtractionError> {
+        let file = stem(pdf);
+        self.check_failing(&file)?;
+        let png = self
+            .state()
+            .images
+            .get(&(file.clone(), image.page.get(), image.position_on_page))
+            .cloned();
+        png.ok_or(ExtractionError::MissingFixture {
+            file,
+            page: image.page.get(),
+        })
     }
 }

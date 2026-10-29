@@ -18,6 +18,11 @@ Feature: Compare text, image, and combined retrieval fairly
       | mode       |
       | text-only  |
 
+    @m3
+    Examples: Image
+      | mode       |
+      | image-only |
+
   @m2
   Scenario: Report low relevance without hiding a completed experiment
     Given a completed fixture evaluation whose retrieved items all have relevance label 0

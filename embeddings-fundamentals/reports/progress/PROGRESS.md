@@ -180,3 +180,51 @@ None for Phase 0.
 - OpenAI live integration: no `OPENAI_API_KEY` and no owner authorization for remote processing.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - The price in `config/prices/openai-embeddings-2026-10.toml` must be verified against the published price before an OpenAI estimate is reported.
+
+## Phase 3 — Milestone 3: Image retrieval (`@m3`)
+
+**Status:** ✅ APPROVED (2026-10-29). Branch `phase-3/image-retrieval` (from `3294dbd`, the approved Phase 2 head, merged to `main` with PR #6). Review diff base `3294dbd`. Grok rounds 1–7 and Codex rounds 1–4 are complete; the final Grok round (7, `af10c26`) and the final Codex round (4, `9196029`) both reported NO FINDINGS. 13 findings (S3-1, G3-1..G3-5, C3-1..C3-7): G3-4 refuted with evidence and hardened, the rest fixed with regression tests; see `reports/reviews/phase-3/FINDINGS.md`.
+
+### Decisions and PLAN changes, with justification
+| Decision | Justification |
+|---|---|
+| Both CLIP ViT-B/32 (`openai/clip-vit-base-patch32` @ `3d74acf9…`, 512-d) and SigLIP base-patch16-256-multilingual (`google/siglip-base-patch16-256-multilingual` @ `8952a4ea…`, 768-d) are evaluated | Spike (`reports/spikes/phase3-models.md`): both load through EmbedAnything 0.7.1's Rust API, so the multilingual candidate qualifies under PLAN §0.1 |
+| The adapter uses only the engine's weights (`ClipEmbedder::new` + `get_text_features`/`get_image_features`); preprocessing, tokenization, padding, and normalization are the adapter's own (`embedding::preprocess`, `embedding::vision`) | EmbedAnything 0.7.1 hardcodes CLIP-224 sizes with SigLIP normalization for both models and panics on over-limit text and undecodable images (spike defects 1–2). Preprocessing follows each model's pinned `preprocessor_config.json` and enters the space descriptor |
+| `[engine] model_kind = "text" \| "text_to_image"` (default text) and `[ingest] modality = "text" \| "image"` (default text) | One modality per run (PLAN §0.1); engine and model stay separate choices. Only `embed_anything` has a cross-modal adapter; `fastembed`/`openai` with `text_to_image` are refused (exit 3) |
+| Image runs: `pdfimages -list` rows of type `image` with both sides ≥ 64 px; images on pages that need OCR are page scans and never become image records; a PDF without a qualifying image is `not_applicable` | Keeps logos, masks, and scans out of the image index (PLAN §0.1 "Embedded images") |
+| Assets are decoded, masked by their PDF soft or explicit mask (the `smask`/`mask` row `pdfimages -list` gives right after the image; its gray value is the opacity, scaled to the image size), turned upright by their EXIF orientation, composited over white when they have alpha, and re-encoded as RGB8 PNG (`MetadataScrubber`, id `decode-mask-orient-flatten-white-rgb8-png-v3`), stored content-addressed at `store/assets/<sha256>.png` | PRD §8: no EXIF/XMP/IPTC/ICC/text chunk survives by construction; masks, orientation, and transparency change what an image shows, so they are applied before being dropped (C3-2, C3-3, C3-6) |
+| Labels v4 (`config/evaluation/labels-synthetic-v4.toml`): v2 judgments plus, for image labels, an anchor naming the original (`file` or `file#page=N&image=num`) and the SHA-256 of the stored asset (`asset_checksum`) | An image label must judge the same original and the same pixels after re-extraction (C3-5); v2 stays for the Phase 2 evidence |
+| Image embedding calls are measured as the indexed (document) side | They are the ingestion batches of an image run; the measuring decorator passed them through unmeasured before |
+| The comparison report gains a `Mode` column (text-only / image-only) | Results of different retrieval modes must not be read as one ranking |
+| Image experiments are run without `--fidelity` | Fidelity measures text extraction, which an image run does not use |
+
+### Implementation
+- `extraction::images` (`ImageInfo`, `ImageFilter`, `parse_list`, `ImageExtractor`), `PopplerImageExtractor` (`pdfimages -list`, `pdfimages -png -p -f N -l N`), fixture replay (`images.list`, `img-p<page>-<pos>.png`), `capture_extraction --images`.
+- `assets` (`MetadataScrubber`), store `put_asset` / `asset_path` / `read_asset` (atomic write, strict 64-hex URI validation, integrity check, abandoned temp cleanup).
+- Pipeline image runs: image-run extraction and preparation fingerprints, `ExtractionMethod::{EmbeddedImage, ImageFile}`, `ChunkKind::Image`, `RecordMetadata.original_asset` and `generated_caption` (never embedded), `chunk_text = null`.
+- `embedding::preprocess` (HF `CLIPImageProcessor`/`SiglipImageProcessor` semantics: shortest-edge or exact resize, bicubic Catmull-Rom or bilinear, center crop, rescale, mean/std; checked against the exact pinned configs), `embedding::vision` (`VisionAdapter`: text queries + images, no document text, over-limit queries refused with `InputTooLong`, inference on the blocking pool with a panic mapped to a permanent error, probe-checked dimensions), shared `hf::download`.
+- Retrieval: `search_images` (requires text-to-image capability; filters image records). Evaluation: `check_image_labels`, `evaluate_images` (image-only). `experiment::run` evaluates image-only after an image run. CLI: `search --mode text|image` (a model without the capability is a validation refusal, exit 3).
+- Configs: `image-clip-vit-b32.toml`, `image-siglip-multilingual.toml`, `image-deterministic.toml`.
+- BDD milestone 3: US-01 mixed PDF/PNG/JPEG, US-02 image query, US-03 image-only example. Fixtures: `image-keywords.toml`, hand-derived `image-only.ranks.toml`, precomputed `image-only.toml`.
+
+### Acceptance criteria (PLAN Phase 3 exit)
+| Criterion | Evidence |
+|---|---|
+| All `@m1`–`@m3` pass | `bdd inventory: milestone 3, 33 required, 36 executed`; 36 scenarios / 226 steps passed; self-test 12 cases, 0 mismatches |
+| Image-only report for ≥ 1 model | `reports/phase-3/comparison.md` (+ JSON): CLIP ViT-B/32 and SigLIP-multilingual, real runs on the **synthetic** corpus |
+
+### Validation (local, 2026-10-28)
+- fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
+- `cargo test`: 149 unit (incl. the C3-2/C3-3/C3-6 scrubber, C3-4 scratch-cleanup and both cancellation windows, mask association, and C3-5 label regressions), 15 pipeline (incl. the G3-1, G3-5, C3-1, and C3-6 regressions), 7 experiment (new: an image run is evaluated image-only through the text-query path, metrics equal the hand-derived fixture), 3 evidence, 2 fixtures, BDD 36 scenarios, self-test 0 mismatches.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: 15 passed, including the masked-PDF checks (the installed `pdfimages` gives the captured `tests/fixtures/pdf-masks` list and pixels, C3-6; a real recapture of that PDF replays with its masks, C3-7), the new real image run (`pdfimages`: embedded page-1 image kept, page-2 scan dropped, stored asset equals the scrubbed extraction) and CLIP / SigLIP loads (dimensions, normalization, batch = single, over-limit query refused, document text refused). The OpenAI live test stays outstanding.
+- Real runs (release, Apple M3, 8 CPUs, CPU inference): macro P@3 / Hit@3 / nDCG@3 = 0.167 / 0.300 / 0.241 (CLIP) and 0.167 / 0.300 / 0.270 (SigLIP). Identical metrics in four runs, the last after the Codex round 2 fixes (scrubber v3, labels v4). SigLIP ranks the chest image first for q07 ("Mostre a radiografia de tórax presente no conjunto de exames."); CLIP ranks it third. **Load note:** the last run had moderate unrelated load (load average about 6 on 8 logical CPUs): warm median 35 ms (CLIP) and 62 ms (SigLIP). The earlier runs carried heavy load (load average 25–39, other desktop applications), with warm medians of 0.78–1.8 s (CLIP) and 1.9–3.3 s (SigLIP). Latencies are therefore indicative only and not comparable with the Phase 2 text runs.
+- Spike re-run with the corrected preprocessing: recorded in `reports/spikes/phase3-models.md` next to the original numbers.
+
+### rust-skills applied
+`async-spawn-blocking` (model load, downloads, inference, image re-encoding), `err-result-over-panic` (engine panics become `JoinError` → permanent error; over-limit text refused before the engine), `api-parse-dont-validate` (`ImagePreprocessing::from_json`, asset URI validation), `type-enum-states` (`ModelKind`, `Modality`, `SearchMode`), `serde-default-compat` / `serde-skip-empty` (new config and metadata fields keep old files and records valid), `num-cast-try-from`, `num-float-compare`. Lint suppressions use `#[expect(..., reason)]`.
+
+### Outstanding (not claimed)
+- ~~Adversarial reviews~~: complete, Phase 3 approved (see Status).
+- Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
+- Image latency on an idle host (the last run had a load average of about 6 on 8 CPUs).
+- PDF soft masks with `/Matte` or a non-default `/Decode` (not visible in `pdfimages` output; C3-6 residual).

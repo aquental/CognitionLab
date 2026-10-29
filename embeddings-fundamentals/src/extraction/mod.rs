@@ -5,6 +5,7 @@
 //! and OCR'd. Empty OCR output is reported, never indexed as valid text.
 
 pub mod fixture;
+pub mod images;
 pub mod poppler;
 pub mod tsv;
 

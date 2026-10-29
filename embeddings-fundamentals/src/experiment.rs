@@ -7,11 +7,13 @@
 //!    The process is fresh, so its cold start (PRD §9.4) is that first load plus the
 //!    first embedding call (the first ingestion batch, which also opens the first
 //!    connection of a remote engine);
-//! 2. check the text labels against the pinned snapshot, then load a second adapter for the query side and run the first frozen query (the
-//!    discarded warm-up query). This runs in the already warm process and is reported
-//!    as `query_side_start`, never as a cold start;
+//! 2. check the labels of the run's modality against the pinned snapshot, then load a
+//!    second adapter for the query side and run the first frozen query (the discarded
+//!    warm-up query). This runs in the already warm process and is reported as
+//!    `query_side_start`, never as a cold start;
 //! 3. evaluate every frozen query once in the experiment's pinned snapshot (top 3; its
-//!    provider usage is the query-set cost);
+//!    provider usage is the query-set cost): text-only after a text run, image-only
+//!    (text queries against image records) after an image run;
 //! 4. repeat every frozen query `latency_repeats` times for warm latency (nearest-rank
 //!    median and p95 over the pooled samples);
 //! 5. read peak local RAM, the index size, and fidelity over the indexed records.
@@ -22,9 +24,13 @@ use std::sync::Arc;
 use crate::adapters::BuildError;
 use crate::corpus::LoadedManifest;
 use crate::cost::{Billed, PriceTable, estimate};
-use crate::domain::{Execution, RunStatus, SourceStatus};
+use crate::domain::{Execution, Modality, RunStatus, SourceStatus};
 use crate::embedding::{EmbeddingStrategy, InputKind};
-use crate::evaluation::{Dataset, EvalError, check_text_labels, evaluate_text};
+use crate::evaluation::{
+    Dataset, EvalError, EvaluationReport, check_image_labels, check_text_labels, evaluate_images,
+    evaluate_text,
+};
+use crate::extraction::images::ImageExtractor;
 use crate::extraction::{OcrEngine, TextExtractor};
 use crate::fidelity::{self, LoadedSample};
 use crate::measurement::{
@@ -35,7 +41,7 @@ use crate::report::{
     ColdStart, ConfigurationResult, Costs, EvaluationNotRun, EvaluationNotRunStatus, Fingerprints,
     IncompleteExperiment, IngestionMeasurement, Measurements, QuerySideStart, Reliability,
 };
-use crate::retrieval::{Scope, SearchError, read_records, search_text};
+use crate::retrieval::{Scope, SearchError, SearchHit, read_records, search_images, search_text};
 use crate::storage::EvaluationProvenance;
 use crate::storage::{FsRecordStore, StoreError};
 
@@ -71,11 +77,13 @@ pub struct Instruments<C, M> {
 
 /// Extraction tools and retry sleeper of the run.
 #[derive(Debug, Clone, Copy)]
-pub struct Tools<'a, T, O, S> {
+pub struct Tools<'a, T, O, I, S> {
     /// Text-layer extractor.
     pub text: &'a T,
     /// OCR engine.
     pub ocr: &'a O,
+    /// Embedded-image extractor.
+    pub images: &'a I,
     /// Retry sleeper.
     pub sleeper: &'a S,
 }
@@ -122,8 +130,8 @@ pub enum ExperimentError {
 /// (labels that cannot apply, query adapter, evaluation, latency), the evaluation
 /// cannot run and [`ExperimentError::EvaluationNotRun`] carries the ingestion outcome
 /// instead.
-pub async fn run<T, O, S, C, M>(
-    tools: Tools<'_, T, O, S>,
+pub async fn run<T, O, I, S, C, M>(
+    tools: Tools<'_, T, O, I, S>,
     store: &Arc<FsRecordStore>,
     build: impl AsyncFn() -> Result<Arc<dyn EmbeddingStrategy>, BuildError>,
     instruments: &Instruments<C, M>,
@@ -132,6 +140,7 @@ pub async fn run<T, O, S, C, M>(
 where
     T: TextExtractor,
     O: OcrEngine,
+    I: ImageExtractor,
     S: Sleeper,
     C: Clock + 'static,
     M: MemoryProbe,
@@ -154,6 +163,7 @@ where
     let pipeline = Pipeline {
         text: tools.text,
         ocr: tools.ocr,
+        images: tools.images,
         sleeper: tools.sleeper,
         store: Arc::clone(store),
         embedder: Arc::clone(&measured) as Arc<dyn EmbeddingStrategy>,
@@ -235,20 +245,27 @@ where
         };
         let scope = Scope::Experiment(&snapshot);
         let space = info.embedding_space_id.clone();
+        let modality = inputs.settings.modality;
         // Labels are checked against the pinned snapshot before any query-side work.
-        check_text_labels(inputs.dataset, &read_records(store, &space, scope).await?)?;
+        let records = read_records(store, &space, scope).await?;
+        match modality {
+            Modality::Text => check_text_labels(inputs.dataset, &records)?,
+            Modality::Image => check_image_labels(inputs.dataset, &records)?,
+        }
+        drop(records);
         let started = clock.now();
         let adapter = build().await?;
         let model_load_ms = millis(clock.now().saturating_sub(started));
         let measured = MeasuredEmbedder::new(adapter, Arc::clone(clock));
         let query_calls = measured.calls();
         let started = clock.now();
-        search_text(store, &space, &measured, &first_query.text, 3, scope).await?;
+        search(modality, store, &space, &measured, &first_query.text, scope).await?;
         let first_query_ms = millis(clock.now().saturating_sub(started));
 
         // 3. One evaluation pass; its usage is the query-set cost.
         query_calls.clear();
-        let evaluation = evaluate_text(store, &space, &measured, inputs.dataset, scope).await?;
+        let evaluation =
+            evaluate(modality, store, &space, &measured, inputs.dataset, scope).await?;
         let query_usage = query_calls.summary(InputKind::Query).usage_tokens;
 
         // 4. Warm latency.
@@ -256,7 +273,7 @@ where
         for _ in 0..inputs.latency_repeats.get() {
             for query in &inputs.dataset.queries.value.queries {
                 let started = clock.now();
-                search_text(store, &space, &measured, &query.text, 3, scope).await?;
+                search(modality, store, &space, &measured, &query.text, scope).await?;
                 samples.push(millis(clock.now().saturating_sub(started)));
             }
         }
@@ -355,6 +372,36 @@ where
             })),
         ),
         outcome => outcome,
+    }
+}
+
+/// Top-3 search in the retrieval mode of the run's modality.
+async fn search(
+    modality: Modality,
+    store: &Arc<FsRecordStore>,
+    space: &crate::ids::EmbeddingSpaceId,
+    embedder: &dyn EmbeddingStrategy,
+    query: &str,
+    scope: Scope<'_>,
+) -> Result<Vec<SearchHit>, SearchError> {
+    match modality {
+        Modality::Text => search_text(store, space, embedder, query, 3, scope).await,
+        Modality::Image => search_images(store, space, embedder, query, 3, scope).await,
+    }
+}
+
+/// One evaluation pass in the retrieval mode of the run's modality.
+async fn evaluate(
+    modality: Modality,
+    store: &Arc<FsRecordStore>,
+    space: &crate::ids::EmbeddingSpaceId,
+    embedder: &dyn EmbeddingStrategy,
+    dataset: &Dataset,
+    scope: Scope<'_>,
+) -> Result<EvaluationReport, EvalError> {
+    match modality {
+        Modality::Text => evaluate_text(store, space, embedder, dataset, scope).await,
+        Modality::Image => evaluate_images(store, space, embedder, dataset, scope).await,
     }
 }
 

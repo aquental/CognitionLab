@@ -2,11 +2,15 @@
 
 use anyhow::{Context, Result, ensure};
 use cucumber::{given, then, when};
+use embeddings_fundamentals::domain::Modality;
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
-use embeddings_fundamentals::retrieval::{Scope, search_text};
+use embeddings_fundamentals::embedding::deterministic::Method;
+use embeddings_fundamentals::retrieval::{Scope, search_images, search_text};
 use serde::Deserialize;
+use unicode_normalization::UnicodeNormalization;
 
 use super::common::assert_resolves_to_original;
+use super::eval_fixture;
 use crate::{LabWorld, SpaceOf, fixture};
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +188,180 @@ fn nothing_created(world: &mut LabWorld) -> Result<()> {
     ensure!(
         world.embedder.calls().is_empty(),
         "the search called the adapter on an empty index"
+    );
+    Ok(())
+}
+
+/// Lowercase words of `text` without diacritics (NFD, combining marks dropped).
+fn plain_words(text: &str) -> Vec<String> {
+    text.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[given("an image index and a compatible text-to-image model fixture")]
+async fn image_index(world: &mut LabWorld) -> Result<()> {
+    world.image_embedder = Some(std::sync::Arc::new(
+        eval_fixture::image_keyword_builder()?.build()?,
+    ));
+    eval_fixture::add_image_corpus(world)?;
+    world.ingest_images().await?;
+    ensure!(
+        world.validation_error.is_none(),
+        "image run refused: {:?}",
+        world.validation_error
+    );
+    let images = world
+        .active_records()?
+        .iter()
+        .filter(|r| r.modality == Modality::Image)
+        .count();
+    ensure!(images >= 3, "image index has only {images} items");
+    Ok(())
+}
+
+#[given("filenames and captions do not contain the query terms")]
+fn names_without_query_terms(world: &mut LabWorld) -> Result<()> {
+    // The identifying strings of every indexed image; the search step checks them
+    // against the query it runs.
+    let mut identifying = Vec::new();
+    for r in world.active_records()? {
+        ensure!(
+            r.metadata.generated_caption.is_none(),
+            "image {} has a caption; image-only fixtures contain none",
+            r.chunk_id
+        );
+        identifying.push(r.metadata.source_file.clone());
+        identifying.push(r.chunk_id.to_string());
+        if let Some(original) = &r.metadata.original_asset {
+            identifying.push(original.reference());
+        }
+    }
+    world
+        .notes
+        .insert("image_names".into(), identifying.join("\n"));
+    Ok(())
+}
+
+#[given(expr = "the frozen expected first result is image {string}")]
+fn expected_first(world: &mut LabWorld, source: String) -> Result<()> {
+    world.notes.insert("expected_first".into(), source);
+    Ok(())
+}
+
+#[when(expr = "I search for {string} in image-only mode with limit {int}")]
+async fn search_image_only(world: &mut LabWorld, query: String, limit: usize) -> Result<()> {
+    let names = world
+        .notes
+        .get("image_names")
+        .context("the filename check did not run")?;
+    let name_words = plain_words(names);
+    for term in plain_words(&query) {
+        ensure!(
+            !name_words.contains(&term),
+            "query term {term:?} occurs in an image filename or id"
+        );
+    }
+    let embedder = world.image_embedder.clone().context("no image index")?;
+    let space = embedder.model_info_space();
+    world.notes.insert(
+        "calls_before_search".into(),
+        embedder.calls().len().to_string(),
+    );
+    let outcome = search_images(
+        &world.store,
+        &space,
+        &*embedder,
+        &query,
+        limit,
+        Scope::Active,
+    )
+    .await;
+    world.notes.insert("image_query".into(), query);
+    world.search = Some(outcome.map_err(|e| e.to_string()));
+    Ok(())
+}
+
+#[then(expr = "the first result references image {string}")]
+fn first_result(world: &mut LabWorld, source: String) -> Result<()> {
+    let expected = world
+        .notes
+        .get("expected_first")
+        .context("no frozen result")?;
+    ensure!(
+        *expected == source,
+        "frozen first result is {expected}, step names {source}"
+    );
+    let first = hits(world)?.first().context("no result")?;
+    ensure!(
+        first.source_id.as_str() == source && first.modality == Modality::Image,
+        "first result is {} ({:?})",
+        first.chunk_id,
+        first.modality
+    );
+    Ok(())
+}
+
+#[then(expr = "every returned item has modality {string} and a resolvable original asset URI")]
+async fn all_images_resolve(world: &mut LabWorld, modality: String) -> Result<()> {
+    let records = world.active_records()?;
+    let found = hits(world)?.clone();
+    ensure!(!found.is_empty(), "no result");
+    for hit in found {
+        ensure!(
+            hit.modality.as_str() == modality,
+            "{} has modality {:?}",
+            hit.chunk_id,
+            hit.modality
+        );
+        let uri = hit
+            .asset_uri
+            .as_deref()
+            .context("result without asset uri")?;
+        world
+            .store
+            .read_asset(uri)
+            .context("asset does not resolve")?;
+        let record = records
+            .iter()
+            .find(|r| r.record_id == hit.record_id)
+            .context("hit is not an active record")?;
+        assert_resolves_to_original(world, record).await?;
+    }
+    Ok(())
+}
+
+#[then("the query uses the model's text-query embedding path")]
+fn text_query_path(world: &mut LabWorld) -> Result<()> {
+    let embedder = world.image_embedder.clone().context("no image index")?;
+    let before: usize = world
+        .notes
+        .get("calls_before_search")
+        .context("no search")?
+        .parse()?;
+    let query = world.notes.get("image_query").context("no query")?;
+    let calls = embedder.calls();
+    let search_calls = calls.get(before..).unwrap_or_default();
+    ensure!(
+        search_calls.len() == 1,
+        "the search made {} adapter calls",
+        search_calls.len()
+    );
+    let call = &search_calls[0];
+    ensure!(
+        call.method == Method::Queries && call.raw_inputs == [query.clone()],
+        "the search called {:?} with {:?}",
+        call.method,
+        call.raw_inputs
+    );
+    ensure!(
+        calls.iter().all(|c| c.method != Method::Documents),
+        "the image model embedded document text"
     );
     Ok(())
 }

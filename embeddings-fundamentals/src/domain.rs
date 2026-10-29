@@ -82,6 +82,10 @@ pub enum ExtractionMethod {
     Native,
     /// Optical character recognition of a rendered page.
     Ocr,
+    /// An image embedded in a PDF (`pdfimages`).
+    EmbeddedImage,
+    /// An image input file (PNG or JPEG).
+    ImageFile,
 }
 
 impl ExtractionMethod {
@@ -91,6 +95,8 @@ impl ExtractionMethod {
         match self {
             Self::Native => "native",
             Self::Ocr => "ocr",
+            Self::EmbeddedImage => "embedded_image",
+            Self::ImageFile => "image_file",
         }
     }
 }

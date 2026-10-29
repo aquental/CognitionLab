@@ -407,8 +407,11 @@ impl<C: Clock + 'static> EmbeddingStrategy for MeasuredEmbedder<C> {
     }
 
     async fn embed_images(&self, assets: &[AssetRef]) -> Result<EmbeddingBatch, EmbeddingError> {
-        // Image runs arrive with Milestone 3; they are passed through unmeasured.
-        self.inner.embed_images(assets).await
+        // Images are the indexed side of an image run, measured like document batches.
+        let start = self.clock.now();
+        let outcome = self.inner.embed_images(assets).await;
+        self.observe(InputKind::Document, assets.len(), start, &outcome);
+        outcome
     }
 }
 

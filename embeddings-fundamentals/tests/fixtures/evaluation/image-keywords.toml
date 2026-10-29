@@ -1,0 +1,40 @@
+# Keyword axes for the US-02 / US-03 image-only deterministic fixture index: the three
+# synthetic images of the corpus, embedded by a cross-modal deterministic adapter.
+# Query texts and image item ids share the keyword mechanism of keywords.toml: a text or
+# item id containing a keyword (case-insensitive) gets the sum of its components and no
+# hash noise. The image keywords are item ids, never filenames or captions, so no query
+# term occurs in what identifies an image; the axes stand in for what a cross-modal
+# model knows about the image content. Dimensions: 8 (axes 4..7 carry hash noise).
+#
+# Every ranking below is derived by hand in tests/fixtures/metrics/image-only.ranks.toml.
+dimensions = 8
+
+# Query side.
+[[keywords]]
+keyword = "radiografia"
+components = [[0, 1.0]]
+
+[[keywords]]
+keyword = "ultrassonografia"
+components = [[1, 1.0]]
+
+[[keywords]]
+keyword = "abdominal"
+components = [[2, 1.0]]
+
+[[keywords]]
+keyword = "laudo"
+components = [[3, 1.0]]
+
+# Image side (item ids).
+[[keywords]]
+keyword = "chest-001-p1-image-0"
+components = [[0, 1.0]]
+
+[[keywords]]
+keyword = "abd-us-001-p1-image-0"
+components = [[1, 1.0], [2, 1.0]]
+
+[[keywords]]
+keyword = "us-mixed-003-p1-image-0"
+components = [[1, 1.0], [3, 1.0]]

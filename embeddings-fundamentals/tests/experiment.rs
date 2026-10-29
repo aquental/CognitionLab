@@ -1,6 +1,6 @@
 //! Experiment-level properties (always runs): extraction fidelity must not depend on
 //! chunking (review finding C2-6), and an incomplete ingestion whose labels cannot
-//! apply is reported, not aborted (C2-10).
+//! apply is reported, not aborted (C2-10). An image run is evaluated image-only.
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use embeddings_fundamentals::adapters::BuildError;
 use embeddings_fundamentals::corpus::LoadedManifest;
-use embeddings_fundamentals::domain::{FailureStage, RunStatus, SourceStatus};
+use embeddings_fundamentals::domain::{FailureStage, Modality, RunStatus, SourceStatus};
 use embeddings_fundamentals::embedding::deterministic::DeterministicEmbedder;
 use embeddings_fundamentals::embedding::{EmbeddingStrategy, EngineId};
-use embeddings_fundamentals::evaluation::Dataset;
+use embeddings_fundamentals::evaluation::{Dataset, EvaluationMode};
 use embeddings_fundamentals::experiment::{
     self, ExperimentError, ExperimentInputs, Instruments, Tools,
 };
@@ -98,6 +98,7 @@ async fn run_experiment(
         Tools {
             text: &extractor,
             ocr: &extractor,
+            images: &extractor,
             sleeper: &NoSleep,
         },
         &store,
@@ -146,7 +147,7 @@ async fn a_failed_labeled_source_is_reported_as_incomplete_without_an_evaluation
     let outcome = run_experiment(
         512,
         "labeled-source-fails",
-        "config/evaluation/labels-synthetic-v2.toml",
+        "config/evaluation/labels-synthetic-v4.toml",
         Some("lab-searchable-001"),
         false,
     )
@@ -204,7 +205,7 @@ async fn an_incomplete_run_is_reported_even_when_the_query_side_would_fail() {
     let outcome = run_experiment(
         512,
         "query-side-fails",
-        "config/evaluation/labels-synthetic-v2.toml",
+        "config/evaluation/labels-synthetic-v4.toml",
         Some("lab-searchable-001"),
         true,
     )
@@ -256,4 +257,121 @@ async fn a_complete_run_whose_query_side_fails_is_an_error() {
         matches!(outcome, Err(ExperimentError::Build(_))),
         "a complete ingestion has nothing incomplete to report: {outcome:?}"
     );
+}
+
+#[derive(serde::Deserialize)]
+struct KeywordFile {
+    dimensions: usize,
+    keywords: Vec<Keyword>,
+}
+
+#[derive(serde::Deserialize)]
+struct Keyword {
+    keyword: String,
+    components: Vec<(usize, f32)>,
+}
+
+#[derive(serde::Deserialize)]
+struct MacroMetrics {
+    #[serde(rename = "macro")]
+    macro_avg: Metrics,
+}
+
+#[derive(serde::Deserialize)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the names are the metric keys of the fixture"
+)]
+struct Metrics {
+    precision_at_3: f64,
+    hit_at_3: f64,
+    ndcg_at_3: f64,
+}
+
+#[tokio::test]
+async fn an_image_run_is_evaluated_image_only_through_the_text_query_path() {
+    let manifest =
+        LoadedManifest::load(&repo("tests/fixtures/corpus/manifest.toml")).expect("manifest");
+    let extractor =
+        FixtureExtractor::from_dir(&repo("tests/fixtures/extraction")).expect("fixtures");
+    let store_dir = tempfile::tempdir().expect("tmp");
+    let store = Arc::new(FsRecordStore::open_writer(store_dir.path()).expect("store"));
+    let dataset = Dataset::load(
+        &repo("config/evaluation/queries-v1.toml"),
+        &repo("config/evaluation/labels-synthetic-v4.toml"),
+    )
+    .expect("dataset");
+    let mut settings = IngestSettings::new("image-run".parse().expect("id"));
+    settings.modality = Modality::Image;
+    let keywords: KeywordFile = toml::from_str(
+        &std::fs::read_to_string(repo("tests/fixtures/evaluation/image-keywords.toml"))
+            .expect("read"),
+    )
+    .expect("parse");
+    let mut builder = DeterministicEmbedder::builder()
+        .model_id("deterministic-image-v1")
+        .dimensions(NonZeroUsize::new(keywords.dimensions).expect("dims"))
+        .text_to_image();
+    for k in &keywords.keywords {
+        builder = builder.with_keyword_vector(&k.keyword, &k.components);
+    }
+    let build = async || -> Result<Arc<dyn EmbeddingStrategy>, BuildError> {
+        let adapter: Arc<dyn EmbeddingStrategy> =
+            Arc::new(builder.clone().build().expect("adapter"));
+        Ok(adapter)
+    };
+    let instruments = Instruments {
+        clock: Arc::new(ManualClock::new()),
+        memory: FixedMemory(Some(1)),
+        hardware: Hardware::detect().await,
+    };
+    let result = experiment::run(
+        Tools {
+            text: &extractor,
+            ocr: &extractor,
+            images: &extractor,
+            sleeper: &NoSleep,
+        },
+        &store,
+        build,
+        &instruments,
+        ExperimentInputs {
+            manifest: &manifest,
+            settings: &settings,
+            dataset: &dataset,
+            latency_repeats: NonZeroUsize::MIN,
+            price: None,
+            fidelity: None,
+        },
+    )
+    .await
+    .expect("experiment");
+
+    assert_eq!(result.run_status, RunStatus::Succeeded);
+    assert_eq!(result.evaluation.mode, EvaluationMode::ImageOnly);
+    // The three synthetic images are the indexed items, embedded through embed_images
+    // and measured as the ingestion side.
+    assert_eq!(result.measurements.embedding.items, 3);
+    for query in &result.evaluation.queries {
+        assert_eq!(query.results.len(), 3, "{}", query.query_id);
+        assert!(
+            query.results.iter().all(|r| r.modality == Modality::Image
+                && r.chunk_text.is_none()
+                && r.asset_uri.is_some()),
+            "{}: image-only results are image records",
+            query.query_id
+        );
+    }
+    let expected: MacroMetrics = toml::from_str(
+        &std::fs::read_to_string(repo("tests/fixtures/metrics/image-only.toml")).expect("read"),
+    )
+    .expect("parse");
+    let m = &result.evaluation.metrics;
+    for (name, got, want) in [
+        ("P@3", m.precision_at_3, expected.macro_avg.precision_at_3),
+        ("Hit@3", m.hit_at_3, expected.macro_avg.hit_at_3),
+        ("nDCG@3", m.ndcg_at_3, expected.macro_avg.ndcg_at_3),
+    ] {
+        assert!((got - want).abs() < 1e-9, "{name}: {got} vs {want}");
+    }
 }

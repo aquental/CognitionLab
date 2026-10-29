@@ -15,6 +15,9 @@ pub mod hf;
 pub mod local;
 #[cfg(feature = "engine-openai")]
 pub mod openai;
+pub mod preprocess;
+#[cfg(feature = "engine-embed-anything")]
+pub mod vision;
 
 use std::borrow::Cow;
 use std::fmt;
