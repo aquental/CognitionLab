@@ -176,8 +176,18 @@ Grok confirmed G0-39..G0-41 and reported one new finding.
 
 | ID | Reviewer | Severity | Description | Resolution | Files | Validation evidence | Reviewer confirmation | Status |
 |---|---|---|---|---|---|---|---|---|
-| G0-42 | Grok | high | A TJ adjustment above -200 was a sure continuation, but `pdftotext -layout` already prints two words from about -100, so a short name followed by such an adjustment glued onto the next word in every reading | Valid. Measured with the fixture builder and `pdftotext -layout` at 8, 10, 12, and 24 pt: words split at -100 (12 and 24 pt) or -110 (8 and 10 pt) and join at -90 and above. `WORD_SPACE_ADJUSTMENT` is now -50, half of that, so any adjustment a reader could show as a space is ambiguous. **Refuted** for Grok's suggestion to make every negative number ambiguous: ordinary kerning inside a word (-15, -30, -80 in kerning pairs) would then become a join point, and short terms would match the pieces of longer words on clean pages; below -50, `pdftotext` joins in every size measured | `src/anonimizador/channels.py`, `docs/SPEC.md` | `tests/test_channels.py::test_a_tj_adjustment_that_a_reader_shows_as_a_space_is_ambiguous` (-150, -100, -199, -50 in an unreferenced stream beside a clean page: `Zuleo` 1, `Zulea` 0, `Assunto` 1; kerning of -30 and -49 inside a word keeps the split reading whole). Mutants at -200 and at every negative number fail it | pending | fixed (refuted for every negative) |
+| G0-42 | Grok | high | A TJ adjustment above -200 was a sure continuation, but `pdftotext -layout` already prints two words from about -100, so a short name followed by such an adjustment glued onto the next word in every reading | Valid. Measured with the fixture builder and `pdftotext -layout` at 8, 10, 12, and 24 pt: words split at -100 (12 and 24 pt) or -110 (8 and 10 pt) and join at -90 and above. `WORD_SPACE_ADJUSTMENT` is now -50, half of that, so any adjustment a reader could show as a space is ambiguous. **Refuted** for Grok's suggestion to make every negative number ambiguous: ordinary kerning inside a word (-15, -30, -80 in kerning pairs) would then become a join point, and short terms would match the pieces of longer words on clean pages; below -50, `pdftotext` joins in every size measured | `src/anonimizador/channels.py`, `docs/SPEC.md` | `tests/test_channels.py::test_a_tj_adjustment_that_a_reader_shows_as_a_space_is_ambiguous` (-150, -100, -199, -50 in an unreferenced stream beside a clean page: `Zuleo` 1, `Zulea` 0, `Assunto` 1; kerning of -30 and -49 inside a word keeps the split reading whole). Mutants at -200 and at every negative number fail it | Grok round 13 (`30271cc`): fix and refutation confirmed (remeasured on Helvetica, Times, Courier, 6-72 pt) | closed (refuted for every negative) |
 
 Noise check, local real exams, aggregate counts only: unchanged.
 
 Validation: `uv run pytest` 80 passed, 1 skipped (opt-in); ruff clean; `RUN_SAMPLE_EXAMS=1` local real exams 1 passed. Every fix's mutant is caught.
+
+## Grok round 13 (`grok-round13.md`, reviewed `30271cc`)
+
+Grok confirmed G0-42 and its refutation, after remeasuring `pdftotext -layout` on three faces and many sizes, and reported one new finding.
+
+| ID | Reviewer | Severity | Description | Resolution | Files | Validation evidence | Reviewer confirmation | Status |
+|---|---|---|---|---|---|---|---|---|
+| G0-43 | Grok | medium | A stream was inflated only when its `stream` keyword ended with LF or CRLF; readers accept CR alone, so a short name left in such a Flate stream counted 0 | Valid. `raw_blobs` accepts CRLF, LF, or CR after the keyword | `src/anonimizador/channels.py` | `tests/test_channels.py::test_a_stream_whose_keyword_ends_with_cr_alone_is_inflated` (CR, LF, CRLF: `Zuleo` 1, `Zulea` 0). The LF/CRLF-only mutant fails it | pending | fixed |
+
+Validation: `uv run pytest` 81 passed, 1 skipped (opt-in); ruff clean; `RUN_SAMPLE_EXAMS=1` local real exams 1 passed. The fix's mutant is caught.

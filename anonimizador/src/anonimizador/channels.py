@@ -389,7 +389,8 @@ def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
 def raw_blobs(data: bytes) -> list[bytes]:
     """The file bytes, every zlib stream in it, and PNG compressed text."""
     blobs = [data]
-    for match in re.finditer(rb"stream\r?\n", data):
+    # The keyword ends with CRLF, LF, or (accepted by readers) CR alone (Grok G0-43).
+    for match in re.finditer(rb"stream(?:\r\n|\r|\n)", data):
         start = match.end()
         end = data.find(b"endstream", start)
         if end < 0:
