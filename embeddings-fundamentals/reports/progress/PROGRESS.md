@@ -243,8 +243,9 @@ None for Phase 0.
 | A combined result keeps its fused rank and score (`score` as `f32`, the exact `fusion.fused_score` as `f64`) and its rank and cosine score in each leg (`fusion.text`, `fusion.image`) | Traceability: a fused ranking must show where each item came from, without comparing raw scores |
 | A combined configuration file (`config/experiments/combined-*.toml`) names a text configuration and an image configuration plus `[fusion]`. Loading checks the roles: the text leg must be a text model over a text run, the image leg a cross-modal model over an image run (exit 3 otherwise) | PRD §6.6: a combined configuration is an ordered pair of spaces plus fusion parameters |
 | `combine` ingests nothing. It loads the snapshots of a text run and an image run, refuses a pair that indexed another corpus or was evaluated with other frozen queries or labels, and refuses a leg whose snapshot pins nothing in its model's space. It then saves a create-only snapshot pinning both legs' revisions and measures fused retrieval over it | Reuses the evidence of the single-mode runs instead of re-ingesting, and the combined id alone reproduces the run (`search --mode combined --experiment <id>`) |
-| Combined cold start = both model loads + the first fused query in a fresh process; warm latency covers both legs and the fusion; index size is the sum of both legs' active indexes; query cost is reported per leg | PRD §9.4 definitions applied to a two-model configuration; costs of different providers are not summed into one number |
+| Combined cold start = both model loads + the first fused query in a fresh process; warm latency covers both legs and the fusion; index size is the size of the revisions the combined snapshot pins (Grok G4-3); query cost is reported per leg | PRD §9.4 definitions applied to a two-model configuration; costs of different providers are not summed into one number |
 | `ComparisonReport::with_combined` adds combined results to a report. It refuses another corpus, query set, labels, evaluation fingerprint, or machine, and refuses a leg experiment the report shows in another space. The extraction-fingerprint rule now compares only configurations in the same mode | A text run and an image run extract different things, so their extraction fingerprints differ by design. The old rule refused every three-mode report |
+| A combined search scoped to an experiment refuses a snapshot that is not the combined run of its legs and fusion parameters: fusion fingerprint and a pinned revision in each leg's space (`check_combined_snapshot`, exit 3). The CLI reads the snapshot and checks the fusion fingerprint before loading any model (Grok G4-1, G4-2) | The combined id must reproduce the run it names; a different `k` or a missing leg would otherwise change or silently shrink the fused ranking |
 | BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
 
 ### Implementation
@@ -264,11 +265,14 @@ None for Phase 0.
 - `src/cli.rs`: `combine`, `search --mode combined`, `report --combined`. Remote permission is checked for every remote leg.
 - Configs: `combined-e5-base-siglip.toml`, `combined-minilm-clip.toml`, `combined-deterministic.toml`.
 - BDD milestone 4: `us03` Combined example and "Fuse rankings without comparing incompatible raw scores". Fixtures: `combined.ranks.toml` (hand-derived, with record ids) and `combined.toml` (`scripts/precompute-metrics.py`).
-- Tests: `tests/combined.rs` (4) covers:
+- Tests: `tests/combined.rs` (7) covers:
   - a combined run pins both legs and matches the hand-derived metrics;
   - the refusals: swapped legs, another corpus, other labels, a missing leg, a reused id;
   - search guards before any read or embedding;
-  - the three-mode report and its refusals.
+  - the three-mode report and its refusals;
+  - a combined search scoped to an experiment must be that combined run (G4-1);
+  - the snapshot is read before any model loads (G4-2);
+  - the index size is that of the pinned revisions (G4-3).
 
   The integration test `the_cli_runs_combined_retrieval_over_real_text_and_image_runs` runs real MiniLM + CLIP through the CLI.
 - Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule).
@@ -284,20 +288,20 @@ None for Phase 0.
 
 ### Validation (local, 2026-10-29)
 - fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
-- `cargo test`: 160 unit (incl. 9 fusion and 2 combined-config tests), 15 pipeline, 7 experiment, 4 combined, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
-- Mutants caught:
+- `cargo test`: 160 unit (incl. 9 fusion and 2 combined-config tests), 15 pipeline, 7 experiment, 7 combined (incl. the G4-1/G4-2/G4-3 regressions), 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
+- Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
   - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
   - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
 - `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **16 passed**, including the new real combined CLI chain. The OpenAI live test stays outstanding.
-- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 3–5).
+- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 4–11; regenerated after the Grok round 1 fixes).
   - Text and image metrics are identical to Phases 2 and 3:
     - MiniLM (both engines): 0.333 / 0.500 / 0.409;
     - E5-base: 0.433 / 0.700 / 0.540;
     - CLIP: 0.167 / 0.300 / 0.241;
     - SigLIP: 0.167 / 0.300 / 0.270.
   - Combined:
-    - E5-base + SigLIP: 0.367 / **0.800** / 0.508, warm median 91 ms;
-    - MiniLM + CLIP: 0.300 / 0.600 / 0.388, warm median 41 ms.
+    - E5-base + SigLIP: 0.367 / **0.800** / 0.508, warm median 98 ms;
+    - MiniLM + CLIP: 0.300 / 0.600 / 0.388, warm median 42 ms.
   - Fusion raises Hit@3 above every leg. It lowers P@3 and nDCG@3 below the text leg, because irrelevant images displace relevant text chunks at ranks 2–3 on the laboratory queries; the report's limitations explain this per query.
 
 ### rust-skills applied

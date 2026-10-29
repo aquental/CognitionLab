@@ -540,11 +540,13 @@ async fn search(args: &SearchArgs, modality: crate::domain::Modality) -> Result<
         eprintln!("validation failed: {refusal}");
         return Ok(ExitCode::from(EXIT_VALIDATION));
     }
+    // The store and snapshot are read before any model loads, so a missing experiment
+    // is refused without a model load or download.
+    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
     let embedder = match adapters::build(&config.engine).await {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
     };
-    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
     let space = args
         .space
         .clone()
@@ -630,6 +632,16 @@ async fn search_fused(args: &SearchArgs) -> Result<ExitCode> {
         eprintln!("validation failed: {refusal}");
         return Ok(ExitCode::from(EXIT_VALIDATION));
     }
+    // Snapshot first: a missing experiment, or one that is not a combined run with these
+    // fusion parameters, is refused before either model loads. Its leg spaces are
+    // checked by `search_combined` once the models give them.
+    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
+    if let Some(snapshot) = &snapshot
+        && let Err(e) = crate::retrieval::check_fusion_pinned(snapshot, config.fusion)
+    {
+        eprintln!("validation failed: {e}");
+        return Ok(ExitCode::from(EXIT_VALIDATION));
+    }
     let text = match adapters::build(&config.text.engine).await {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
@@ -638,7 +650,6 @@ async fn search_fused(args: &SearchArgs) -> Result<ExitCode> {
         Ok(adapter) => adapter,
         Err(e) => return Ok(build_failure(&e)),
     };
-    let (store, snapshot) = open_scope(&args.store, args.experiment.as_ref()).await?;
     let scope = snapshot.as_ref().map_or(Scope::Active, Scope::Experiment);
     let (text_space, image_space) = (
         text.model_info().embedding_space_id.clone(),
@@ -663,9 +674,10 @@ async fn search_fused(args: &SearchArgs) -> Result<ExitCode> {
     let hits = match outcome {
         Ok(hits) => hits,
         Err(
-            e @ crate::retrieval::SearchError::Embedding(
+            e @ (crate::retrieval::SearchError::Embedding(
                 crate::embedding::EmbeddingError::Unsupported { .. },
-            ),
+            )
+            | crate::retrieval::SearchError::SnapshotMismatch { .. }),
         ) => {
             eprintln!("validation failed: {e}");
             return Ok(ExitCode::from(EXIT_VALIDATION));

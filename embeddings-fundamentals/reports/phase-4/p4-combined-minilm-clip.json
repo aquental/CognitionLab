@@ -849,20 +849,20 @@
   },
   "measurements": {
     "cold_start": {
-      "text_model_load_ms": 1053.058542,
-      "image_model_load_ms": 769.3322919999999,
-      "first_query_ms": 37.643457999999995,
-      "total_ms": 1860.0342919999998
+      "text_model_load_ms": 1116.2344170000001,
+      "image_model_load_ms": 787.766875,
+      "first_query_ms": 39.315999999999995,
+      "total_ms": 1943.3172920000002
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 40.992708,
-      "p95_ms": 49.314499999999995
+      "median_ms": 41.589625,
+      "p95_ms": 52.404125
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 1867087872.0,
+      "value": 1867563008.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },
@@ -874,7 +874,7 @@
       "status": "measured",
       "value": 188983.0,
       "unit": "bytes",
-      "scope": "active revisions of both legs on disk"
+      "scope": "revisions of both legs pinned by the combined snapshot, on disk"
     }
   },
   "cost": {

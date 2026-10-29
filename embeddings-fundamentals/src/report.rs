@@ -229,7 +229,7 @@ pub struct CombinedMeasurements {
     pub peak_local_ram: Observation,
     /// GPU memory, or why it is unavailable.
     pub gpu_memory: Observation,
-    /// Bytes on disk of both legs' active indexes.
+    /// Bytes on disk of both legs' revisions pinned by the combined snapshot.
     pub index_size: Observation,
 }
 

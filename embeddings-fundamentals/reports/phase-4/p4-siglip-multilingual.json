@@ -592,42 +592,42 @@
   },
   "measurements": {
     "ingestion": {
-      "duration_ms": 863.802333,
+      "duration_ms": 984.5512090000001,
       "pages": 0,
       "chunks": 3,
       "ms_per_page": null,
-      "chunks_per_second": 3.4730167833431866
+      "chunks_per_second": 3.047073603258355
     },
-    "ingestion_model_load_ms": 2596.7079169999997,
+    "ingestion_model_load_ms": 3100.321166,
     "embedding": {
       "calls": 3,
       "failed_calls": 0,
       "items": 3,
-      "total_ms": 694.311541,
-      "mean_batch_latency_ms": 231.43718033333334,
-      "items_per_second": 4.3208269240047095,
+      "total_ms": 796.092542,
+      "mean_batch_latency_ms": 265.36418066666664,
+      "items_per_second": 3.7684061107559024,
       "usage_tokens": null
     },
     "cold_start": {
-      "model_load_ms": 2596.7079169999997,
-      "first_operation_ms": 237.30954200000002,
+      "model_load_ms": 3100.321166,
+      "first_operation_ms": 264.642625,
       "first_operation_items": 1,
-      "total_ms": 2834.0174589999997
+      "total_ms": 3364.963791
     },
     "query_side_start": {
-      "model_load_ms": 548.911042,
-      "first_query_ms": 57.488,
-      "total_ms": 606.399042
+      "model_load_ms": 603.563625,
+      "first_query_ms": 66.876875,
+      "total_ms": 670.4405
     },
     "warm_query_latency": {
       "samples": 200,
-      "median_ms": 61.034290999999996,
-      "p95_ms": 69.775916
+      "median_ms": 69.801667,
+      "p95_ms": 97.592083
     },
     "latency_repeats": 20,
     "peak_local_ram": {
       "status": "measured",
-      "value": 3542630400.0,
+      "value": 3543334912.0,
       "unit": "bytes",
       "scope": "local process memory (ru_maxrss high-water mark)"
     },

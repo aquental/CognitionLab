@@ -420,9 +420,20 @@ impl FsRecordStore {
     ///
     /// Returns [`StoreError`] when a pointer or revision directory cannot be read.
     pub fn index_size_bytes(&self, space: &EmbeddingSpaceId) -> Result<u64, StoreError> {
+        self.revisions_size_bytes(&self.active(space)?)
+    }
+
+    /// Bytes on disk of the given revisions (for example those an experiment snapshot
+    /// pins, which later publishes may have replaced as active).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] when a revision directory cannot be read.
+    pub fn revisions_size_bytes(&self, revisions: &[RevisionRef]) -> Result<u64, StoreError> {
         let mut total = 0_u64;
-        for revision in self.active(space)? {
-            let dir = self.revision_dir(space, &revision.source_id, &revision.revision_id);
+        for revision in revisions {
+            let dir =
+                self.revision_dir(&revision.space, &revision.source_id, &revision.revision_id);
             for entry in std::fs::read_dir(&dir).map_err(io(&dir))? {
                 let path = entry.map_err(io(&dir))?.path();
                 total += std::fs::metadata(&path).map_err(io(&path))?.len();

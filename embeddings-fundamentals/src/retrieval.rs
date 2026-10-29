@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::Modality;
 use crate::embedding::{Capability, EmbeddingError, EmbeddingStrategy, TextInput, validate_batch};
 use crate::fusion::{FusionParams, rrf};
+use crate::ids::Fingerprint;
 use crate::ids::{ChunkId, EmbeddingSpaceId, ItemId, RecordId, RevisionId, SourceId};
 use crate::storage::{ExperimentSnapshot, FsRecordStore, StoreError};
 
@@ -121,6 +122,15 @@ pub enum SearchError {
     /// A blocking store task panicked or was cancelled.
     #[error("store task failed: {0}")]
     Task(String),
+    /// A combined search was scoped to a snapshot that is not the combined run of
+    /// these legs and fusion parameters.
+    #[error("experiment {experiment} does not match this combined search: {reason}")]
+    SnapshotMismatch {
+        /// The snapshot's experiment.
+        experiment: crate::ids::ExperimentId,
+        /// What differs.
+        reason: String,
+    },
 }
 
 /// Dot product accumulated in `f64`.
@@ -439,17 +449,74 @@ pub fn fuse(
         .collect()
 }
 
+/// Snapshot key of the fusion fingerprint of a combined run.
+pub const FUSION_FINGERPRINT: &str = "fusion";
+
+/// Refuses a snapshot whose recorded fusion parameters are not `params` (a combined
+/// run records them under [`FUSION_FINGERPRINT`]; any other snapshot records none).
+///
+/// # Errors
+///
+/// Returns [`SearchError::SnapshotMismatch`].
+pub fn check_fusion_pinned(
+    snapshot: &ExperimentSnapshot,
+    params: FusionParams,
+) -> Result<(), SearchError> {
+    let mismatch = |reason: String| SearchError::SnapshotMismatch {
+        experiment: snapshot.experiment_id.clone(),
+        reason,
+    };
+    let expected = Fingerprint::of(&params).map_err(|e| mismatch(e.to_string()))?;
+    match snapshot.fingerprints.get(FUSION_FINGERPRINT) {
+        Some(pinned) if *pinned == expected => Ok(()),
+        Some(_) => Err(mismatch(format!(
+            "it was fused with other parameters than {} k = {}",
+            params.method.as_str(),
+            params.k
+        ))),
+        None => Err(mismatch("it is not a combined run".to_owned())),
+    }
+}
+
+/// Refuses a snapshot that is not the combined run of `text`, `image`, and `params`:
+/// its fusion parameters must be `params` and it must pin revisions in both spaces, so
+/// a leg can never silently drop out of the fusion.
+///
+/// # Errors
+///
+/// Returns [`SearchError::SnapshotMismatch`].
+pub fn check_combined_snapshot(
+    snapshot: &ExperimentSnapshot,
+    text: &EmbeddingSpaceId,
+    image: &EmbeddingSpaceId,
+    params: FusionParams,
+) -> Result<(), SearchError> {
+    check_fusion_pinned(snapshot, params)?;
+    for (leg, space) in [("text", text), ("image", image)] {
+        if !snapshot.revisions.iter().any(|r| &r.space == space) {
+            return Err(SearchError::SnapshotMismatch {
+                experiment: snapshot.experiment_id.clone(),
+                reason: format!("it pins no revision in the {leg} leg's space {space}"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Combined search (PRD §6.6): the text leg ranks the text records of its space, the
 /// image leg the image records of its cross-modal space, each with its own query
 /// model; each leg contributes its top `params.depth` candidates and the rankings are
-/// fused with RRF. Both legs search the same `scope`.
+/// fused with RRF. Both legs search the same `scope`; an experiment scope must be the
+/// combined run of these legs and parameters ([`check_combined_snapshot`]).
 ///
 /// # Errors
 ///
 /// Before any store read or query embedding, returns [`SearchError::SpaceMismatch`]
-/// when a leg's query model does not belong to its index space, and
+/// when a leg's query model does not belong to its index space,
 /// [`SearchError::Embedding`] with [`EmbeddingError::Unsupported`] when the image
-/// leg's model has no compatible text-to-image space. Otherwise returns the errors of
+/// leg's model has no compatible text-to-image space, and
+/// [`SearchError::SnapshotMismatch`] when the experiment scope is not the combined
+/// run of these legs and fusion parameters. Otherwise returns the errors of
 /// [`search_text`] and [`search_images`].
 pub async fn search_combined(
     store: &Arc<FsRecordStore>,
@@ -466,6 +533,9 @@ pub async fn search_combined(
         .embedder
         .capabilities()
         .require(Capability::TextToImage, image.embedder.model_info())?;
+    if let Scope::Experiment(snapshot) = scope {
+        check_combined_snapshot(snapshot, text.space, image.space, params)?;
+    }
     let depth = params.depth.limit();
     let (text_hits, image_hits) = tokio::try_join!(
         search_text(store, text.space, text.embedder, query, depth, scope),
