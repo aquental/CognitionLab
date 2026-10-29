@@ -183,7 +183,7 @@ None for Phase 0.
 
 ## Phase 3 — Milestone 3: Image retrieval (`@m3`)
 
-**Status:** 🔄 implementation complete, adversarial reviews in progress (see `reports/reviews/phase-3/FINDINGS.md`). Branch `phase-3/image-retrieval` (from `3294dbd`, the approved Phase 2 head). Review diff base `3294dbd`.
+**Status:** ✅ APPROVED (2026-10-29). Branch `phase-3/image-retrieval` (from `3294dbd`, the approved Phase 2 head, merged to `main` with PR #6). Review diff base `3294dbd`. Grok rounds 1–7 and Codex rounds 1–4 are complete; the final Grok round (7, `af10c26`) and the final Codex round (4, `9196029`) both reported NO FINDINGS. 13 findings (S3-1, G3-1..G3-5, C3-1..C3-7): G3-4 refuted with evidence and hardened, the rest fixed with regression tests; see `reports/reviews/phase-3/FINDINGS.md`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
@@ -224,6 +224,7 @@ None for Phase 0.
 `async-spawn-blocking` (model load, downloads, inference, image re-encoding), `err-result-over-panic` (engine panics become `JoinError` → permanent error; over-limit text refused before the engine), `api-parse-dont-validate` (`ImagePreprocessing::from_json`, asset URI validation), `type-enum-states` (`ModelKind`, `Modality`, `SearchMode`), `serde-default-compat` / `serde-skip-empty` (new config and metadata fields keep old files and records valid), `num-cast-try-from`, `num-float-compare`. Lint suppressions use `#[expect(..., reason)]`.
 
 ### Outstanding (not claimed)
-- Adversarial reviews (Grok → Codex).
+- ~~Adversarial reviews~~: complete, Phase 3 approved (see Status).
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
-- Image latency under normal host load.
+- Image latency on an idle host (the last run had a load average of about 6 on 8 CPUs).
+- PDF soft masks with `/Matte` or a non-default `/Decode` (not visible in `pdfimages` output; C3-6 residual).
