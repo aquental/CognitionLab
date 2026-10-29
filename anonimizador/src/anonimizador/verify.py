@@ -224,7 +224,7 @@ def check_file(
             if channel == "raw" and not term.searchable_in_binary:
                 counts[channel] = 0
             elif channel == "raw" and term.whole_word:
-                raw = [*texts["raw"], *reading.raw_word_texts]
+                raw = [*texts["raw"], *reading.raw_joins]
                 counts[channel] = max((term.count(t) for t in raw), default=0)
             elif channel in PARTS_CHANNELS:
                 counts[channel] = term.count("\n".join(texts[channel]))
@@ -241,7 +241,8 @@ def check_file(
             for c in PATTERN_CHANNELS
             for t in (["\n".join(texts[c])] if c in PARTS_CHANNELS else texts[c])
         ]
-        + reading.strings
+        + reading.strings,
+        reading.raw_joins,
     )
     return FileResult(index, file.name, hits, hints, reading.errors)
 

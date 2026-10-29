@@ -80,10 +80,10 @@ class Reading:
         # The decoded PDF strings, searched for patterns: an identifier left in an old
         # object reaches no other pattern channel (Grok G0-21).
         self.strings: list[str] = []
-        # The joins that ambiguous boundaries could make, searched only for terms that
-        # must be whole words: a term matched without separators would count each
-        # occurrence once per join.
-        self.raw_word_texts: list[str] = []
+        # The joins that ambiguous boundaries could make: searched for terms that must
+        # be whole words, and for patterns by distinct match. A term matched without
+        # separators would count each occurrence once per join.
+        self.raw_joins: list[str] = []
 
     @contextlib.contextmanager
     def channel(self, name: str) -> Iterator[None]:
@@ -201,15 +201,16 @@ GAP_TOKEN = re.compile(
 )
 # Text-showing, text-state, and color operators: the text continues where it was.
 SAME_TEXT_OPS = frozenset(b"Tj TJ Tc Tw Tz TL Tf Tr Ts rg RG g G k K cs CS sc SC scn SCN".split())
-# Operators that move the text position. Whether a move is glyph positioning, a word
-# space, or a new line depends on the fonts' widths, which are not read, so a move is
-# ambiguous (Grok G0-25, G0-26, G0-29, G0-32).
-MOVE_OPS = frozenset((b"Td", b"TD", b"Tm", b"T*", b"'", b'"'))
-# A TJ adjustment at or below this (thousandths of an em, moving right) may be a word
-# space: it is ambiguous too.
+# Any other operator between two strings (a move, a new text object, a saved graphics
+# state, marked content) may or may not separate words: only the fonts' widths and the
+# positions, which are not read, tell. It is ambiguous (Grok G0-25, G0-26, G0-29,
+# G0-32, G0-38). So is a TJ adjustment at or below this (thousandths of an em, moving
+# right), which may be a word space.
 WORD_SPACE_ADJUSTMENT = -200
-# Between the strings of one text stand a few operators and numbers. A longer gap
-# (binary data, another drawing) is a break, and is not tokenized.
+# Bytes that are no content-stream syntax: between them, strings are not one text.
+NOT_SYNTAX = re.compile(rb"[^\s\w.+\-\[\]/*'\"<>#]")
+# A gap of syntax longer than this holds operators, so it is ambiguous without being
+# tokenized (binary-sized gaps stay fast).
 MAX_TEXT_GAP = 256
 PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
 
@@ -288,13 +289,22 @@ AMBIGUOUS = "\x1f"
 MAX_MIXED_READING = 20
 
 
+def array_open_after(gap: bytes, in_array: bool) -> bool:
+    """Whether a TJ array is open after `gap`: its last bracket decides (Grok G0-37)."""
+    opened, closed = gap.rfind(b"["), gap.rfind(b"]")
+    return in_array if opened == closed else opened > closed
+
+
 def gap_joint(gap: bytes, in_array: bool) -> tuple[str, bool]:
     """How the strings before and after `gap` are joined: "" when the text simply
-    continues, `AMBIGUOUS` when the text position moves (a move operator, or a large TJ
-    adjustment), "\\n" when another drawing starts (another operator, binary data, a
-    long gap). Also whether a TJ array is open after the gap."""
+    continues (text-showing, text-state, and color operators, small TJ kerning),
+    `AMBIGUOUS` for any other operator or a large TJ adjustment, "\\n" across bytes that
+    are no content-stream syntax (binary data: another stream). Also whether a TJ array
+    is open after the gap."""
+    if NOT_SYNTAX.search(gap):
+        return "\n", array_open_after(gap, in_array)
     if len(gap) > MAX_TEXT_GAP:
-        return "\n", False
+        return AMBIGUOUS, array_open_after(gap, in_array)
     joint = ""
     for token in GAP_TOKEN.finditer(gap):
         kind, value = token.lastgroup, token.group()
@@ -303,15 +313,10 @@ def gap_joint(gap: bytes, in_array: bool) -> tuple[str, bool]:
         elif kind == "close":
             in_array = False
         elif kind == "number":
-            if in_array and float(value) <= WORD_SPACE_ADJUSTMENT and joint != "\n":
+            if in_array and float(value) <= WORD_SPACE_ADJUSTMENT:
                 joint = AMBIGUOUS
-        elif kind == "op":
-            if value in MOVE_OPS and joint != "\n":
-                joint = AMBIGUOUS
-            elif value not in SAME_TEXT_OPS:
-                joint = "\n"
-        elif kind == "other":
-            joint = "\n"
+        elif kind == "op" and value not in SAME_TEXT_OPS:
+            joint = AMBIGUOUS
     return joint, in_array
 
 
@@ -367,8 +372,10 @@ class PdfStringViews:
 
     @property
     def for_patterns(self) -> list[str]:
-        """The readings searched for identifier patterns (Grok G0-21, G0-23, G0-34)."""
-        return [self.lines, self.drawn, self.split, self.mixed]
+        """The readings searched for identifier patterns (Grok G0-21, G0-23, G0-34),
+        with `mixed` counted by distinct match: not the fully joined one, which glues the
+        numbers of a whole table together."""
+        return [self.lines, self.split]
 
 
 def pdf_string_views(blobs: list[bytes]) -> PdfStringViews:
@@ -406,8 +413,8 @@ def raw_blobs(data: bytes) -> list[bytes]:
 
 
 def raw_readings(data: bytes) -> tuple[list[str], list[str], list[str]]:
-    """The raw texts of a file, and its PDF strings for patterns (one per line, and as
-    drawn)."""
+    """The raw texts of a file, its PDF strings for patterns, and the joins of their
+    ambiguous boundaries."""
     blobs = raw_blobs(data)
     texts = decode_both(blobs)
     texts.extend(
@@ -464,7 +471,7 @@ def read_pdf(
     texts = reading.texts
     texts["name"] = [name]
     with open(path, "rb") as f:
-        texts["raw"], reading.strings, reading.raw_word_texts = raw_readings(f.read())
+        texts["raw"], reading.strings, reading.raw_joins = raw_readings(f.read())
     pages = None
     with reading.channel("metadata"):
         info = run(["pdfinfo", "-enc", "UTF-8", path], timeout)
