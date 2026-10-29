@@ -1,0 +1,10 @@
+# Stage 4 combined retrieval (PRD §10): the Stage 1 text baseline (multilingual MiniLM
+# on EmbedAnything) fused with the Stage 3 CLIP baseline (EmbedAnything). Both legs run
+# on one engine; only ranks are fused (RRF, PRD §6.6), never raw scores.
+text = "baseline-text-embed-anything.toml"
+image = "image-clip-vit-b32.toml"
+
+[fusion]
+method = "rrf"
+k = 60
+depth = "all"

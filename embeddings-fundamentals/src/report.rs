@@ -4,6 +4,10 @@
 //! Configurations that differ in engine, weight format, or model are reported as an
 //! **end-to-end configuration comparison**: differences are not attributed to one
 //! variable alone (PRD §10).
+//!
+//! Combined-retrieval results ([`CombinedResult`], PRD §6.6) sit beside the
+//! single-modality configurations, so one report compares text-only, image-only, and
+//! combined retrieval on the same corpus, queries, labels, and machine.
 
 use std::fmt::Write as _;
 
@@ -14,6 +18,7 @@ use crate::domain::{Execution, RunStatus};
 use crate::embedding::{EngineId, PrefixPolicy};
 use crate::evaluation::{DatasetRef, EvaluationReport};
 use crate::fidelity::FidelityReport;
+use crate::fusion::{FusionDepth, FusionParams};
 use crate::ids::{Checksum, EmbeddingSpaceId, ExperimentId, Fingerprint};
 use crate::measurement::{EmbeddingSummary, Hardware, LatencyStats, Observation};
 use crate::pipeline::RunReport;
@@ -172,6 +177,96 @@ pub struct ConfigurationResult {
     pub fidelity: Option<FidelityReport>,
 }
 
+/// One leg of a combined configuration: the model and index space it queries, and the
+/// experiment run whose pinned revisions it searches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegConfiguration {
+    /// Experiment run that indexed this leg (its snapshot pins the revisions).
+    pub experiment_id: ExperimentId,
+    /// Engine.
+    pub engine: EngineId,
+    /// Engine version.
+    pub engine_version: String,
+    /// Model.
+    pub model_id: String,
+    /// Pinned model revision.
+    pub model_revision: Option<String>,
+    /// Vector dimensions.
+    pub dimensions: usize,
+    /// Prefix policy.
+    pub prefix_policy: PrefixPolicy,
+    /// Local or remote.
+    pub execution: Execution,
+    /// Index space of the leg.
+    pub embedding_space_id: EmbeddingSpaceId,
+}
+
+/// Start of a combined run: a fresh process loads both query models and runs its first
+/// fused query (PRD §9.4 cold start; no ingestion happens in a combined run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CombinedStart {
+    /// Text-leg model load or client construction, in milliseconds.
+    pub text_model_load_ms: f64,
+    /// Image-leg model load, in milliseconds.
+    pub image_model_load_ms: f64,
+    /// First fused query (the discarded warm-up query), in milliseconds.
+    pub first_query_ms: f64,
+    /// Sum of the three.
+    pub total_ms: f64,
+}
+
+/// Measurements of a combined configuration (PRD §9.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CombinedMeasurements {
+    /// Model loads and first fused query of the fresh process.
+    pub cold_start: CombinedStart,
+    /// Warm latency of one fused query (both legs and the fusion) over
+    /// `latency_repeats` repetitions of every frozen query.
+    pub warm_query_latency: LatencyStats,
+    /// Repetitions per query.
+    pub latency_repeats: usize,
+    /// Process high-water mark (`ru_maxrss`) with both models loaded.
+    pub peak_local_ram: Observation,
+    /// GPU memory, or why it is unavailable.
+    pub gpu_memory: Observation,
+    /// Bytes on disk of both legs' active indexes.
+    pub index_size: Observation,
+}
+
+/// Provider cost of one pass over the frozen queries, per leg (each leg embeds every
+/// query with its own model).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CombinedCosts {
+    /// Text-leg query embeddings.
+    pub text_query_set: CostEstimate,
+    /// Image-leg query embeddings.
+    pub image_query_set: CostEstimate,
+}
+
+/// Everything reported for one combined configuration (PRD §6.6): an ordered pair of
+/// embedding spaces plus the fusion parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CombinedResult {
+    /// Machine the measurements were taken on.
+    pub hardware: Hardware,
+    /// Experiment id of the combined run (its snapshot pins both legs' revisions).
+    pub experiment_id: ExperimentId,
+    /// Corpus manifest checksum shared by both legs.
+    pub corpus_checksum: Checksum,
+    /// Text leg.
+    pub text: LegConfiguration,
+    /// Image leg.
+    pub image: LegConfiguration,
+    /// Fusion parameters.
+    pub fusion: FusionParams,
+    /// Combined-mode evaluation.
+    pub evaluation: EvaluationReport,
+    /// Efficiency measurements.
+    pub measurements: CombinedMeasurements,
+    /// Provider costs.
+    pub cost: CombinedCosts,
+}
+
 /// Why an evaluation did not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,6 +320,9 @@ pub struct ComparisonReport {
     pub labels: DatasetRef,
     /// Configurations, in the order given.
     pub configurations: Vec<ConfigurationResult>,
+    /// Combined-retrieval configurations, in the order given.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub combined: Vec<CombinedResult>,
     /// Limitations and outstanding items.
     pub notes: Vec<String>,
 }
@@ -243,12 +341,26 @@ pub enum ReportError {
         /// What differs.
         what: &'static str,
     },
+    /// A combined result names a leg experiment that the report shows in another space.
+    #[error(
+        "combined configuration {experiment}: its {leg} leg {leg_experiment} is reported in another embedding space"
+    )]
+    LegMismatch {
+        /// Combined experiment.
+        experiment: ExperimentId,
+        /// `text` or `image`.
+        leg: &'static str,
+        /// The leg's experiment.
+        leg_experiment: ExperimentId,
+    },
 }
 
 impl ComparisonReport {
     /// Builds a comparison, refusing configurations evaluated on other inputs: the
-    /// corpus, query set, labels, extraction, and evaluation must match. Chunking may
-    /// differ only through the model tokenizer and budget, which the report shows.
+    /// corpus, query set, labels, and evaluation must match, and so must the extraction
+    /// of configurations in the same retrieval mode (a text run and an image run extract
+    /// different things, so their fingerprints differ by design). Chunking may differ
+    /// only through the model tokenizer and budget, which the report shows.
     ///
     /// # Errors
     ///
@@ -273,7 +385,10 @@ impl ComparisonReport {
             if c.evaluation.labels != first.evaluation.labels {
                 return Err(differs("relevance labels"));
             }
-            if c.fingerprints.extraction != first.fingerprints.extraction {
+            let same_mode = configurations
+                .iter()
+                .find(|o| o.evaluation.mode == c.evaluation.mode);
+            if same_mode.is_some_and(|o| o.fingerprints.extraction != c.fingerprints.extraction) {
                 return Err(differs("extraction fingerprint"));
             }
             if c.fingerprints.evaluation != first.fingerprints.evaluation {
@@ -292,8 +407,67 @@ impl ComparisonReport {
             query_set: first.evaluation.query_set.clone(),
             labels: first.evaluation.labels.clone(),
             configurations,
+            combined: Vec::new(),
             notes,
         })
+    }
+
+    /// Adds combined-retrieval results, refusing any evaluated on other inputs than the
+    /// configurations (corpus, query set, labels, evaluation, machine), and any whose
+    /// leg experiment appears among the configurations in another space.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReportError::NotComparable`] or [`ReportError::LegMismatch`].
+    pub fn with_combined(mut self, combined: Vec<CombinedResult>) -> Result<Self, ReportError> {
+        let reference = self
+            .configurations
+            .first()
+            .map(|c| c.fingerprints.evaluation.clone());
+        for c in &combined {
+            let differs = |what| ReportError::NotComparable {
+                experiment: c.experiment_id.clone(),
+                what,
+            };
+            if c.corpus_checksum != self.corpus_checksum {
+                return Err(differs("corpus checksum"));
+            }
+            if c.evaluation.query_set != self.query_set {
+                return Err(differs("query set"));
+            }
+            if c.evaluation.labels != self.labels {
+                return Err(differs("relevance labels"));
+            }
+            if reference.as_ref() != Some(&c.evaluation.evaluation_fingerprint) {
+                return Err(differs("evaluation fingerprint"));
+            }
+            self.hardware = self
+                .hardware
+                .merge(&c.hardware)
+                .ok_or_else(|| differs("measurement hardware"))?;
+            for (leg, config) in [("text", &c.text), ("image", &c.image)] {
+                let reported = self
+                    .configurations
+                    .iter()
+                    .find(|r| r.experiment_id == config.experiment_id);
+                if reported.is_some_and(|r| r.embedding_space_id != config.embedding_space_id) {
+                    return Err(ReportError::LegMismatch {
+                        experiment: c.experiment_id.clone(),
+                        leg,
+                        leg_experiment: config.experiment_id.clone(),
+                    });
+                }
+            }
+        }
+        self.combined.extend(combined);
+        Ok(self)
+    }
+
+    /// The reported configuration of a combined result's leg, when the report has it.
+    fn leg_result(&self, leg: &LegConfiguration) -> Option<&ConfigurationResult> {
+        self.configurations
+            .iter()
+            .find(|r| r.experiment_id == leg.experiment_id)
     }
 
     /// Renders the report as Markdown.
@@ -381,6 +555,10 @@ impl ComparisonReport {
                 m.hit_at_3,
                 m.ndcg_at_3
             );
+        }
+
+        if !self.combined.is_empty() {
+            self.combined_markdown(&mut md);
         }
 
         let _ = writeln!(md, "\n## Efficiency\n");
@@ -507,6 +685,61 @@ impl ComparisonReport {
             let _ = writeln!(md);
         }
 
+        for c in &self.combined {
+            let _ = writeln!(md, "### {} (combined)\n", c.experiment_id);
+            let _ = writeln!(
+                md,
+                "Score is the fused RRF score; the leg columns give each result's rank and cosine score in its own space.\n"
+            );
+            let _ = writeln!(
+                md,
+                "| Query | Rank | Retrieved item | Source/page | Fused score | Text leg | Image leg | Relevance | Note |"
+            );
+            let _ = writeln!(md, "|---|---:|---|---|---:|---|---|---:|---|");
+            for q in &c.evaluation.queries {
+                if q.results.is_empty() {
+                    let _ = writeln!(
+                        md,
+                        "| {} | - | no candidates | - | - | - | - | - | - |",
+                        q.text
+                    );
+                }
+                for r in &q.results {
+                    let item = r
+                        .chunk_text
+                        .as_deref()
+                        .map(|t| t.replace('\n', " / ").replace('|', "\\|"))
+                        .or_else(|| r.asset_uri.clone())
+                        .unwrap_or_default();
+                    let leg = |t: Option<crate::retrieval::LegTrace>| {
+                        t.map_or_else(
+                            || "-".to_owned(),
+                            |t| format!("#{} ({:.4})", t.rank, t.score),
+                        )
+                    };
+                    let (fused, text, image) = r.fusion.as_ref().map_or_else(
+                        || (f64::from(r.score), "-".to_owned(), "-".to_owned()),
+                        |f| (f.fused_score, leg(f.text), leg(f.image)),
+                    );
+                    let _ = writeln!(
+                        md,
+                        "| {} | {} | {} | {} / {} | {:.6} | {} | {} | {} | {} |",
+                        q.text,
+                        r.rank,
+                        item,
+                        r.source_id,
+                        r.page_number,
+                        fused,
+                        text,
+                        image,
+                        r.label,
+                        r.note
+                    );
+                }
+            }
+            let _ = writeln!(md);
+        }
+
         if !self.notes.is_empty() {
             let _ = writeln!(md, "## Limitations and outstanding items\n");
             for n in &self.notes {
@@ -514,6 +747,150 @@ impl ComparisonReport {
             }
         }
         md
+    }
+}
+
+impl ComparisonReport {
+    /// The combined-retrieval sections: configurations, all three modes side by side,
+    /// and each combined result against its own legs.
+    fn combined_markdown(&self, md: &mut String) {
+        let _ = writeln!(md, "\n## Combined configurations\n");
+        let _ = writeln!(
+            md,
+            "| Experiment | Text leg (run / model / space) | Image leg (run / model / space) | Fusion | k | Depth |"
+        );
+        let _ = writeln!(md, "|---|---|---|---|---:|---|");
+        for c in &self.combined {
+            let leg = |l: &LegConfiguration| {
+                format!(
+                    "{} / {} {} / `{}`",
+                    l.experiment_id, l.engine, l.model_id, l.embedding_space_id
+                )
+            };
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} | {} | {} | {} |",
+                c.experiment_id,
+                leg(&c.text),
+                leg(&c.image),
+                c.fusion.method.as_str(),
+                c.fusion.k,
+                depth(c.fusion.depth)
+            );
+        }
+
+        let _ = writeln!(md, "\n## Retrieval modes compared\n");
+        let _ = writeln!(
+            md,
+            "| Experiment | Mode | Model(s) | Precision@3 | Hit@3 | nDCG@3 | Warm median ms | Warm p95 ms | Index size | Query-set cost |"
+        );
+        let _ = writeln!(md, "|---|---|---|---:|---:|---:|---:|---:|---|---|");
+        for c in &self.configurations {
+            let m = &c.evaluation.metrics;
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} | {:.4} | {:.4} | {:.4} | {:.2} | {:.2} | {} | {} |",
+                c.experiment_id,
+                c.evaluation.mode.as_str(),
+                c.model_id,
+                m.precision_at_3,
+                m.hit_at_3,
+                m.ndcg_at_3,
+                c.measurements.warm_query_latency.median_ms,
+                c.measurements.warm_query_latency.p95_ms,
+                observation(&c.measurements.index_size),
+                cost(&c.cost.query_set)
+            );
+        }
+        for c in &self.combined {
+            let m = &c.evaluation.metrics;
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} + {} | {:.4} | {:.4} | {:.4} | {:.2} | {:.2} | {} | text {}; image {} |",
+                c.experiment_id,
+                c.evaluation.mode.as_str(),
+                c.text.model_id,
+                c.image.model_id,
+                m.precision_at_3,
+                m.hit_at_3,
+                m.ndcg_at_3,
+                c.measurements.warm_query_latency.median_ms,
+                c.measurements.warm_query_latency.p95_ms,
+                observation(&c.measurements.index_size),
+                cost(&c.cost.text_query_set),
+                cost(&c.cost.image_query_set)
+            );
+        }
+
+        let _ = writeln!(md, "\n## Combined retrieval against its legs\n");
+        let _ = writeln!(
+            md,
+            "Quality change relative to each leg run alone, and the latency the second leg and the fusion add (PRD §6.6: quality improvement relative to added cost). A leg whose run is not in this report shows `-`.\n"
+        );
+        let _ = writeln!(
+            md,
+            "| Combined | Leg | Leg run | ΔPrecision@3 | ΔHit@3 | ΔnDCG@3 | Warm median ms (leg → combined) |"
+        );
+        let _ = writeln!(md, "|---|---|---|---:|---:|---:|---|");
+        for c in &self.combined {
+            let combined = &c.evaluation.metrics;
+            for (name, leg) in [("text", &c.text), ("image", &c.image)] {
+                let row = self.leg_result(leg).map_or_else(
+                    || "- | - | - | -".to_owned(),
+                    |r| {
+                        let m = &r.evaluation.metrics;
+                        format!(
+                            "{:+.4} | {:+.4} | {:+.4} | {:.2} → {:.2}",
+                            combined.precision_at_3 - m.precision_at_3,
+                            combined.hit_at_3 - m.hit_at_3,
+                            combined.ndcg_at_3 - m.ndcg_at_3,
+                            r.measurements.warm_query_latency.median_ms,
+                            c.measurements.warm_query_latency.median_ms
+                        )
+                    },
+                );
+                let _ = writeln!(
+                    md,
+                    "| {} | {} | {} | {} |",
+                    c.experiment_id, name, leg.experiment_id, row
+                );
+            }
+        }
+
+        let _ = writeln!(md, "\n## Combined efficiency\n");
+        let _ = writeln!(
+            md,
+            "A combined run ingests nothing: it searches the revisions its legs' runs pinned. Its cold start loads both query models in a fresh process.\n"
+        );
+        let _ = writeln!(
+            md,
+            "| Experiment | Text model load ms | Image model load ms | First fused query ms | Cold start ms | Warm median ms | Warm p95 ms | Peak local RAM | Index size | GPU memory |"
+        );
+        let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|---:|---|---|---|");
+        for c in &self.combined {
+            let m = &c.measurements;
+            let _ = writeln!(
+                md,
+                "| {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.2} | {:.2} | {} | {} | {} |",
+                c.experiment_id,
+                m.cold_start.text_model_load_ms,
+                m.cold_start.image_model_load_ms,
+                m.cold_start.first_query_ms,
+                m.cold_start.total_ms,
+                m.warm_query_latency.median_ms,
+                m.warm_query_latency.p95_ms,
+                observation(&m.peak_local_ram),
+                observation(&m.index_size),
+                observation(&m.gpu_memory),
+            );
+        }
+    }
+}
+
+fn depth(depth: FusionDepth) -> String {
+    match depth {
+        FusionDepth::All => "all".to_owned(),
+        FusionDepth::Top(n) => n.to_string(),
     }
 }
 

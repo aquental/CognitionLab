@@ -2,19 +2,19 @@
 
 **Medical Document Embedding Lab · Applied AI engineering in Rust**
 
-A project to investigate how reliably embeddings can retrieve information from Portuguese medical reports, scanned laboratory tables, and images. The planned pipeline connects document extraction, local and remote embedding models, semantic search, and reproducible evaluation.
+A project to investigate how reliably embeddings can retrieve information from Portuguese medical reports, scanned laboratory tables, and images. The pipeline connects document extraction, local and remote embedding models, semantic search, and reproducible evaluation.
 
 I am building this project as part of my portfolio for **AI engineering roles**, with a focus on information retrieval, multimodal systems, and the engineering needed to make model outputs measurable and traceable.
 
-> **Current stage: Phase 1 (text baseline) implemented.** Searchable and scanned PDFs are ingested through native extraction or per-page OCR (poppler, Tesseract). A structure-aware chunker keeps each lab row with its header, embeddings come from EmbedAnything (multilingual MiniLM, pinned revision), revisions are published atomically to a filesystem store, and traceable text search is available from the CLI. The 18 `@m1` acceptance scenarios pass. Engine comparison, image retrieval, and fusion are not implemented yet, and all evidence so far comes from the **synthetic** fixture corpus. See `reports/progress/PROGRESS.md`.
+> **Current stage: all four milestones are implemented (Phases 0–4).** The pipeline handles searchable PDFs, scanned PDFs (per-page OCR), and images. It compares three text engine and model configurations (EmbedAnything and FastEmbed; the OpenAI adapter is ready, but its live run awaits a key and permission). Cross-modal image retrieval uses CLIP and multilingual SigLIP. Combined retrieval fuses the text and image rankings with Reciprocal Rank Fusion. All 35 required acceptance scenarios (`@m1`–`@m4`) pass. **Every result comes from a synthetic fixture corpus**, and the anonymized owner corpus is still outstanding. See [the final comparison](reports/phase-4/comparison.md), [acceptance evidence](reports/ACCEPTANCE.md), and [reproduction](reports/README.md).
 
-[Product requirements](spec/PRD.md) · [Implementation plan](spec/PLAN.md) · [Current source](src/main.rs)
+[Product requirements](spec/PRD.md) · [Implementation plan](spec/PLAN.md) · [Final comparison](reports/phase-4/comparison.md) · [Acceptance evidence](reports/ACCEPTANCE.md) · [Reproduction](reports/README.md)
 
 ## The problem I am exploring
 
 Finding a laboratory result requires preserving its meaning through several transformations: PDF extraction or OCR, chunking, tokenization, embedding, and ranking. A useful search result must keep the test name, value, unit, and reference range together—and point back to the original page.
 
-The lab will use approximately **10–20 anonymized documents** and **10 frozen Portuguese queries** to study questions such as:
+The lab is designed for approximately **10–20 anonymized documents** (still to be supplied; a synthetic fixture corpus stands in) and **10 frozen Portuguese queries** to study questions such as:
 
 - “Onde está o resultado da hemoglobina?”
 - “Qual intervalo de referência aparece para a creatinina?”
@@ -36,7 +36,7 @@ The specifications provide a concrete view of how I approach an AI system: defin
 | **Reproducibility and testing** | Configuration fingerprints, retained source revisions, deterministic BDD, and separate real-provider integration evidence | [PLAN §5](spec/PLAN.md#5-testing-layers) |
 | **Data handling** | Anonymization eligibility checks, metadata removal, and explicit permission before remote processing | [PRD §11](spec/PRD.md#11-data-handling-requirements) |
 
-## Planned architecture
+## Architecture
 
 ```mermaid
 flowchart TD
@@ -54,23 +54,26 @@ flowchart TD
     K --> L[Quality, latency, resource and cost evaluation]
 ```
 
-**Rust 2024** is the implementation language. The plan uses traits to isolate extraction, OCR, chunking, embedding, storage, and measurement. EmbedAnything is the first planned integration, followed by FastEmbed and OpenAI.
+**Rust 2024** is the implementation language. Traits isolate extraction, OCR, chunking, embedding, storage, and measurement. The adapters are:
+- EmbedAnything (candle) for text models and for the cross-modal CLIP and SigLIP models;
+- FastEmbed (ONNX Runtime);
+- OpenAI, a remote adapter that runs only with explicit corpus permission.
 
 For the small corpus, the storage design uses revisioned JSONL files and exact cosine search. This keeps rankings inspectable and provides a baseline before introducing approximate search or a dedicated vector database.
 
 ### Decisions that matter for model quality
 
-- **Engine and model are separate variables.** The text baseline is planned around multilingual E5 through EmbedAnything and FastEmbed, with OpenAI as a remote comparison. Different runtimes and weight formats are recorded; observed differences will be reported as configuration comparisons, without attributing them solely to the engine.
+- **Engine and model are separate variables.** The text comparison runs multilingual MiniLM on both EmbedAnything and FastEmbed, which gives identical rankings, and multilingual E5-base on FastEmbed. OpenAI is the remote comparison. Different runtimes and weight formats are recorded; observed differences are reported as configuration comparisons, without attributing them solely to the engine.
 - **Matching dimensions do not make embeddings compatible.** Each space has an identity derived from its model, engine, preprocessing, and related configuration. Search must reject incompatible query vectors.
 - **Document structure survives chunking.** Laboratory rows stay attached to their headers and units. Token budgets account for model prefixes and special tokens; truncation must be explicit.
-- **Image search needs cross-modal alignment.** CLIP is the planned baseline. A multilingual SigLIP candidate requires an integration spike before inclusion, and Portuguese retrieval quality must be measured.
+- **Image search needs cross-modal alignment.** CLIP ViT-B/32 is the baseline. Multilingual SigLIP passed an integration spike and is evaluated beside it on Portuguese queries.
 - **Fusion operates on ranks.** RRF combines text and image rankings without assuming their raw similarity scores are comparable.
 
-## How I plan to evaluate the system
+## How the system is evaluated
 
-Each configuration will be evaluated against the same frozen corpus, queries, and relevance labels. Reports will include the top three results per query, source references, scores, and notes explaining successes and failures.
+Each configuration is evaluated against the same frozen corpus, queries, and relevance labels. Reports include the top three results per query, source references, scores, and notes explaining successes and failures.
 
-| Question | Planned evidence |
+| Question | Evidence |
 |---|---|
 | Does search retrieve relevant information? | Precision@3, Hit@3, nDCG@3, and per-query error analysis |
 | Was the source information preserved? | Field-level extraction accuracy for test names, values, units, and reference ranges |
@@ -78,15 +81,37 @@ Each configuration will be evaluated against the same frozen corpus, queries, an
 | Can a result be reproduced? | Corpus and configuration fingerprints, model provenance, saved revision snapshots, and separate cold/warm measurements |
 | Does the pipeline fail safely? | Failure-injection evidence for retries, interrupted updates, invalid vectors, and incomplete runs |
 
-Unknown provider costs and unobservable remote memory will be reported as unavailable. Low relevance is a valid experimental finding; the goal is to publish reproducible evidence and explain the limitations.
+Unknown provider costs and unobservable remote memory are reported as unavailable. Low relevance is a valid experimental finding; the goal is to publish reproducible evidence and explain the limitations.
 
-**No benchmark results are available yet.** The final evidence package is planned to include comparison reports, actual indexed-record examples, saved experiment configurations, and reproduction instructions.
+### Results on the synthetic fixture corpus
+
+These numbers come from 3 synthetic PDFs (28 text chunks), 3 synthetic images, and 10 Portuguese queries with synthetic labels. They show that the pipeline measures what it claims to. They are not evidence of medical retrieval quality.
+
+| Configuration | Mode | Precision@3 | Hit@3 | nDCG@3 | Warm median |
+|---|---|---:|---:|---:|---:|
+| MiniLM · EmbedAnything | text-only | 0.333 | 0.500 | 0.409 | 16 ms |
+| MiniLM · FastEmbed | text-only | 0.333 | 0.500 | 0.409 | 30 ms |
+| E5-base · FastEmbed | text-only | **0.433** | 0.700 | **0.540** | 58 ms |
+| CLIP ViT-B/32 | image-only | 0.167 | 0.300 | 0.241 | 35 ms |
+| SigLIP multilingual | image-only | 0.167 | 0.300 | 0.270 | 61 ms |
+| E5-base + SigLIP (RRF) | combined | 0.367 | **0.800** | 0.508 | 91 ms |
+| MiniLM + CLIP (RRF) | combined | 0.300 | 0.600 | 0.388 | 41 ms |
+
+Fusion finds a relevant item for more queries, with Hit@3 rising from 0.70 to 0.80, but it lowers precision.
+
+- With RRF over two disjoint lists, the winner of each leg always reaches the top 2.
+- The image leg ranks every image for every query.
+- So on laboratory queries, irrelevant images displace relevant text chunks.
+
+The report records this as a finding and does not hide it. Latencies come from a shared laptop (Apple M3, CPU inference, moderate load) and are indicative only. The full report, with cold start, memory, index size, cost, fidelity, and the top 3 per query, is in [`reports/phase-4/comparison.md`](reports/phase-4/comparison.md).
 
 ## Reliability is part of the experiment
 
 A comparison is only useful if its inputs and index state can be trusted. The acceptance contract therefore requires unchanged inputs to produce no duplicate active records, and failed updates to leave the previously committed revision searchable.
 
-The planned **Cucumber for Rust** suite maps Gherkin scenarios to `#[given]`, `#[when]`, and `#[then]` steps. Deterministic fixtures will exercise orchestration and failure recovery; separate integration runs will test real extraction tools and embedding providers. Passing simulated provider responses will not count as evidence of real model quality or a working provider integration.
+The **Cucumber for Rust** suite maps the PRD's Gherkin scenarios to `#[given]`, `#[when]`, and `#[then]` steps: 38 scenarios, covering all 35 required ones. Deterministic fixtures exercise orchestration and failure recovery. Separate integration runs test the real extraction tools and embedding models (16 tests). Passing simulated provider responses does not count as evidence of real model quality or of a working provider integration. That is why the live OpenAI run is listed as outstanding.
+
+Each phase also passed an independent adversarial review loop by Grok and Codex, with Antigravity added from Phase 4. Every finding was either fixed with a regression test or refuted with evidence. The raw reports and the tracked findings are in `reports/reviews/`.
 
 ## Roadmap and current evidence
 
@@ -95,9 +120,10 @@ The planned **Cucumber for Rust** suite maps Gherkin scenarios to `#[given]`, `#
 | Specification | Requirements, architecture, acceptance scenarios, and implementation plan | Documented in `spec/` |
 | Phase 0 | Library/CLI structure, deterministic adapter, BDD harness, and CI | Implemented (see `reports/progress/PROGRESS.md`) |
 | Milestone 1 | PDF extraction, OCR, text embeddings, and traceable search | Implemented (synthetic corpus) |
-| Milestone 2 | Provider comparisons, retrieval metrics, and resource/cost reports | Planned |
-| Milestone 3 | Text-to-image retrieval and Portuguese query evaluation | Planned |
-| Milestone 4 | Rank fusion and publication of reproducible comparisons | Planned |
+| Milestone 2 | Provider comparisons, retrieval metrics, and resource/cost reports | Implemented (synthetic corpus; OpenAI live run outstanding) |
+| Milestone 3 | Text-to-image retrieval and Portuguese query evaluation | Implemented (CLIP, SigLIP; synthetic corpus) |
+| Milestone 4 | Rank fusion and publication of reproducible comparisons | Implemented (RRF; [final report](reports/phase-4/comparison.md)) |
+| Owner corpus | Anonymized documents, frozen labels, fidelity sample | **Outstanding** |
 
 The current repository contains:
 
@@ -108,10 +134,15 @@ embeddings-fundamentals/
 │   ├── corpus.rs           # Manifest, checksums, anonymization gate
 │   ├── extraction/         # pdftotext / per-page OCR (pdftoppm + tesseract TSV), fixture replay
 │   ├── chunking.rs         # structure-aware-v1: sections, lab rows with headers, token budgets
-│   ├── embedding/          # Strategy trait, validation, deterministic + EmbedAnything adapters
-│   ├── storage.rs          # Revisioned filesystem store, atomic pointer publish, snapshots
+│   ├── embedding/          # Strategy trait, validation; deterministic, EmbedAnything (text, CLIP/SigLIP), FastEmbed, OpenAI
+│   ├── assets.rs           # Image preparation: masks, orientation, metadata-free PNG
+│   ├── storage.rs          # Revisioned filesystem store, atomic pointer publish, snapshots, assets
 │   ├── pipeline.rs         # Validation, per-source state machine, retries, run report
-│   ├── retrieval.rs        # Exact cosine search with space guard and deterministic ties
+│   ├── retrieval.rs        # Exact cosine search (text, image) with space guard; combined search
+│   ├── fusion.rs           # Reciprocal Rank Fusion (k = 60, configurable depth)
+│   ├── evaluation.rs       # Frozen queries and labels, Precision@3, Hit@3, nDCG@3 per mode
+│   ├── experiment.rs       # Measured runs: single-mode experiments and combined runs
+│   ├── measurement.rs, cost.rs, fidelity.rs, report.rs
 │   ├── adapters.rs, config.rs, anonymization.rs, cli.rs
 │   └── main.rs             # Thin binary: parse, run, map to exit code
 ├── tests/
@@ -119,10 +150,11 @@ embeddings-fundamentals/
 │   ├── bdd_selftest.rs     # Proves the runner fails on skipped/ambiguous/missing scenarios
 │   ├── integration.rs      # Real tools and engines (RUN_INTEGRATION=1)
 │   ├── pipeline.rs         # Pipeline properties (idempotent skip, append-only snapshots)
+│   ├── experiment.rs, combined.rs   # Measured experiments, combined runs, three-mode report
 │   └── fixtures/           # Synthetic corpus, captured extraction, frozen rankings
 ├── examples/gen_fixtures.rs
-├── config/                 # Acceptance milestone and saved experiment configurations
-├── reports/                # Progress records and adversarial review reports
+├── config/                 # Acceptance milestone, saved experiment configurations, frozen queries and labels
+├── reports/                # Final comparison, acceptance evidence, reproduction, progress, reviews
 └── spec/                   # PRD, PLAN, execution prompt
 ```
 
@@ -137,9 +169,7 @@ cargo run --features engine-embed-anything -- search \
   --query "Onde está o resultado da hemoglobina?" --limit 3
 ```
 
-On the synthetic corpus, the hemoglobin, glycemia, and creatinine queries rank the matching lab row first, from both the native and the OCR copy of the report. The "achados" (findings) query does not reach the findings paragraph of the ultrasound report. Low relevance is recorded as an experimental finding, not hidden. These are smoke observations; the formal evaluation arrives in Milestone 2.
-
-There is no ingestion or search demo to run yet. For a technical review, start with the [strategy contracts](spec/PLAN.md#2-core-contracts), [evaluation protocol](spec/PRD.md#9-evaluation-plan), and [reliability design](spec/PLAN.md#4-reliability--data-handling-design).
+The full sequence lives in [`reports/README.md`](reports/README.md). It runs the measured experiments (`experiment`), the combined runs (`combine`), searches in `text`, `image`, and `combined` mode, and builds the comparison report (`report`).
 
 ## Professional focus
 

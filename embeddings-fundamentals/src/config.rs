@@ -14,6 +14,19 @@
 //! An image run sets `modality = "image"` under `[ingest]` and selects a cross-modal
 //! model with `model_kind = "text_to_image"` under `[engine]`.
 //! Unknown keys are rejected, so a typo cannot silently fall back to a default.
+//!
+//! A combined-retrieval configuration ([`CombinedConfig`], PRD §6.6) names a text
+//! configuration and an image configuration (paths relative to its own file) and the
+//! fusion parameters:
+//! ```toml
+//! text = "text-fastembed-e5-base.toml"
+//! image = "image-siglip-multilingual.toml"
+//!
+//! [fusion]
+//! method = "rrf"
+//! k = 60
+//! depth = "all"
+//! ```
 
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
@@ -24,6 +37,7 @@ use crate::chunking::ChunkingConfig;
 use crate::domain::{Execution, Modality};
 use crate::embedding::{EngineId, PrefixPolicy};
 use crate::extraction::ExtractionConfig;
+use crate::fusion::FusionParams;
 
 /// Engine and model selection; engine and model are separate choices (PRD §6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +157,14 @@ pub enum ConfigError {
         #[source]
         source: toml::de::Error,
     },
+    /// A combined configuration pairs legs that cannot serve their roles.
+    #[error("invalid combined config {path}: {reason}")]
+    Combination {
+        /// Path of the combined configuration.
+        path: PathBuf,
+        /// Why the pair is refused.
+        reason: String,
+    },
 }
 
 impl ExperimentConfig {
@@ -187,6 +209,82 @@ impl ExperimentConfig {
         settings.extraction = self.extraction.clone();
         settings.chunking = self.chunking.clone();
         settings
+    }
+}
+
+/// A saved combined-retrieval configuration as written: an ordered pair of experiment
+/// configurations (text leg, image leg) and the fusion parameters (PRD §6.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CombinedConfigFile {
+    /// Text-leg configuration, relative to this file's directory.
+    pub text: PathBuf,
+    /// Image-leg configuration, relative to this file's directory.
+    pub image: PathBuf,
+    /// Fusion parameters (RRF, `k = 60`, depth `"all"` when absent).
+    #[serde(default)]
+    pub fusion: FusionParams,
+}
+
+/// A loaded combined-retrieval configuration whose legs were checked for their roles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombinedConfig {
+    /// Text leg: a text model over a text run.
+    pub text: ExperimentConfig,
+    /// Image leg: a cross-modal model over an image run.
+    pub image: ExperimentConfig,
+    /// Fusion parameters.
+    pub fusion: FusionParams,
+}
+
+impl CombinedConfig {
+    /// Loads a combined configuration and both leg configurations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Read`] or [`ConfigError::Parse`] for any of the three
+    /// files, and [`ConfigError::Combination`] when the text leg is not a text model
+    /// over a text run or the image leg is not a cross-modal model over an image run
+    /// (an unsupported combination is refused before any processing).
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+            path: path.to_owned(),
+            source,
+        })?;
+        let file: CombinedConfigFile =
+            toml::from_str(&text).map_err(|source| ConfigError::Parse {
+                path: path.to_owned(),
+                source,
+            })?;
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let config = Self {
+            text: ExperimentConfig::load(&dir.join(&file.text))?,
+            image: ExperimentConfig::load(&dir.join(&file.image))?,
+            fusion: file.fusion,
+        };
+        config
+            .check_roles()
+            .map_err(|reason| ConfigError::Combination {
+                path: path.to_owned(),
+                reason: reason.to_owned(),
+            })?;
+        Ok(config)
+    }
+
+    fn check_roles(&self) -> Result<(), &'static str> {
+        let modality = |c: &ExperimentConfig| c.ingest.modality.unwrap_or(Modality::Text);
+        if self.text.engine.model_kind != ModelKind::Text || modality(&self.text) != Modality::Text
+        {
+            return Err("the text leg must be a text model over a text run");
+        }
+        if self.image.engine.model_kind != ModelKind::TextToImage
+            || modality(&self.image) != Modality::Image
+        {
+            return Err(
+                "the image leg must be a cross-modal text-to-image model over an image run",
+            );
+        }
+        Ok(())
     }
 }
 
@@ -246,5 +344,72 @@ mod tests {
     fn only_openai_is_remote() {
         assert_eq!(EngineId::OpenAi.execution(), Execution::Remote);
         assert_eq!(EngineId::EmbedAnything.execution(), Execution::Local);
+    }
+
+    #[test]
+    fn combined_configs_pair_a_text_leg_with_an_image_leg() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/experiments");
+        for file in [
+            "combined-e5-base-siglip.toml",
+            "combined-minilm-clip.toml",
+            "combined-deterministic.toml",
+        ] {
+            let config = CombinedConfig::load(&dir.join(file)).expect(file);
+            assert_eq!(config.fusion, FusionParams::default(), "{file}");
+            assert_eq!(config.text.engine.model_kind, ModelKind::Text, "{file}");
+            assert_eq!(
+                config.image.engine.model_kind,
+                ModelKind::TextToImage,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn combined_configs_refuse_swapped_or_unsupported_legs() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/experiments");
+        let write = |name: &str, text: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).expect("write");
+            path
+        };
+        let leg = |name: &str| repo.join(name).display().to_string();
+        let swapped = write(
+            "swapped.toml",
+            &format!(
+                "text = {:?}\nimage = {:?}\n",
+                leg("image-clip-vit-b32.toml"),
+                leg("baseline-text-embed-anything.toml")
+            ),
+        );
+        assert!(matches!(
+            CombinedConfig::load(&swapped),
+            Err(ConfigError::Combination { .. })
+        ));
+        let two_text = write(
+            "two-text.toml",
+            &format!(
+                "text = {:?}\nimage = {:?}\n",
+                leg("baseline-text-embed-anything.toml"),
+                leg("text-fastembed-minilm.toml")
+            ),
+        );
+        assert!(matches!(
+            CombinedConfig::load(&two_text),
+            Err(ConfigError::Combination { .. })
+        ));
+        let typo = write(
+            "typo.toml",
+            &format!(
+                "text = {:?}\nimage = {:?}\n[fusion]\nkk = 60\n",
+                leg("baseline-text-embed-anything.toml"),
+                leg("image-clip-vit-b32.toml")
+            ),
+        );
+        assert!(matches!(
+            CombinedConfig::load(&typo),
+            Err(ConfigError::Parse { .. })
+        ));
     }
 }

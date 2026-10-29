@@ -8,7 +8,14 @@ Invoke `/rust-skills` before implementing, modifying, reviewing, debugging, or t
 
 ## Current state
 
-The specification is complete, but the code is not written yet. `src/main.rs` is a starter binary. Everything in the architecture section below is the **planned** design from `spec/PLAN.md`. Check what actually exists before assuming a module, test target, or command is there.
+Phases 0–4 are implemented and every milestone (`@m1`–`@m4`) is in the acceptance suite (`config/acceptance.toml`, `milestone = 4`).
+
+- **Evidence.** All evidence comes from the **synthetic** fixture corpus. The owner corpus, labels, and fidelity sample are still outstanding, and so is the live OpenAI run (no key, no `remote_allowed`).
+- **Where to look.**
+  - final comparison: `reports/phase-4/comparison.md`;
+  - criteria-to-evidence map: `reports/ACCEPTANCE.md`;
+  - reproduction steps: `reports/README.md`.
+- **Before assuming a module, test target, or command exists, check the code.**
 
 - `spec/PRD.md` holds the requirements and the acceptance contract (Gherkin scenarios in §5). **The Gherkin there is normative.** Feature files are copied from it, and the BDD inventory is derived from it.
 - `spec/PLAN.md` holds the implementation plan: Phase 0 (harness) followed by Phases 1–4, which map to milestones `@m1`–`@m4`. It also fixes defaults (models, OCR commands, IDs, retry policy) and logs the adversarial review in §9.
@@ -42,7 +49,15 @@ cargo run --release --features engine-embed-anything -- experiment --manifest te
     --config config/experiments/image-clip-vit-b32.toml --store store --experiment <id> --report <out>.json
 cargo run --release --features engine-embed-anything -- search --mode image \
     --config config/experiments/image-clip-vit-b32.toml --store store --query "Mostre a radiografia de tórax"
+# Combined run (RRF over a text run and an image run in the same store; no ingestion):
+cargo run --release --features engine-embed-anything,engine-fastembed -- combine --manifest tests/fixtures/corpus/manifest.toml \
+    --config config/experiments/combined-e5-base-siglip.toml --store store \
+    --text-experiment <text id> --image-experiment <image id> --experiment <id> --report <out>.json
+cargo run --release --features engine-embed-anything,engine-fastembed -- search --mode combined \
+    --config config/experiments/combined-e5-base-siglip.toml --store store --experiment <combined id> --query "..."
 ```
+
+The full reproduction of the final report is in `reports/README.md`.
 
 Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
 
@@ -54,7 +69,7 @@ External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `t
 
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 
-## Architecture (PLAN §1–§4; Phases 1–3 implemented: corpus, extraction, chunking, store, pipeline, text and image retrieval, evaluation, measurement, CLI)
+## Architecture (PLAN §1–§4; Phases 1–4 implemented: corpus, extraction, chunking, store, pipeline, text/image/combined retrieval, RRF fusion, evaluation, measurement, CLI)
 
 The pipeline runs Corpus manifest → anonymization/eligibility gate → extraction (native text or OCR, chosen per page) → structure-aware chunking → `EmbeddingStrategy` adapter → vector validation → atomic store → retrieval (text / image / RRF combined) → evaluation report.
 

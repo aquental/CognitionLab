@@ -1,6 +1,6 @@
 //! Steps for `us03.feature` (PRD §5.3): comparable retrieval evaluation. Milestone 2
 //! covers the text-only example and the low-relevance scenario, milestone 3 the
-//! image-only example.
+//! image-only example, milestone 4 the combined example and rank fusion.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -8,9 +8,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail, ensure};
 use cucumber::{given, then, when};
 use embeddings_fundamentals::domain::Modality;
-use embeddings_fundamentals::evaluation::{EvaluationMode, evaluate_images, evaluate_text};
+use embeddings_fundamentals::evaluation::{
+    EvaluationMode, evaluate_combined, evaluate_images, evaluate_text,
+};
+use embeddings_fundamentals::fusion::{FusionDepth, FusionMethod, FusionParams};
+use embeddings_fundamentals::ids::RecordId;
 use embeddings_fundamentals::report::ComparisonReport;
-use embeddings_fundamentals::retrieval::Scope;
+use embeddings_fundamentals::retrieval::{Leg, Scope, SearchHit, fuse};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -51,6 +55,10 @@ struct MetricFixture {
 struct RankRow {
     id: String,
     ranks: Vec<u8>,
+    /// Record id at each rank, where the derivation depends on the record-id
+    /// tie-break (combined mode).
+    #[serde(default)]
+    records: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,7 +116,35 @@ async fn fixture_index(world: &mut LabWorld, mode: String) -> Result<()> {
             let records = world.store.active_records(&images.model_info_space())?;
             (Modality::Image, records.len())
         }
-        _ => bail!("milestone 3 provides text-only and image-only fixture indexes, not {mode:?}"),
+        Some(EvaluationMode::Combined) => {
+            // Both indexes of the text-only and image-only examples, side by side in
+            // one store: the text run over the PDFs, then the image run over the
+            // image-bearing sources, each in its own space.
+            world.embedder = Arc::new(eval_fixture::keyword_builder()?.build()?);
+            eval_fixture::add_pdf_corpus(world)?;
+            world.ingest().await?;
+            ensure!(
+                world.validation_error.is_none(),
+                "the text run was refused: {:?}",
+                world.validation_error
+            );
+            let text_count = world
+                .store
+                .active_records(&world.embedder.model_info_space())?
+                .len();
+            ensure!(
+                text_count >= 3,
+                "text index has only {text_count} candidates"
+            );
+            let images = Arc::new(eval_fixture::image_keyword_builder()?.build()?);
+            world.image_embedder = Some(Arc::clone(&images));
+            world.sources.clear();
+            eval_fixture::add_image_corpus(world)?;
+            world.ingest_images().await?;
+            let records = world.store.active_records(&images.model_info_space())?;
+            (Modality::Image, records.len())
+        }
+        None => bail!("unknown retrieval mode {mode:?}"),
     };
     ensure!(
         world.validation_error.is_none(),
@@ -140,7 +176,38 @@ async fn evaluate(world: &mut LabWorld, mode: String) -> Result<()> {
             let space = images.model_info_space();
             evaluate_images(&world.store, &space, &*images, dataset, Scope::Active).await?
         }
-        _ => bail!("unsupported mode {mode:?}"),
+        Some(EvaluationMode::Combined) => {
+            let images = world.image_embedder.clone().context("no image index")?;
+            let (text_space, image_space) =
+                (world.embedder.model_info_space(), images.model_info_space());
+            let report = evaluate_combined(
+                &world.store,
+                Leg {
+                    space: &text_space,
+                    embedder: &*world.embedder,
+                },
+                Leg {
+                    space: &image_space,
+                    embedder: &*images,
+                },
+                FusionParams::default(),
+                dataset,
+                Scope::Active,
+            )
+            .await?;
+            ensure!(
+                report.spaces == [text_space, image_space],
+                "the report names spaces {:?}, not the text and image spaces in that order",
+                report.spaces
+            );
+            ensure!(
+                report.fusion == Some(FusionParams::default()),
+                "the report records fusion {:?}",
+                report.fusion
+            );
+            report
+        }
+        None => bail!("unknown retrieval mode {mode:?}"),
     };
     ensure!(
         report.mode.as_str() == mode,
@@ -242,6 +309,15 @@ fn precomputed(world: &mut LabWorld) -> Result<()> {
             row.id,
             row.ranks
         );
+        if let Some(records) = &row.records {
+            let observed: Vec<&str> = q.results.iter().map(|r| r.record_id.as_str()).collect();
+            ensure!(
+                observed == *records,
+                "{}: records by rank {observed:?}, hand-derived {records:?} (re-derive the \
+                 fixture if the corpus, extraction, chunking, or a space changed)",
+                row.id
+            );
+        }
     }
     for row in &fixture.expected {
         let q = observed.get(row.query.as_str()).context("missing query")?;
@@ -367,6 +443,234 @@ fn preserves(world: &mut LabWorld) -> Result<()> {
     ensure!(
         markdown.contains("label 0"),
         "Markdown does not show the failure notes"
+    );
+    Ok(())
+}
+
+/// Record id whose ascending order is the letter order of `letter` (`A` -> `...0a`).
+fn letter_id(letter: &str) -> Result<RecordId> {
+    ensure!(
+        letter.len() == 1 && ("A"..="F").contains(&letter),
+        "item {letter:?} is not one of A-F"
+    );
+    Ok(format!("{:0>16}", letter.to_lowercase()).parse()?)
+}
+
+fn letter_of(id: &RecordId) -> String {
+    id.as_str().trim_start_matches('0').to_uppercase()
+}
+
+/// A ranked leg: descending raw scores starting at `top`, one result per letter.
+fn ranking(letters: &str, modality: Modality, top: f32) -> Result<Vec<SearchHit>> {
+    let source: embeddings_fundamentals::ids::SourceId = "fusion-fixture".parse()?;
+    let page = std::num::NonZeroU32::MIN;
+    letters
+        .split(',')
+        .enumerate()
+        .map(|(i, letter)| {
+            let index = u32::try_from(i)?;
+            let chunk = embeddings_fundamentals::ids::ChunkId::new(&source, page, modality, index)?;
+            #[expect(clippy::cast_precision_loss, reason = "a handful of positions")]
+            let score = top - 0.1 * i as f32;
+            Ok(SearchHit {
+                rank: i + 1,
+                record_id: letter_id(letter.trim())?,
+                source_id: source.clone(),
+                source_file: "fusion-fixture.pdf".to_owned(),
+                revision_id: "rev-0000000000000001".parse()?,
+                chunk_id: chunk,
+                page_number: 1,
+                modality,
+                chunk_text: None,
+                asset_uri: None,
+                original: None,
+                score,
+                fusion: None,
+            })
+        })
+        .collect()
+}
+
+#[given(expr = "text ranking {string} and image ranking {string}")]
+fn rankings(world: &mut LabWorld, text: String, image: String) -> Result<()> {
+    // Raw scores of unrelated scales: text cosines near 0.9, image cosines near 0.3.
+    world.fusion.text = ranking(&text, Modality::Text, 0.9)?;
+    world.fusion.image = ranking(&image, Modality::Image, 0.3)?;
+    Ok(())
+}
+
+#[given("reciprocal rank fusion with k equal to 60 and ranks starting at 1")]
+fn rrf_k60(world: &mut LabWorld) -> Result<()> {
+    let params = FusionParams::default();
+    ensure!(
+        params.method == FusionMethod::Rrf && params.k == 60 && params.depth == FusionDepth::All,
+        "default fusion is {params:?}, not RRF with k = 60 over every candidate"
+    );
+    world.fusion.params = params;
+    Ok(())
+}
+
+#[when("I combine the rankings")]
+fn combine(world: &mut LabWorld) -> Result<()> {
+    let state = &mut world.fusion;
+    state.fused = fuse(&state.text, &state.image, state.params, usize::MAX);
+    Ok(())
+}
+
+fn fused_score(hit: &SearchHit) -> Result<f64> {
+    Ok(hit
+        .fusion
+        .as_ref()
+        .with_context(|| format!("{} has no fusion trace", letter_of(&hit.record_id)))?
+        .fused_score)
+}
+
+#[then("the fused score of each item is the sum of 1 / (60 + rank) over every list containing it")]
+fn sum_of_reciprocals(world: &mut LabWorld) -> Result<()> {
+    let state = &world.fusion;
+    let mut inputs: Vec<&RecordId> = state
+        .text
+        .iter()
+        .chain(&state.image)
+        .map(|h| &h.record_id)
+        .collect();
+    inputs.sort();
+    inputs.dedup();
+    let mut fused: Vec<&RecordId> = state.fused.iter().map(|h| &h.record_id).collect();
+    fused.sort();
+    ensure!(
+        inputs == fused,
+        "fused items {fused:?} are not the input items {inputs:?} once each"
+    );
+    for hit in &state.fused {
+        let position = |leg: &[SearchHit]| leg.iter().position(|h| h.record_id == hit.record_id);
+        let (in_text, in_image) = (position(&state.text), position(&state.image));
+        let expected: f64 = [in_text, in_image]
+            .into_iter()
+            .flatten()
+            .map(|p| Ok(1.0 / (60.0 + f64::from(u32::try_from(p + 1)?))))
+            .try_fold(0.0, |sum, term: Result<f64>| term.map(|t| sum + t))?;
+        let observed = fused_score(hit)?;
+        ensure!(
+            (observed - expected).abs() <= 1e-12,
+            "{}: fused score {observed}, sum of 1/(60+rank) {expected}",
+            letter_of(&hit.record_id)
+        );
+        let trace = hit.fusion.as_ref().context("trace")?;
+        ensure!(
+            trace.text.map(|t| t.rank) == in_text.map(|p| p + 1)
+                && trace.image.map(|t| t.rank) == in_image.map(|p| p + 1),
+            "{}: leg ranks {:?}",
+            letter_of(&hit.record_id),
+            trace
+        );
+    }
+    Ok(())
+}
+
+#[then(expr = "the fused scores are {string} within 0.000001")]
+fn fused_scores(world: &mut LabWorld, expected: String) -> Result<()> {
+    for entry in expected.split(", ") {
+        let (letter, formula) = entry.split_once('=').context("entry is not item=formula")?;
+        let value = formula
+            .split('+')
+            .map(|term| {
+                let denominator = term
+                    .strip_prefix("1/")
+                    .with_context(|| format!("term {term:?} is not 1/n"))?;
+                Ok(1.0 / denominator.parse::<f64>()?)
+            })
+            .try_fold(0.0, |sum, term: Result<f64>| term.map(|t| sum + t))?;
+        let id = letter_id(letter)?;
+        let hit = world
+            .fusion
+            .fused
+            .iter()
+            .find(|h| h.record_id == id)
+            .with_context(|| format!("{letter} missing from the fused result"))?;
+        close(
+            &format!("fused score of {letter}"),
+            fused_score(hit)?,
+            value,
+        )?;
+        close(
+            &format!("reported score of {letter}"),
+            f64::from(hit.score),
+            value,
+        )?;
+    }
+    Ok(())
+}
+
+#[then(
+    expr = "the result order is {string} by descending fused score, breaking equal-score ties by ascending record ID"
+)]
+fn fused_order(world: &mut LabWorld, expected: String) -> Result<()> {
+    let fused = &world.fusion.fused;
+    let order: Vec<String> = fused.iter().map(|h| letter_of(&h.record_id)).collect();
+    ensure!(
+        order.join(",") == expected,
+        "order {}, expected {expected}",
+        order.join(",")
+    );
+    let ranks: Vec<usize> = fused.iter().map(|h| h.rank).collect();
+    let expected_ranks: Vec<usize> = (1..=fused.len()).collect();
+    ensure!(ranks == expected_ranks, "fused ranks {ranks:?}");
+    for pair in fused.windows(2) {
+        let (a, b) = (fused_score(&pair[0])?, fused_score(&pair[1])?);
+        ensure!(
+            a.total_cmp(&b)
+                .then(pair[1].record_id.cmp(&pair[0].record_id))
+                .is_gt(),
+            "{} ({a}) is ranked before {} ({b})",
+            letter_of(&pair[0].record_id),
+            letter_of(&pair[1].record_id)
+        );
+    }
+    Ok(())
+}
+
+#[when("I multiply all raw text similarity scores by 100 without changing their order")]
+fn rescale(world: &mut LabWorld) -> Result<()> {
+    let state = &mut world.fusion;
+    let before: Vec<RecordId> = state.text.iter().map(|h| h.record_id.clone()).collect();
+    for hit in &mut state.text {
+        hit.score *= 100.0;
+    }
+    let after: Vec<RecordId> = state.text.iter().map(|h| h.record_id.clone()).collect();
+    ensure!(
+        before == after && state.text.windows(2).all(|p| p[0].score > p[1].score),
+        "rescaling changed the text order"
+    );
+    state.before_rescaling = Some(std::mem::take(&mut state.fused));
+    state.fused = fuse(&state.text, &state.image, state.params, usize::MAX);
+    Ok(())
+}
+
+#[then("the fused scores and result order are unchanged")]
+fn unchanged(world: &mut LabWorld) -> Result<()> {
+    let state = &world.fusion;
+    let before = state
+        .before_rescaling
+        .as_ref()
+        .context("no fusion before rescaling")?;
+    let outline = |hits: &[SearchHit]| -> Result<Vec<(RecordId, u64)>> {
+        hits.iter()
+            .map(|h| Ok((h.record_id.clone(), fused_score(h)?.to_bits())))
+            .collect()
+    };
+    ensure!(
+        outline(before)? == outline(&state.fused)?,
+        "rescaling the text scores changed the fused result"
+    );
+    let text_scores: Vec<f32> = state
+        .fused
+        .iter()
+        .filter_map(|h| h.fusion.as_ref()?.text.map(|t| t.score))
+        .collect();
+    ensure!(
+        text_scores.iter().all(|s| *s > 1.0),
+        "the fused result does not carry the rescaled text scores: {text_scores:?}"
     );
     Ok(())
 }

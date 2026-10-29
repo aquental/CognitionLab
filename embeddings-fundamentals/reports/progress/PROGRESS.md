@@ -18,6 +18,7 @@ This file lets work resume without repeating completed steps. Each phase lists i
 |---|---|---|
 | Grok | `grok --permission-mode plan --no-subagents --disable-web-search --prompt-file <pkg>` (1.0.70) | Headless and read-only; the package is inlined and no tool use is allowed |
 | Codex | `codex exec -s read-only -C embeddings-fundamentals <prompt>` (codex-cli 0.165.0, ChatGPT login) | A separate process with a read-only sandbox |
+| Antigravity | `agy --print --mode plan` (Antigravity CLI), told to use the `rust-dev` plugin | A separate process in read-only plan mode. Added by the owner on 2026-10-29, from Phase 4, as the third reviewer after Grok and Codex (see `CLAUDE.md`) |
 
 ## Phase 0 — Scaffolding & BDD harness
 
@@ -228,3 +229,94 @@ None for Phase 0.
 - Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
 - Image latency on an idle host (the last run had a load average of about 6 on 8 CPUs).
 - PDF soft masks with `/Matte` or a non-default `/Decode` (not visible in `pdfimages` output; C3-6 residual).
+
+## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
+
+**Status:** 🔄 IMPLEMENTED AND VALIDATED; adversarial reviews in progress (Grok → Codex → Antigravity). Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+
+### Decisions and PLAN changes, with justification
+| Decision | Justification |
+|---|---|
+| `fusion::rrf` over item keys: score = Σ 1/(k + rank), ranks from 1, each list's top `depth` (default `"all"`), a repeated item counts once at its best rank, contributions summed in ascending rank order, ties broken by ascending key (`record_id`) | PRD §5.3/§6.6. Summing in rank order makes two items with the same ranks in different lists bit-identical, so the tie-break, not float rounding, decides them |
+| `FusionParams { method = "rrf", k = 60, depth = "all" \| n }` is a versioned config value. It is recorded in every combined evaluation (`EvaluationReport.fusion`) and combined result, and fingerprinted in the combined snapshot. It is not part of the evaluation fingerprint | PRD §6.6 requires depth to be recorded. The evaluation fingerprint covers the frozen dataset and metrics, which must stay equal across the three modes for them to be comparable |
+| Combined search runs each leg in its own space with its own query model (`Leg { space, embedder }`). Both spaces and the image leg's text-to-image capability are checked before any store read or query embedding. The legs run concurrently (`tokio::try_join!`) | PRD §6.6: each leg's query vector must match its own index space; unsupported combinations are refused before processing |
+| A combined result keeps its fused rank and score (`score` as `f32`, the exact `fusion.fused_score` as `f64`) and its rank and cosine score in each leg (`fusion.text`, `fusion.image`) | Traceability: a fused ranking must show where each item came from, without comparing raw scores |
+| A combined configuration file (`config/experiments/combined-*.toml`) names a text configuration and an image configuration plus `[fusion]`. Loading checks the roles: the text leg must be a text model over a text run, the image leg a cross-modal model over an image run (exit 3 otherwise) | PRD §6.6: a combined configuration is an ordered pair of spaces plus fusion parameters |
+| `combine` ingests nothing. It loads the snapshots of a text run and an image run, refuses a pair that indexed another corpus or was evaluated with other frozen queries or labels, and refuses a leg whose snapshot pins nothing in its model's space. It then saves a create-only snapshot pinning both legs' revisions and measures fused retrieval over it | Reuses the evidence of the single-mode runs instead of re-ingesting, and the combined id alone reproduces the run (`search --mode combined --experiment <id>`) |
+| Combined cold start = both model loads + the first fused query in a fresh process; warm latency covers both legs and the fusion; index size is the sum of both legs' active indexes; query cost is reported per leg | PRD §9.4 definitions applied to a two-model configuration; costs of different providers are not summed into one number |
+| `ComparisonReport::with_combined` adds combined results to a report. It refuses another corpus, query set, labels, evaluation fingerprint, or machine, and refuses a leg experiment the report shows in another space. The extraction-fingerprint rule now compares only configurations in the same mode | A text run and an image run extract different things, so their extraction fingerprints differ by design. The old rule refused every three-mode report |
+| BDD combined example: both fixture indexes in one store. The hand-derived `combined.ranks.toml` pins the record id at each rank, because every fused tie joins a text and an image result and the record-id tie-break decides it | The labels by rank depend on hashes, which are inputs of the derivation, not outputs of the code under test. Pinning them turns a fingerprint change into a named failure instead of a silent re-derivation |
+
+### Implementation
+- `src/fusion.rs`: `rrf`, `FusionParams`, `FusionMethod`, `FusionDepth` (`"all"` or a positive count), unit tests and proptests:
+  - overlapping items accumulate;
+  - descending score with key tie-break;
+  - scaling raw scores leaves the fusion unchanged;
+  - list order does not matter.
+- `src/retrieval.rs`: `FusionTrace`, `LegTrace`, `SearchHit.fusion`, `fuse`, `Leg`, `search_combined`.
+- `src/evaluation.rs`: `evaluate_combined` (checks text labels against the text index and image labels against the image index); `ResultEntry.fusion`; `EvaluationReport.fusion`.
+- `src/experiment.rs`: `run_combined`, `CombinedInputs`, `ExperimentError::Combination`.
+- `src/report.rs`:
+  - result types: `CombinedResult`, `LegConfiguration`, `CombinedStart`, `CombinedMeasurements`, `CombinedCosts`;
+  - `with_combined`;
+  - Markdown sections: "Combined configurations", "Retrieval modes compared", "Combined retrieval against its legs", "Combined efficiency", and per-query fused top 3 with leg ranks.
+- `src/config.rs`: `CombinedConfigFile`, `CombinedConfig::load` with role checks.
+- `src/cli.rs`: `combine`, `search --mode combined`, `report --combined`. Remote permission is checked for every remote leg.
+- Configs: `combined-e5-base-siglip.toml`, `combined-minilm-clip.toml`, `combined-deterministic.toml`.
+- BDD milestone 4: `us03` Combined example and "Fuse rankings without comparing incompatible raw scores". Fixtures: `combined.ranks.toml` (hand-derived, with record ids) and `combined.toml` (`scripts/precompute-metrics.py`).
+- Tests: `tests/combined.rs` (4) covers:
+  - a combined run pins both legs and matches the hand-derived metrics;
+  - the refusals: swapped legs, another corpus, other labels, a missing leg, a reused id;
+  - search guards before any read or embedding;
+  - the three-mode report and its refusals.
+
+  The integration test `the_cli_runs_combined_retrieval_over_real_text_and_image_runs` runs real MiniLM + CLIP through the CLI.
+- Documentation: `reports/README.md` (reproduction), `reports/ACCEPTANCE.md` (PRD §12/§13 → evidence), `README.md` (results, status), `CLAUDE.md` (current state, commands, review rule).
+
+### Acceptance criteria (PLAN Phase 4 exit)
+| Criterion | Evidence |
+|---|---|
+| All `@m1`–`@m4` pass | `bdd inventory: milestone 4, 35 required, 38 executed`; 38 scenarios / 241 steps passed |
+| `fusion::rrf` with the specified score, order, tie-break, and proptests | `fusion::tests` (9); BDD "Fuse rankings without comparing incompatible raw scores" |
+| `retrieval::combined` | `search_combined`; `tests/combined.rs`; real CLI integration |
+| Final comparison report, reproduction, saved configs, limitations | [`reports/phase-4/comparison.md`](../phase-4/comparison.md); [`reports/README.md`](../README.md); `config/experiments/`; the limitations section of the report |
+| PRD §12 deliverables and §13 criteria walked through with evidence links | [`reports/ACCEPTANCE.md`](../ACCEPTANCE.md) |
+
+### Validation (local, 2026-10-29)
+- fmt ok; clippy `-D warnings` for none, each engine, and all features: ok.
+- `cargo test`: 160 unit (incl. 9 fusion and 2 combined-config tests), 15 pipeline, 7 experiment, 4 combined, 3 evidence, 2 fixtures, BDD milestone 4 (38 scenarios), self-test 0 mismatches.
+- Mutants caught:
+  - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
+  - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **16 passed**, including the new real combined CLI chain. The OpenAI live test stays outstanding.
+- Real runs, `reports/phase-4/` (release, Apple M3, 8 CPUs, CPU inference, load average 3–5).
+  - Text and image metrics are identical to Phases 2 and 3:
+    - MiniLM (both engines): 0.333 / 0.500 / 0.409;
+    - E5-base: 0.433 / 0.700 / 0.540;
+    - CLIP: 0.167 / 0.300 / 0.241;
+    - SigLIP: 0.167 / 0.300 / 0.270.
+  - Combined:
+    - E5-base + SigLIP: 0.367 / **0.800** / 0.508, warm median 91 ms;
+    - MiniLM + CLIP: 0.300 / 0.600 / 0.388, warm median 41 ms.
+  - Fusion raises Hit@3 above every leg. It lowers P@3 and nDCG@3 below the text leg, because irrelevant images displace relevant text chunks at ranks 2–3 on the laboratory queries; the report's limitations explain this per query.
+
+### rust-skills applied
+- `num-float-compare`: `total_cmp`, and float ordering in tests through `total_cmp`.
+- `num-cast-try-from`: `#[expect]` with reasons on the bounded casts.
+- `async-join-parallel`/`async-try-join`: the two legs run concurrently.
+- `async-spawn-blocking`: snapshot load and save, and index size, on the blocking pool.
+- `type-enum-states`: `FusionMethod`, `FusionDepth`, `SearchMode::Combined`.
+- `serde-try-from-validate`: `FusionDepth` from `"all"` or a positive count.
+- `serde-deny-unknown-fields`: fusion and combined configs.
+- `serde-default-compat` / `serde-skip-empty`: new optional report fields keep the Phase 2/3 JSON readable.
+- `api-parse-dont-validate`: `CombinedConfig::load` checks roles at the boundary.
+- `test-proptest-properties`.
+
+PLAN §2.3 deviations: none.
+
+### Outstanding (not claimed)
+- Adversarial reviews (Grok → Codex → Antigravity).
+- Owner corpus, relevance labels, and fidelity sample; all evidence is synthetic.
+- Live OpenAI run (key and `remote_allowed`).
+- Latency on an idle host.
+
