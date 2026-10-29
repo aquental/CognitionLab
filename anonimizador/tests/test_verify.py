@@ -10,7 +10,7 @@ from conftest import check_report_privacy
 from make_covered_name_pdf import build_pdf
 
 from anonimizador import verify
-from anonimizador.channels import Reading, raw_readings
+from anonimizador.channels import RawBlock, RawReading, Reading, raw_readings
 from anonimizador.verify import CorpusFile, Options, VerifyError, check_file, collect
 
 TERM = "Fulano Ficticio"
@@ -71,6 +71,8 @@ def test_a_second_link_to_a_directory_keeps_its_name(tmp_path: Path, monkeypatch
 
 def counts_of(monkeypatch, texts: dict[str, list[str]]) -> dict[str, int]:
     reading = Reading()
+    if "raw" in texts:
+        reading.take_raw(RawReading([RawBlock(texts.pop("raw"), "")], [], [], []))
     reading.texts.update(texts)
     monkeypatch.setattr(verify, "read", lambda *_: reading)
     result = check_file(1, CorpusFile("x.pdf", "x.pdf"), [verify.Term(TERM)], Options(), None)
@@ -232,3 +234,68 @@ def test_check_file_searches_the_joins_of_ambiguous_moves(monkeypatch):
     terms = [verify.Term("Zuleo"), verify.Term("Zulea"), verify.Term("Assunto")]
     result = check_file(1, CorpusFile("x.pdf", "x.pdf"), terms, Options(use_ocr=False), None)
     assert {hit.number: hit.counts["raw"] for hit in result.hits} == {1: 1, 3: 1}
+
+
+@pytest.mark.parametrize("stage", ["enter", "exit"])
+def test_a_failed_temporary_directory_is_an_unread_file(tmp_path, monkeypatch, stage):
+    # Regression (Codex C0-10): the temporary directory was made outside the handler,
+    # so its failure was a traceback holding a path.
+    class Failing:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            if stage == "enter":
+                raise PermissionError(13, "Permission denied", "/private/Zuleo/tmp")
+            return str(tmp_path)
+
+        def __exit__(self, *_):
+            raise OSError(28, "No space left on device", "/private/Zuleo/tmp")
+
+    monkeypatch.setattr(verify.tempfile, "TemporaryDirectory", Failing)
+    file = CorpusFile(str(pdf(tmp_path / "a.pdf")), "a.pdf")
+    reading = verify.read(file, Options(use_ocr=False), None)
+    assert len(reading.errors) == 1
+    assert reading.errors[0].startswith("file: cannot read (")
+    assert "Zuleo" not in reading.errors[0]
+
+
+def test_a_link_reached_through_another_link_keeps_its_name(tmp_path: Path):
+    # Regression (Codex C0-8): aliases were made from the walked names only, so a link
+    # whose path ran through another link was never searched.
+    first, second = tmp_path / "first", tmp_path / "second"
+    pdf(first / "clean.pdf")
+    second.mkdir()
+    (second / "link").symlink_to(first, target_is_directory=True)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a").symlink_to(first, target_is_directory=True)
+    (root / "b").symlink_to(second, target_is_directory=True)
+    (root / "zuleo").symlink_to(root / "b", target_is_directory=True)
+    files = collect([str(root)])
+    assert [f.name for f in files] == ["a/clean.pdf"]
+    assert set(files[0].aliases) == {"b/link/clean.pdf", "zuleo/link/clean.pdf"}
+    # A loop of links ends: each alias is a path a reader could follow.
+    (first / "back").symlink_to(root, target_is_directory=True)
+    files = collect([str(root)])
+    assert "zuleo/link/clean.pdf" in files[0].aliases
+    assert len(files[0].aliases) == len(set(files[0].aliases)) < 20
+
+
+def test_metadata_places_add_up(monkeypatch):
+    # Regression (Codex C0-12): two metadata places holding a term counted 1.
+    reading = Reading()
+    reading.blocks["metadata"] = [[TERM], [TERM, TERM.upper()]]
+    reading.texts["metadata"] = [TERM, TERM, TERM.upper()]
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    result = check_file(1, CorpusFile("x.pdf", "x.pdf"), [verify.Term(TERM)], Options(), None)
+    assert result.hits[0].counts["metadata"] == 2
+
+
+def test_raw_parts_add_up(monkeypatch):
+    # Regression (Codex C0-12): two parts of the raw bytes holding a term counted 1.
+    reading = Reading()
+    reading.take_raw(RawReading([RawBlock([TERM], ""), RawBlock([TERM, TERM], "")], [], [], []))
+    monkeypatch.setattr(verify, "read", lambda *_: reading)
+    result = check_file(1, CorpusFile("x.pdf", "x.pdf"), [verify.Term(TERM)], Options(), None)
+    assert result.hits[0].counts["raw"] == 2

@@ -174,7 +174,8 @@ def load_terms(path: str) -> list[Term]:
 
     The terms file is itself identifying, so one that git could commit is refused.
     """
-    if committable(path):
+    # The file opened is the link's target: it is checked too (Codex C0-11).
+    if committable(path) or committable(os.path.realpath(path)):
         raise TermsError(
             "the terms file is inside a git work tree and not ignored; "
             "keep it outside the repository"

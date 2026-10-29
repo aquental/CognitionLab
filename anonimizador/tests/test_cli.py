@@ -154,7 +154,7 @@ def test_missing_ocr_language_data_is_refused_before_any_file(terms, stubs, caps
     stub(stubs, "tesseract", 'if [ "$1" = "--list-langs" ]; then echo eng; exit 0; fi\nexit 1\n')
     assert main(["verify", "--terms", str(terms), str(COVERED)]) == EXIT_USAGE
     out = capsys.readouterr()
-    assert "tesseract has no data for: por" in out.err
+    assert "tesseract has no data for --lang language(s) 1" in out.err
     assert out.out == ""
 
 
@@ -273,8 +273,10 @@ def test_an_image_file_is_read_like_a_pdf_in_raw_bytes(outside_repo, capsys):
     # Regression (Grok G0-41): an image's raw bytes were read without the joins of
     # ambiguous boundaries and without its PDF strings for patterns.
     jpeg = outside_repo / "a.jpg"
+    # A whole JPEG (start, frame header, scan, end) whose scan data holds the text.
     jpeg.write_bytes(
-        b"\xff\xd8\xff\xdb\x00\x03\x00"
+        b"\xff\xd8\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+        b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
         b"BT (Zu) Tj 7 0 Td (leo) Tj 30 0 Td (Assunto) Tj ET "
         b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj 6 0 Td (789) Tj"
         b" 22 0 Td (-) Tj 6 0 Td (09) Tj ET\xff\xd9"
@@ -311,3 +313,60 @@ def test_a_leftover_word_around_a_comment_and_a_spaced_phone_are_found(outside_r
     assert "    term 1: raw=1\n" in out and "term 2" not in out
     assert "possible identifiers (patterns): phone=1" in out
     assert "Zuleo" not in out and "987" not in out and "432" not in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["verify", "one.pdf", "--no-ocr", "/private/Zuleo/two.pdf"],
+        ["Zuleo.pdf"],
+        ["verify", "--Zuleo", "one.pdf"],
+        ["verify", "--dpi", "Zuleo", "one.pdf"],
+        ["verify", "--s", "Zuleo.pdf"],
+    ],
+)
+def test_a_usage_error_never_prints_an_argument(argv, capsys):
+    # Regression (Codex C0-1): argparse printed rejected arguments, paths included.
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "error:" in err and "Zuleo" not in err and "zuleo" not in err.lower()
+
+
+@requires_tools
+def test_a_missing_language_is_named_by_position(terms, stubs, capsys):
+    # Regression (Codex C0-1): the language list was printed as typed.
+    stub(stubs, "tesseract", LIST_LANGS + "exit 1\n")
+    code = main(["verify", "--lang", "eng+Zuleo", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "tesseract has no data for --lang language(s) 2" in out.err
+    assert "Zuleo" not in out.err + out.out
+
+
+@requires_tools
+def test_a_stream_poppler_cannot_decode_is_an_unread_channel(terms, outside_repo, capsys):
+    # Regression (Codex C0-2): pdftotext exits 0 when it cannot decode a content stream,
+    # and only says so on stderr, so the page's text was read as empty and clean.
+    data = build_pdf(b"invalidcompressedbytes\n", b"")
+    data = data.replace(b"<< /Length 23 >>", b"<< /Length 23 /Filter /FlateDecode >>")
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(data)
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    text = capsys.readouterr().out
+    assert code == EXIT_USAGE, text
+    assert "[1] ERROR" in text and "    unreadable: text: pdftotext reported " in text, text
+    assert "flate" not in text.lower() and "Traceback" not in text
+
+
+@requires_tools
+def test_the_information_dictionary_and_the_xmp_packet_are_two_places(stubs, capsys):
+    # Regression (Codex C0-12): a name in both metadata places counted 1.
+    stub(stubs, "pdfinfo", "echo 'Author: Zuleo'; echo 'Pages: 1'\n")
+    terms = stubs.parent / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    pdf = stubs.parent / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b""))
+    assert main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)]) == EXIT_FOUND
+    assert "    term 1: metadata=2\n" in capsys.readouterr().out

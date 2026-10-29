@@ -127,3 +127,17 @@ def test_joins_count_each_distinct_pattern_match_once():
     assert count_patterns([], ["123.456.789-09A\n987.654.321-00B"]) == {"cpf": 2}
     # The other readings still count repeats.
     assert count_patterns(["123.456.789-09 e 123.456.789-09"], joins) == {"cpf": 2}
+
+
+def test_a_link_to_a_terms_file_git_could_commit_is_refused(tmp_path: Path):
+    # Regression (Codex C0-11): only the link's own directory was checked, and the
+    # link was then followed into the repository.
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    target = repo / "terms.txt"
+    target.write_text("Fulano Ficticio\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "terms.txt").symlink_to(target)
+    with pytest.raises(TermsError, match="inside a git work tree"):
+        load_terms(str(outside / "terms.txt"))

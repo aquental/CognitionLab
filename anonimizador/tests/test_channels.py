@@ -1,3 +1,4 @@
+import base64
 import struct
 import time
 import zlib
@@ -5,15 +6,18 @@ import zlib
 from anonimizador.channels import (
     AMBIGUOUS,
     image_metadata,
+    image_metadata_blocks,
     mixed_readings,
     pdf_string_views,
     png_size,
     raw_readings,
     raw_texts,
+    read_image,
     unescape_literal,
     worth_ocr,
 )
 from anonimizador.terms import Term, count_patterns
+from anonimizador.verify import block_count
 
 NAME = Term("Fulano Ficticio")
 
@@ -31,9 +35,7 @@ IHDR = (b"IHDR", struct.pack(">IIBBBBB", 40, 30, 8, 2, 0, 0, 0))
 
 def raw_count(term: str, data: bytes) -> int:
     """The raw count `check_file` gives `term` in `data`."""
-    raw = raw_readings(data)
-    found = Term(term)
-    return max(found.count(t) for t in [*raw.texts, *(raw.joins if found.whole_word else [])])
+    return sum(block_count(Term(term), block) for block in raw_readings(data).blocks)
 
 
 def test_png_text_metadata_is_read_plain_and_compressed(tmp_path):
@@ -570,3 +572,165 @@ def test_a_literal_nested_deeper_than_one_level_is_one_string():
     assert pdf_string_views([b"(a (b (c)) d)"]).lines == "a \n d\nb (c)"
     assert pdf_string_views([b"(" + b"a" * 1100 + b" (b (c)))"]).lines == "b (c)"
     assert pdf_string_views([b"(a (endstream (c)))"]).lines == "endstream (c)"
+
+
+def test_a_deeper_literal_may_hold_the_word_stream():
+    # Regression (Codex C0-5): any "stream" in a deeper literal, a word in its text
+    # included, made it unread.
+    for literal in (rb"(Zul\351o (upstream (2)))", rb"(Zul\351o (a stream (2)))"):
+        data = b"9 0 obj << /Author " + literal + b" >> endobj\n"
+        assert raw_count("Zul\xe9o", data) == 1, literal
+    # The keywords of the file structure still end it.
+    assert pdf_string_views([b"(a >> stream\n (b (c)))"]).lines == "b (c)"
+
+
+def test_hex_strings_with_nul_spaces_or_one_digit_are_read():
+    # Regression (Codex C0-6): NUL is PDF whitespace, and "<5>" is the byte 0x50.
+    assert raw_count("Zuleo", b"9 0 obj << /Author <5A\x0075\x006C\x0065\x006F> >> endobj") == 1
+    assert raw_count("Puleo", b"BT [<5><75><6C><65><6F>] TJ ET") == 1
+    assert raw_count("Zulea", b"BT [<5><75><6C><65><6F>] TJ ET") == 0
+
+
+def test_a_text_string_is_read_as_pdfdocencoding_too():
+    # Regression (Codex C0-7): 0x93 is the ligature "fi" in PDFDocEncoding, a control
+    # character in Latin-1, so an old author's name did not match.
+    data = b"9 0 obj << /Author (Fulano \\223cticio) >> endobj\n"
+    assert raw_count("Fulano Ficticio", data) == 1
+    assert raw_count("Fulano Ficticio", data.replace(b"\\223", b"\\224")) == 0
+
+
+def test_an_inline_image_ends_after_its_samples_whatever_they_hold():
+    # Regression (Codex C0-4): the samples ended at their first " EI ", so the rest of
+    # them was read as syntax and a "%" there hid the text after the image.
+    text = b" EI BT /F1 12 Tf 72 700 Td (Zu) Tj (leo) Tj ET"
+    for head, samples in (
+        (b"BI /W 16 /H 1 /CS /G /BPC 8 ID ", b" EI %abcdefghijk"),
+        (b"BI /Width 4 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 ID ", b"%" * 24),
+        (b"BI /W 9 /H 2 /IM true ID ", b"%\x01 EI\n"),
+        (b"BI /W 2 /H 1 /CS [/I /RGB 1 <00FF00FF00FF>] /BPC 8 ID ", b"%("),
+        (b"BI /W 4 /H 2 /CS /RGB /BPC 8 ID ", b"\x00" * 8 + b" EI %" + b"\x00" * 11),
+        # Filtered data ends at its filter's end-of-data mark.
+        (b"BI /W 2 /H 2 /CS /G /BPC 8 /F /DCT ID ", b"\xff\xd8 EI %x\xff\xd9"),
+        (b"BI /W 2 /H 2 /CS /G /BPC 8 /F [/A85 /DCT] ID ", b"9jqo EI %^BlbD~>"),
+        (b"BI /W 2 /H 2 /CS /G /BPC 8 /Filter /RunLengthDecode ID ", b"\x05 EI %a\x80"),
+        (b"BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID ", b"4 EI %1>"),
+        # Level 0 stores the bytes as they are, " EI %" included.
+        (b"BI /W 8 /H 1 /CS /G /BPC 8 /F /Fl ID ", zlib.compress(b" EI %abc", 0)),
+    ):
+        data = head + samples + text
+        assert raw_count("Zuleo", data) == 1, head
+        assert raw_count("Zulea", data) == 0, head
+        stream = b"4 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(data)
+        assert raw_count("Zuleo", stream + b"endstream\n") == 1, head
+    # Without a size that "EI" confirms (a filter, a wrong size), the first "EI" ends it.
+    for head in (b"BI /W 4 /H 1 /CS /G /BPC 8 /F /AHx ID ", b"BI /W 40 /H 1 /CS /G /BPC 8 ID "):
+        assert raw_count("Zuleo", head + b"%0102" + text) == 1, head
+
+
+JPEG_START = b"\xff\xd8\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+JPEG_SCAN = b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\x12\x34\xff\xd9"
+
+
+def test_an_image_that_is_not_whole_is_an_error_without_ocr(tmp_path):
+    # Regression (Codex C0-9): with OCR off, nothing read an image as one, so bytes
+    # that are no image were reported clean.
+    idat = (b"IDAT", zlib.compress(b"\x00" * 121))
+    whole = {
+        "a.png": png([IHDR, idat, (b"IEND", b"")]),
+        "b.jpg": JPEG_START + JPEG_SCAN,
+    }
+    broken = {
+        "c.jpg": b"not an image",
+        "d.png": png([IHDR, idat]),
+        "e.png": png([IHDR, idat, (b"IEND", b"")])[:-20],
+        "f.png": png([IHDR, (b"IEND", b"")]),
+        "g.jpg": JPEG_START + JPEG_SCAN[:-2],
+        "h.jpg": JPEG_START[:4],
+        "i.jpg": b"\xff\xd8" + JPEG_SCAN,
+    }
+    for name, data in {**whole, **broken}.items():
+        (tmp_path / name).write_bytes(data)
+        reading = read_image(str(tmp_path / name), name, "por", False, 10)
+        expected = ["file: not a whole PNG or JPEG image"] if name in broken else []
+        assert reading.errors == expected, name
+
+
+def lzw_encode(data: bytes) -> bytes:
+    """LZW as PDF reads it (9 to 12-bit codes, the size growing one code early)."""
+    table = {bytes([i]): i for i in range(256)}
+    out, buffer, buffered, width, next_code = bytearray(), 0, 0, 9, 258
+
+    def emit(code: int) -> None:
+        nonlocal buffer, buffered
+        buffer, buffered = (buffer << width) | code, buffered + width
+        while buffered >= 8:
+            buffered -= 8
+            out.append((buffer >> buffered) & 0xFF)
+
+    emit(256)
+    word = b""
+    for byte in data:
+        if word + bytes([byte]) in table:
+            word += bytes([byte])
+            continue
+        emit(table[word])
+        table[word + bytes([byte])], next_code = next_code, next_code + 1
+        if next_code == 1 << width and width < 12:
+            width += 1
+        if next_code >= 4094:
+            emit(256)
+            table, width, next_code = {bytes([i]): i for i in range(256)}, 9, 258
+        word = bytes([byte])
+    emit(table[word])
+    emit(257)
+    if buffered:
+        out.append((buffer << (8 - buffered)) & 0xFF)
+    return bytes(out)
+
+
+def run_length_encode(data: bytes) -> bytes:
+    """Literal runs of up to 128 bytes, and one repeated run, as RunLengthDecode reads."""
+    out = bytearray()
+    for start in range(0, len(data) - 1, 128):
+        chunk = data[start : start + 128]
+        out += bytes([len(chunk) - 1]) + chunk
+    return bytes(out) + bytes([257 - 5]) + data[-1:] + b"\x80"
+
+
+def test_a_stream_is_decoded_through_its_chain_of_filters():
+    # Regression (Codex C0-3): only zlib was tried, so a name in an old stream encoded
+    # with ASCII85, ASCIIHex, LZW, or RunLength (alone or before Flate) counted 0.
+    page = b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n"
+    content = b"BT (Zu) Tj (leo) Tj ET\n" + b"BT 72 600 Td (linha de teste abc) Tj ET\n" * 300
+    # Run-length literal runs hold the text as it is: the bytes and the decoded stream
+    # both count it.
+    for filters, body, count in (
+        (b"[/ASCII85Decode /FlateDecode]", base64.a85encode(zlib.compress(content)) + b"~>", 1),
+        (b"/A85", b"<~" + base64.a85encode(content) + b"~>", 1),
+        (b"[/AHx /Fl]", zlib.compress(content).hex().encode() + b">", 1),
+        (b"/LZWDecode", lzw_encode(content), 1),
+        (b"[/ASCIIHexDecode /LZWDecode]", lzw_encode(content).hex().encode() + b">", 1),
+        (b"/RunLengthDecode", run_length_encode(content), 2),
+    ):
+        data = page + b"9 0 obj << /Length 1 /Filter " + filters + b" >> stream\n" + body
+        data += b"\nendstream endobj\n"
+        raw = raw_readings(data)
+        assert raw_count("Zuleo", data) == count, filters
+        assert raw_count("Zulea", data) == 0, filters
+        assert raw.unread == 0, filters
+    # A filter that is not read makes the raw bytes unread; an image codec does not.
+    for filters, unread in ((b"/Crypt", 1), (b"[/A85 /Unknown]", 1), (b"/DCTDecode", 0)):
+        data = page + b"9 0 obj << /Filter " + filters + b" >> stream\nxyz\nendstream endobj\n"
+        assert raw_readings(data).unread == unread, filters
+
+
+def test_independent_places_add_up_and_readings_of_one_place_do_not():
+    # Regression (Codex C0-12): the largest count of any reading was reported, so two
+    # streams, or two metadata segments, holding a name counted 1.
+    xmp = zlib.compress(b"<author>Zuleo</author>")
+    stream = b"9 0 obj << /Filter /FlateDecode >> stream\n" + xmp + b"\nendstream endobj\n"
+    assert raw_count("Zuleo", stream) == 1
+    assert raw_count("Zuleo", stream + stream) == 2
+    segment = b"\xff\xfe\x00\x07Zuleo"
+    jpeg = JPEG_START + segment + segment + JPEG_SCAN
+    assert [max(Term("Zuleo").count(t) for t in b) for b in image_metadata_blocks(jpeg)] == [1, 1]

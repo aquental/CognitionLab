@@ -10,6 +10,7 @@ import errno
 import os
 import shutil
 import tempfile
+from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from anonimizador.channels import (
     CHANNELS,
     PARTS_CHANNELS,
     PATTERN_CHANNELS,
+    RawBlock,
     Reading,
     read_image,
     read_pdf,
@@ -139,15 +141,24 @@ def scan(top: str) -> list[CorpusFile]:
                 raise BrokenLinkError
             if not name.startswith(APPLEDOUBLE) and os.path.splitext(name)[1].lower() in SUFFIXES:
                 found.append((path, relative(path, top)))
-    files = []
-    for path, name in found:
-        aliases = []
-        for link, walked in links:
+    return [CorpusFile(path, name, aliases(name, links)) for path, name in found]
+
+
+def aliases(name: str, links: list[tuple[str, str]]) -> tuple[str, ...]:
+    """Every other relative path that reaches `name` through the symlinked directories
+    `links` (another path, the path walked instead), through one link or a chain of
+    them (Codex C0-8). A path uses each link once, so a loop of links ends."""
+    found: list[str] = []
+    queue = deque([(name, frozenset[int]())])
+    while queue:
+        path, used = queue.popleft()
+        for index, (link, walked) in enumerate(links):
             prefix = "" if walked == "." else walked + "/"
-            if name.startswith(prefix):
-                aliases.append(f"{link}/{name[len(prefix) :]}")
-        files.append(CorpusFile(path, name, tuple(aliases)))
-    return files
+            alias = f"{link}/{path[len(prefix) :]}"
+            if index not in used and path.startswith(prefix) and alias not in (name, *found):
+                found.append(alias)
+                queue.append((alias, used | {index}))
+    return tuple(found)
 
 
 def merge(known: CorpusFile | None, file: CorpusFile) -> CorpusFile:
@@ -190,8 +201,10 @@ def collect(paths: list[str]) -> list[CorpusFile]:
 
 
 def read(file: CorpusFile, options: Options, pool: Executor) -> Reading:
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
+    # The temporary directory is made and removed inside the handler too: its failure
+    # is an unread file, not a traceback with a path (Codex C0-10).
+    try:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             if SUFFIXES.get(os.path.splitext(file.path)[1].lower()) == "pdf":
                 return read_pdf(
                     file.path,
@@ -204,11 +217,18 @@ def read(file: CorpusFile, options: Options, pool: Executor) -> Reading:
                     pool,
                 )
             return read_image(file.path, file.name, options.lang, options.use_ocr, options.timeout)
-        except OSError as e:
-            # The message of an OSError holds the path: report its reason only.
-            reading = Reading()
-            reading.errors.append(f"file: cannot read ({e.strerror or type(e).__name__})")
-            return reading
+    except OSError as e:
+        # The message of an OSError holds the path: report its reason only.
+        reading = Reading()
+        reading.errors.append(f"file: cannot read ({e.strerror or type(e).__name__})")
+        return reading
+
+
+def block_count(term: Term, block: RawBlock) -> int:
+    """`term` in a part of the raw bytes, counted once in its best reading. A term that
+    must be a whole word is searched in the joins of ambiguous boundaries too."""
+    texts = [*block.texts, block.joins] if term.whole_word else block.texts
+    return max((term.count(t) for t in texts), default=0)
 
 
 def check_file(
@@ -223,15 +243,17 @@ def check_file(
         for channel in CHANNELS:
             if channel == "raw" and not term.searchable_in_binary:
                 counts[channel] = 0
-            elif channel == "raw" and term.whole_word:
-                raw = [*texts["raw"], *reading.raw.joins]
-                counts[channel] = max((term.count(t) for t in raw), default=0)
+            elif channel == "raw":
+                counts[channel] = sum(block_count(term, block) for block in reading.raw.blocks)
             elif channel in PARTS_CHANNELS:
                 counts[channel] = term.count("\n".join(texts[channel]))
             else:
-                # Alternative readings of the same bytes (encodings): an occurrence
-                # counts once.
-                counts[channel] = max((term.count(t) for t in texts[channel]), default=0)
+                # Alternative readings of the same bytes (encodings) count an occurrence
+                # once; independent places add up (Codex C0-12).
+                counts[channel] = sum(
+                    max((term.count(t) for t in block), default=0)
+                    for block in reading.blocks.get(channel, [texts[channel]])
+                )
         if any(counts.values()):
             hits.append(TermHit(number, counts))
     # Pages and images are searched together for patterns too (Grok G0-18).
