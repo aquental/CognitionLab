@@ -629,6 +629,7 @@ impl<T: TextExtractor, O: OcrEngine, I: ImageExtractor, S: Sleeper> Pipeline<'_,
             .collect(),
             corpus_checksum: manifest.manifest_checksum.clone(),
             evaluation,
+            run_status: Some(run_status),
         };
         self.on_store(move |s| s.save_experiment(&snapshot)).await?;
         let report = RunReport {

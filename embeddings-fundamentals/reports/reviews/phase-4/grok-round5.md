@@ -1,0 +1,1 @@
+I'll review the Phase 4 package from the inlined diff, starting with the rest of the review material and the G4-5 / G4-6 closures.The report and docs are in. Next I’ll read the Phase 4 source and tests, including the G4-5 removal and the filename gate.NO FINDINGS
