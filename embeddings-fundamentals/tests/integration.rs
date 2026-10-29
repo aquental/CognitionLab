@@ -19,6 +19,9 @@ use embeddings_fundamentals::pipeline::{IngestSettings, NoSleep, Pipeline};
 use embeddings_fundamentals::storage::FsRecordStore;
 use embeddings_fundamentals::tools;
 
+#[path = "../examples/capture_extraction/capture.rs"]
+mod capture;
+
 fn require_integration() {
     assert!(
         std::env::var("RUN_INTEGRATION").is_ok_and(|v| v == "1"),
@@ -606,6 +609,59 @@ async fn real_pdfimages_output_matches_the_captured_mask_fixtures() {
             None
         ]
     );
+}
+
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and installed poppler + tesseract"]
+async fn a_recaptured_masked_image_replays_with_its_mask() {
+    // C3-7: `capture_extraction` must capture the mask of every kept image, or a
+    // recaptured masked image cannot be replayed. Capture the masked PDF for real, then
+    // replay it: both kept images and their masks load, and they prepare as a viewer
+    // shows them (hidden red halves white, visible halves blue).
+    use embeddings_fundamentals::assets::MetadataScrubber;
+    use embeddings_fundamentals::extraction::fixture::FixtureExtractor;
+    use embeddings_fundamentals::extraction::images::{ImageExtractor, ImageFilter, mask_of};
+    require_integration();
+    let pdf =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf-masks/masked-images.pdf");
+    let (out, scratch) = (
+        tempfile::tempdir().expect("out"),
+        tempfile::tempdir().expect("scratch"),
+    );
+    let dir = out.path().join("masked-images");
+    std::fs::create_dir(&dir).expect("dir");
+    let kept = capture::capture_images(pdf.to_str().expect("utf-8"), &dir, scratch.path())
+        .expect("capture");
+    assert_eq!(kept, 2);
+    let replay = FixtureExtractor::from_dir(out.path()).expect("replay");
+    let listed = replay.list_images(&pdf).await.expect("list");
+    let filter = ImageFilter::default();
+    let kept: Vec<_> = listed.iter().filter(|i| filter.keeps(i)).collect();
+    assert_eq!(kept.len(), 2);
+    for image in kept {
+        let bytes = replay
+            .extract_image(&pdf, image)
+            .await
+            .expect("image replays");
+        let mask = mask_of(&listed, image).expect("listed mask");
+        let mask = replay
+            .extract_image(&pdf, mask)
+            .await
+            .expect("mask replays");
+        let prepared = MetadataScrubber
+            .scrub_masked(&bytes, Some(&mask))
+            .expect("prepare");
+        let rgb = image::load_from_memory(&prepared.png)
+            .expect("png")
+            .to_rgb8();
+        assert_eq!(
+            rgb.get_pixel(10, 48).0,
+            [255, 255, 255],
+            "image {}",
+            image.num
+        );
+        assert_eq!(rgb.get_pixel(80, 48).0, [0, 0, 255], "image {}", image.num);
+    }
 }
 
 #[cfg(feature = "engine-embed-anything")]

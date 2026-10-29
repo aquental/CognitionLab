@@ -48,14 +48,23 @@ fn blocking_failed(e: tokio::task::JoinError) -> ExtractionError {
 }
 
 impl Scratch {
-    async fn create() -> Result<Self, ExtractionError> {
-        let dir = tokio::task::spawn_blocking(tempfile::tempdir)
-            .await
-            .map_err(blocking_failed)??;
-        Ok(Self {
-            path: dir.path().to_owned(),
-            dir: Some(dir),
+    /// Creates the directory (under `parent`, else in the system temporary directory)
+    /// on the blocking pool. The guard itself is built there: if the awaiting future is
+    /// cancelled after the directory exists but before the task's result is taken, the
+    /// output dropped on the runtime thread is this guard, never a bare `TempDir`.
+    async fn create(parent: Option<PathBuf>) -> Result<Self, ExtractionError> {
+        tokio::task::spawn_blocking(move || -> Result<Self, ExtractionError> {
+            let dir = match parent {
+                Some(parent) => tempfile::tempdir_in(parent),
+                None => tempfile::tempdir(),
+            }?;
+            Ok(Self {
+                path: dir.path().to_owned(),
+                dir: Some(dir),
+            })
         })
+        .await
+        .map_err(blocking_failed)?
     }
 
     /// Removes the directory on the blocking pool and reports a removal failure.
@@ -88,7 +97,15 @@ impl Drop for Scratch {
 async fn in_scratch<T>(
     work: impl AsyncFnOnce(&Path) -> Result<T, ExtractionError>,
 ) -> Result<T, ExtractionError> {
-    let scratch = Scratch::create().await?;
+    in_scratch_under(None, work).await
+}
+
+/// [`in_scratch`] with the directory created under `parent` (tests observe it there).
+async fn in_scratch_under<T>(
+    parent: Option<PathBuf>,
+    work: impl AsyncFnOnce(&Path) -> Result<T, ExtractionError>,
+) -> Result<T, ExtractionError> {
+    let scratch = Scratch::create(parent).await?;
     let outcome = work(&scratch.path).await;
     let removed = scratch.close().await;
     let value = outcome?;
@@ -384,6 +401,54 @@ mod tests {
             // The blocking pool runs its queue in order on its single thread.
             tokio::task::spawn_blocking(|| ()).await.expect("flush");
             assert!(!dir.exists(), "{} was not removed", dir.display());
+        });
+    }
+
+    /// Regression (C3-4, Codex round 3): cancelled after the directory was created on
+    /// the blocking pool but before the waiting task took the result. The dropped task
+    /// output must be a guard, so nothing is removed on the runtime thread.
+    #[test]
+    fn a_scratch_directory_cancelled_before_its_creation_is_taken_is_removed_off_the_runtime() {
+        let parent = tempfile::tempdir().expect("parent");
+        let entries = || std::fs::read_dir(parent.path()).expect("parent").count();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let task = tokio::spawn(in_scratch_under(
+                Some(parent.path().to_owned()),
+                async |_dir: &Path| -> Result<(), ExtractionError> {
+                    Err(ExtractionError::Tool {
+                        tool: "pdfimages",
+                        reason: "work must not start".into(),
+                    })
+                },
+            ));
+            // The task starts, queues the directory creation, and waits for it.
+            tokio::task::yield_now().await;
+            // Queued behind the creation on the only blocking thread; it then holds the
+            // pool. Waiting for it blocks the runtime thread, so the task cannot resume.
+            let (ran, created) = std::sync::mpsc::channel();
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let blocker = tokio::task::spawn_blocking(move || {
+                ran.send(()).expect("signal");
+                held.recv()
+            });
+            created.recv().expect("creation finished");
+            assert_eq!(entries(), 1, "the scratch directory was not created");
+            task.abort();
+            assert!(task.await.expect_err("cancelled").is_cancelled());
+            assert_eq!(
+                entries(),
+                1,
+                "the scratch directory was removed on the runtime thread"
+            );
+            release.send(()).expect("release");
+            blocker.await.expect("blocker").expect("recv");
+            tokio::task::spawn_blocking(|| ()).await.expect("flush");
+            assert_eq!(entries(), 0, "the scratch directory was not removed");
         });
     }
 

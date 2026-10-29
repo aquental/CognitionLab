@@ -8,7 +8,7 @@
 //! writes `images.list` (`pdfimages -list`) and `img-p<N>-<position>.png` for every
 //! image an image run keeps: listed as `image`, both sides ≥ 64 px, on a page whose
 //! text layer passes the native-text rule (on other pages the raster is the OCR
-//! source). Run with `cargo run --example capture_extraction`, or with `-- --images`
+//! source), together with the soft or explicit mask listed right after it. Run with `cargo run --example capture_extraction`, or with `-- --images`
 //! to capture only the image files. The output depends on the installed tool
 //! versions, so recapturing is a deliberate fixture change.
 
@@ -17,24 +17,14 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
-use embeddings_fundamentals::extraction::ExtractionConfig;
-use embeddings_fundamentals::extraction::images::{ImageFilter, parse_list};
-use embeddings_fundamentals::extraction::poppler::native_lines;
+use anyhow::{Context, Result};
+
+mod capture;
+
+use capture::{capture_images, run};
 
 const CORPUS: &str = "tests/fixtures/corpus";
 const OUT: &str = "tests/fixtures/extraction";
-
-fn run(tool: &str, args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new(tool)
-        .args(args)
-        .output()
-        .with_context(|| format!("run {tool}"))?;
-    if !output.status.success() {
-        bail!("{tool} failed: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    Ok(output.stdout)
-}
 
 fn version(tool: &str, flag: &str) -> Result<String> {
     let output = Command::new(tool)
@@ -52,49 +42,6 @@ fn version(tool: &str, flag: &str) -> Result<String> {
         .unwrap_or_default()
         .trim()
         .to_owned())
-}
-
-/// Writes `images.list` and the PNGs of the images an image run keeps.
-fn capture_images(pdf_str: &str, dir: &Path, scratch: &Path) -> Result<usize> {
-    let list = run("pdfimages", &["-list", pdf_str])?;
-    fs::write(dir.join("images.list"), &list)?;
-    let (filter, config) = (ImageFilter::default(), ExtractionConfig::default());
-    let mut kept = 0;
-    for image in parse_list(&String::from_utf8(list)?)?
-        .iter()
-        .filter(|i| filter.keeps(i))
-    {
-        let n = image.page.to_string();
-        let native = run("pdftotext", &["-layout", "-f", &n, "-l", &n, pdf_str, "-"])?;
-        let text = native_lines(&String::from_utf8_lossy(&native))
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !config.native_text_is_usable(&text) {
-            continue;
-        }
-        let root = scratch.join(format!("img-{n}"));
-        let root_str = root.to_str().context("utf-8 path")?;
-        run(
-            "pdfimages",
-            &["-png", "-p", "-f", &n, "-l", &n, pdf_str, root_str],
-        )?;
-        let file = format!(
-            "{root_str}-{:03}-{:03}.png",
-            image.page, image.position_on_page
-        );
-        fs::copy(
-            &file,
-            dir.join(format!(
-                "img-p{}-{}.png",
-                image.page, image.position_on_page
-            )),
-        )
-        .with_context(|| format!("copy {file}"))?;
-        kept += 1;
-    }
-    Ok(kept)
 }
 
 fn main() -> Result<()> {
