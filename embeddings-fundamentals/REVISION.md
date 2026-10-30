@@ -147,3 +147,14 @@ S4-1 (file-name rule missed upper-case personal names) and S4-2 (unused table he
 | Codex | C4-4 | medium | `corpus_files` put the directory path into `DraftError::Read`, so an unreadable directory with a patient's name would be printed | Valid. Traversal errors name no path ("a directory under the corpus directory"), and `NotUtf8` and `Empty` carry none either. |
 | Codex | C4-5 | low | The README said each phase had passed its review loop, Antigravity included, while Phase 4's reviews were still in progress | Valid. The README says Phases 0–3 passed and the Phase 4 loop is in progress, and the integration count is updated |
 | Antigravity | A4-1 | medium | `evaluate_combined` checked the leg spaces and the text-to-image capability, but not the combined snapshot, before reading records. | Valid. `evaluate_combined` runs `check_combined_snapshot` for an experiment scope before any record is read. |
+
+## CI fix — model downloads under one hub cache lock
+
+Codex rounds 1–3 and Antigravity round 1 (with the `rust-dev` plugin), from base `8ed6cbe`. Grok was not run: the owner asked for Codex and Antigravity only. Approved 2026-10-30. 3 findings (3 Codex). Full record: `reports/reviews/ci-hf-lock/FINDINGS.md`.
+
+| Reviewer | Finding | Severity | Finding summary | Solution summary |
+|---|---|---|---|---|
+| Codex | CF-1 | medium | A read-only cache that already held the models failed, because the lock file needed write access | Valid. A read-only fallback, later replaced by CF-3's directory lock, which needs no write |
+| Codex | CF-2 | low | `HfError::Lock` turned the `io::Error` into a string and lost the source chain | Valid. `#[source] source: io::Error`, still shown in the message because adapter build errors keep only the message |
+| Codex | CF-3 | medium | The CF-1 fallback skipped the lock whenever the lock file could not be created, though a cache can deny `.locks` and still accept downloads | Valid. The lock is an advisory lock on the hub cache directory itself, opened read-only; only a cache directory that cannot be created runs without it |
+
