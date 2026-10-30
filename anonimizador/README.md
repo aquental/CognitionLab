@@ -9,8 +9,8 @@ Local tools to anonymize medical PDFs and images, and to verify that no identifi
 | Stage | Command | Status |
 |---|---|---|
 | 0 | `anonimizador verify`: counts the owner's identifiers left in a file, in six places | **Done.** Reviewed by Grok (15 rounds), Codex (2 rounds), and Antigravity (3 rounds, no open finding); merged by the owner's decision with Grok round 16 and Codex's confirmation of the later fixes pending ([`FINDINGS.md`](reports/reviews/stage-0/FINDINGS.md)) |
-| 1 | `detect`: finds identifiers with their positions on the page | Planned ([`docs/PLAN.md`](docs/PLAN.md)) |
-| 2 | `redact` and `scrub`: true text removal, pixel boxes, metadata removal, and PDF rewrite | Planned |
+| 1 | Detection: identifiers with their positions on the page (terms, validated patterns, field labels) | **Implemented, in review**: runs inside `batch`; no separate `detect` command yet |
+| 2 | Redaction: pixel boxes on rasterized pages, metadata removal, PDF rewrite, automatic `verify` of each copy | **Implemented, in review**: `batch`, with the rasterize fallback of R5 only (no true text removal, so no PDF library) |
 | 3 | Name recognition, barcodes and QR codes, and text burned into images | Planned |
 | 4 | `review` and `approve`: a review packet, and recording the review in the manifest only on human approval | Planned |
 
@@ -71,20 +71,41 @@ Exit status: 0 means nothing was found, 1 means something was found, and 2 means
 
 ## `anonimizador batch`
 
-Runs the anonymization steps over every original in a directory and indexes the run:
+Anonymizes every original in a directory and indexes the run:
 
 ```bash
 uv run anonimizador batch --terms ~/private/terms.txt --out <outputs> <originals>
 scripts/anonymize-sample-exams.sh --terms ~/private/terms.txt   # the owner's sample exams
 ```
 
-- **Originals** are the PDF, PNG, and JPEG files directly in the source directory; subdirectories are not walked, so the outputs can live under it. They are read, never written.
-- **Each anonymized copy** gets a neutral name from a digest of its original's bytes, `exam-<digest>.pdf`, never from its name.
-- **The index**, `<outputs>/<YYYYMMDD-HHMMSS>-anonimizer.md`, has one row per original. It links the original, its anonymized copy, the `verify` log of each, and the console output of the whole run (`<outputs>/logs/<YYYYMMDD-HHMMSS>/`).
-- **The index names the originals**, so `--out` must be a place git cannot commit: a git-ignored directory or one outside any repository. The script writes to `../embeddings-fundamentals/tests/sample-exams/anonymized/`, which git ignores. The console itself names originals by position and prints counts only.
-- **Until stage 2**, nothing redacts: each copy is marked `pending (stage 2)`, and only the originals are verified. `FOUND` on an original is the count before anonymization.
+For each original, in order:
+1. **Verify the original**, for the counts before anonymization.
+2. **Locate the words.** Each page is rendered at `--dpi`. Its words are read twice, with their boxes: from the PDF text layer (`pdftotext -bbox-layout`, scaled onto the image) and by OCR of the image (`tesseract … tsv`). A text layer whose page shape does not match the image, such as a rotated page, is not placed; that page gets OCR boxes only, and the console says so.
+3. **Detect identifiers** in both readings:
+   - the owner's terms, matched as `verify` counts them;
+   - CPF and CNS with valid check digits, phones, e-mails, CEPs, and dates (`--keep-dates` keeps dates);
+   - the value after a field label: `Paciente:`, `Nome:`, `Mãe:`, `Prontuário:`, `Pedido:`, `Médico:`, `Convênio:`, the date-of-birth labels (`Dt. Nasc.:`), and similar labels with a colon. Council and document numbers are taken after `CRM`, `CPF`, `RG`, and `CNS`, colon or not.
+4. **Redact by rasterizing.** A black box is painted over every detected word. The copy is rebuilt from the page images alone, so no text layer, covered text, metadata, or earlier revision of the original survives. A PDF becomes a scanned PDF, and an image becomes a PNG.
+5. **Verify the copy** with `verify`, a separate code path (R8). A term still found sends the copy back to review, and the run exits 1.
 
-It takes the reading options of `verify` (`--terms`, `--no-ocr`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). Exit status: 0 when every step ran, 2 when the run cannot start or a file has an unreadable place.
+- **Originals** are the PDF, PNG, and JPEG files directly in the source directory. Subdirectories are not walked, so the outputs can live under the source. Originals are read, never written.
+- **Each copy** is named from a digest of its original's bytes, `exam-<digest>.pdf` or `.png`, never from the original's name.
+- **The index**, `<outputs>/<YYYYMMDD-HHMMSS>-anonimizer.md`, has one row per original. Each row links the original, the original's `verify` log, the detections (boxes with page, kind, and detector, never text), the copy, and the copy's `verify` log. It also links the console output of the whole run. Logs are in `<outputs>/logs/<YYYYMMDD-HHMMSS>/`.
+- **The index names the originals**, so `--out` must be a place git cannot commit: a git-ignored directory or one outside any repository. The script writes to `../embeddings-fundamentals/tests/sample-exams/anonymized/`, which git ignores. The console names originals by position and prints counts only.
+- **Without `--terms`**, only patterns and labels are detected and verified. `ok` then does not mean that no name is left, and the run warns about it.
+
+**What it does not do yet:**
+- recognize names without a label or a term (stage 3);
+- read barcodes, QR codes, or repeated headers (stage 3);
+- replace the date of birth with the age or shift dates (R6): it removes them;
+- remove text while keeping a text layer (true redaction, R5).
+
+The copy is checked by the same OCR engine that found the words, so a word that OCR misreads in both passes is missed by both. **A person still reviews every copy.**
+
+It takes the reading options of `verify` (`--terms`, `--no-ocr`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). Exit status:
+- 0: every copy was written and verifies clean;
+- 1: a copy still holds something `verify` finds;
+- 2: the run cannot start, or a file or step failed.
 
 ## Development
 

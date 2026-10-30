@@ -3,8 +3,9 @@
 Exit status of `verify`: 0 nothing found, 1 something found, 2 usage error, missing
 tool, or a channel that could not be read (a failed or timed-out tool).
 
-Exit status of `batch`: 0 every step ran, 2 the run could not start or a file could not
-be read. Identifiers found in an original are expected and do not fail the run.
+Exit status of `batch`: 0 every copy was written and verifies clean, 1 a copy still holds
+something `verify` finds, 2 the run could not start or a file or step failed.
+Identifiers found in an original are expected and do not fail the run.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from pathlib import Path
 from typing import NoReturn
 
 from anonimizador import __version__
-from anonimizador.batch import run_batch
 from anonimizador.channels import ToolError, missing_languages
 from anonimizador.terms import Term, TermsError, load_terms
 from anonimizador.verify import Options, VerifyError, collect, missing_tools, render, verify
@@ -89,11 +89,16 @@ def parser() -> argparse.ArgumentParser:
         "SOURCE, write the outputs under neutral names to --out, and write a Markdown index "
         "(<YYYYMMDD-HHMMSS>-anonimizer.md) that links each original, its anonymized copy, and "
         "the console output. The index names the originals: --out must be a place git cannot "
-        "commit. Redaction is stage 2: until then the copies are marked pending and only the "
-        "originals are verified. The console shows positions and counts only.",
+        "commit. Each copy is rasterized, with black boxes over the identifiers found (terms, "
+        "patterns, field labels), then verified. The console shows positions and counts only.",
     )
     b.add_argument("source", help="directory of original exams (not walked recursively)")
     b.add_argument("--out", required=True, help="output directory (git-ignored or outside a repo)")
+    b.add_argument(
+        "--keep-dates",
+        action="store_true",
+        help="keep dates other than the date of birth (default: remove every date)",
+    )
     add_reading_options(b)
     return root
 
@@ -173,10 +178,15 @@ def run_verify(args: argparse.Namespace) -> int:
 
 
 def run_batch_command(args: argparse.Namespace) -> int:
+    # Imported here: the redaction needs Pillow, the verifier only the standard library.
+    from anonimizador.batch import run_batch
+
     options = reading_options(args)
     try:
         terms = prepare(args, options)
-        _, unreadable = run_batch(Path(args.source), Path(args.out), terms, options)
+        totals = run_batch(
+            Path(args.source), Path(args.out), terms, options, remove_dates=not args.keep_dates
+        )
     except (VerifyError, TermsError, ToolError) as e:
         print(f"anonimizador batch: {e}", file=sys.stderr)
         return EXIT_USAGE
@@ -184,7 +194,9 @@ def run_batch_command(args: argparse.Namespace) -> int:
         # The message of an OSError holds the path: report its reason only.
         print(f"anonimizador batch: {e.strerror or type(e).__name__}", file=sys.stderr)
         return EXIT_USAGE
-    return EXIT_USAGE if unreadable else EXIT_OK
+    if totals.unreadable:
+        return EXIT_USAGE
+    return EXIT_FOUND if totals.found else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

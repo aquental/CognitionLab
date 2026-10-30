@@ -6,22 +6,33 @@ its bytes. The console names originals by position and carries counts only, like
 `verify`. The index, `<YYYYMMDD-HHMMSS>-anonimizer.md`, links every original by its
 name, so it and the run's logs are written only where git cannot commit them.
 
-Stage 0 has no redaction yet: the index marks each anonymized copy as pending, and only
-the originals are verified.
+For each original the run:
+1. verifies it, for the counts before anonymization;
+2. reads its pages with positions (`locate`) and detects identifiers (`detect`);
+3. writes the redacted copy (`redact`) and the detections, as boxes and kinds, as JSON;
+4. verifies the copy with `verify`, a separate code path (R8).
+
+A copy in which `verify` still finds a term goes back to review: the run exits 1.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
-from collections.abc import Iterator
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote
 
+from anonimizador.channels import ToolError
+from anonimizador.detect import as_json, detect, summary
+from anonimizador.locate import Box, read_pages
+from anonimizador.redact import redact
 from anonimizador.terms import Term, committable
 from anonimizador.verify import (
     APPLEDOUBLE,
@@ -39,7 +50,7 @@ STAMP_FORMAT = "%Y%m%d-%H%M%S"
 # Hex digits of the content digest in a neutral name: enough to tell a few hundred
 # exams apart, short enough to read.
 DIGEST_LENGTH = 12
-PENDING = "pending (stage 2)"
+NOT_WRITTEN = "not written"
 NO_TERMS = (
     "no terms file: only identifier patterns were counted, so `ok` does not mean that "
     "no name is left (pass --terms)"
@@ -67,9 +78,20 @@ class Outcome:
     exam: Exam
     original_status: str = ""
     original_log: Path | None = None
+    detections: Path | None = None
+    detection_counts: dict[str, int] = field(default_factory=dict)
     anonymized: Path | None = None
-    anonymized_status: str = PENDING
+    anonymized_status: str = NOT_WRITTEN
     anonymized_log: Path | None = None
+
+
+@dataclass
+class Totals:
+    exams: int = 0
+    # Exams with a file or step that could not be read or written.
+    unreadable: int = 0
+    # Copies in which `verify` still finds a term.
+    found: int = 0
 
 
 @dataclass
@@ -102,7 +124,9 @@ def neutral_name(path: Path) -> str:
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
-    return f"exam-{digest.hexdigest()[:DIGEST_LENGTH]}{path.suffix.lower()}"
+    # An image's copy is a PNG whatever its original's format (see `redact`).
+    suffix = ".pdf" if path.suffix.lower() == ".pdf" else ".png"
+    return f"exam-{digest.hexdigest()[:DIGEST_LENGTH]}{suffix}"
 
 
 def originals(source: Path) -> list[Exam]:
@@ -139,19 +163,86 @@ def write_log(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def verify_originals(
-    exams: list[Exam], terms: list[Term], options: Options, run: Run, console: Console
-) -> Iterator[tuple[Outcome, FileResult]]:
-    files = [CorpusFile(str(e.original), e.original.name) for e in exams]
-    for exam, result in zip(exams, verify(files, terms, options), strict=True):
-        lines = render(result, options)
-        log = run.logs / f"{exam.log_prefix}-verify-original.txt"
-        write_log(log, lines)
-        for line in lines:
-            console.print(line.replace(f"[{result.index}]", f"[{exam.position}] original:", 1))
-        console.print(f"[{exam.position}] anonymized: {PENDING}")
-        outcome = Outcome(exam, result.status(options.strict_patterns), log)
-        yield outcome, result
+def verify_one(
+    position: int, path: Path, name: str, terms: list[Term], options: Options, log: Path
+) -> tuple[FileResult, list[str]]:
+    """`verify` of one file, its lines saved to `log`."""
+    [result] = verify([CorpusFile(str(path), name)], terms, options)
+    lines = render(result, options)
+    write_log(log, lines)
+    return result, lines
+
+
+def labelled(lines: list[str], position: int, step: str) -> list[str]:
+    """`verify` lines of a one-file run, labelled with the exam's position and the step."""
+    return [line.replace("[1]", f"[{position}] {step}:", 1) for line in lines]
+
+
+def boxes_by_page(detections: list) -> dict[int, list[Box]]:
+    boxes: dict[int, list[Box]] = {}
+    for d in detections:
+        boxes.setdefault(d.page, []).append(d.box)
+    return boxes
+
+
+def anonymize(
+    exam: Exam,
+    terms: list[Term],
+    options: Options,
+    remove_dates: bool,
+    run: Run,
+    console: Console,
+    totals: Totals,
+) -> Outcome:
+    outcome = Outcome(exam)
+    n = exam.position
+    log = run.logs / f"{exam.log_prefix}-verify-original.txt"
+    result, lines = verify_one(n, exam.original, exam.original.name, terms, options, log)
+    for line in labelled(lines, n, "original"):
+        console.print(line)
+    outcome.original_status, outcome.original_log = result.status(options.strict_patterns), log
+    try:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool,
+        ):
+            pages = read_pages(
+                exam.original,
+                Path(tmp),
+                options.lang,
+                options.dpi,
+                options.timeout,
+                pool,
+                options.use_ocr,
+            )
+            found = detect(pages, terms, remove_dates)
+            detections = run.logs / f"{exam.log_prefix}-detections.json"
+            detections.write_text(json.dumps(as_json(found, pages), indent=1), encoding="utf-8")
+            outcome.detections, outcome.detection_counts = detections, summary(found)
+            copy = run.out / exam.neutral
+            redact(pages, boxes_by_page(found), copy, options.dpi)
+            outcome.anonymized = copy
+    except (ToolError, OSError) as e:
+        # Neither message holds a path (see `channels.run`); an OSError's reason only.
+        reason = str(e) if isinstance(e, ToolError) else e.strerror or type(e).__name__
+        console.print(f"[{n}] anonymized: ERROR")
+        console.print(f"    not written: {reason}")
+        outcome.anonymized_status = "ERROR"
+        totals.unreadable += 1
+        return outcome
+    counts = " ".join(f"{k}={v}" for k, v in outcome.detection_counts.items()) or "none"
+    unaligned = sum(p.unaligned for p in pages)
+    console.print(f"[{n}] detections: {counts} on {len(pages)} page(s)")
+    if unaligned:
+        console.print(f"    text layer not placed on {unaligned} page(s): OCR boxes only")
+    log = run.logs / f"{exam.log_prefix}-verify-anonymized.txt"
+    result, lines = verify_one(n, copy, exam.neutral, terms, options, log)
+    for line in labelled(lines, n, "anonymized"):
+        console.print(line)
+    outcome.anonymized_status, outcome.anonymized_log = result.status(options.strict_patterns), log
+    totals.unreadable += bool(result.errors)
+    totals.found += result.failed(options.strict_patterns)
+    return outcome
 
 
 def link(target: Path, base: Path, text: str) -> str:
@@ -161,15 +252,25 @@ def link(target: Path, base: Path, text: str) -> str:
     return f"[{label}]({href})"
 
 
-def index(run: Run, outcomes: list[Outcome], header: list[str], console_log: Path) -> str:
+def index(
+    run: Run, outcomes: list[Outcome], header: list[str], console_log: Path, remove_dates: bool
+) -> str:
     base = run.report.parent
     rows = []
     for o in outcomes:
         original = link(o.exam.original, base, o.exam.original.name)
-        anonymized = link(o.anonymized, base, o.exam.neutral) if o.anonymized else PENDING
+        anonymized = link(o.anonymized, base, o.exam.neutral) if o.anonymized else NOT_WRITTEN
         verified = link(o.original_log, base, o.original_status) if o.original_log else "—"
-        after = link(o.anonymized_log, base, o.anonymized_status) if o.anonymized_log else "—"
-        rows.append(f"| {o.exam.position} | {original} | {anonymized} | {verified} | {after} |")
+        counts = ", ".join(f"{k} {v}" for k, v in o.detection_counts.items()) or "none"
+        found = link(o.detections, base, counts) if o.detections else "—"
+        after = (
+            link(o.anonymized_log, base, o.anonymized_status)
+            if o.anonymized_log
+            else o.anonymized_status
+        )
+        rows.append(
+            f"| {o.exam.position} | {original} | {verified} | {found} | {anonymized} | {after} |"
+        )
     return "\n".join(
         [
             f"# Anonymization run {run.stamp}",
@@ -180,16 +281,24 @@ def index(run: Run, outcomes: list[Outcome], header: list[str], console_log: Pat
             *header,
             f"- Console output of the whole run: {link(console_log, base, console_log.name)}",
             "",
-            "| # | Original | Anonymized | Verify original | Verify anonymized |",
-            "|---:|---|---|---|---|",
+            "| # | Original | Verify original | Detections (boxes) | Anonymized | "
+            "Verify anonymized |",
+            "|---:|---|---|---|---|---|",
             *rows,
             "",
             "A verify log holds counts per term (by its line in the terms file) and per place, "
             "never a value. `FOUND` on an original is expected: it is the count before "
-            "anonymization.",
+            "anonymization. `FOUND` on an anonymized copy sends it back to review. The "
+            "detections file holds each box with its page, kind, and detector, never its text.",
             "",
             "## Before using an anonymized copy",
             "",
+            "- **Each copy is a scanned PDF (or a PNG)**: every page was rasterized, boxes were "
+            "painted over the detections, and the file was rebuilt from the images alone, so no "
+            "text layer, covered text, or metadata of the original is left.",
+            "- **Dates** were "
+            + ("removed" if remove_dates else "kept")
+            + "; the date of birth is removed with its label either way.",
             "- **A person reviews every copy.** No detector is complete: handwriting, stamps, "
             "poor scans, and unusual names defeat OCR and name recognition, and rare "
             "combinations of diagnosis, date, and institution can identify a person.",
@@ -201,11 +310,15 @@ def index(run: Run, outcomes: list[Outcome], header: list[str], console_log: Pat
 
 
 def run_batch(
-    source: Path, out: Path, terms: list[Term], options: Options, now: datetime | None = None
-) -> tuple[int, int]:
-    """Runs every step over the originals in `source` and writes the index under `out`.
-    Returns the number of exams and of unreadable ones; raises `VerifyError` when the
-    run cannot start."""
+    source: Path,
+    out: Path,
+    terms: list[Term],
+    options: Options,
+    now: datetime | None = None,
+    remove_dates: bool = True,
+) -> Totals:
+    """Runs every step over the originals in `source` and writes the copies and the index
+    under `out`. Raises `VerifyError` when the run cannot start."""
     exams = originals(source)
     now = now or datetime.now()
     run = start(out, now)
@@ -213,21 +326,27 @@ def run_batch(
     mode = "no OCR" if not options.use_ocr else f"OCR at {options.dpi} dpi ({options.lang})"
     header = [
         f"- Started: {now.isoformat(timespec='seconds')}",
-        f"- Originals: {len(exams)}; terms: {len(terms)}; {mode}",
+        f"- Originals: {len(exams)}; terms: {len(terms)}; {mode}; "
+        f"dates {'removed' if remove_dates else 'kept'}",
     ]
     if not terms:
         header.append(f"- **{NO_TERMS}**")
-    unreadable = 0
-    outcomes = []
+    totals = Totals(len(exams))
     with console_log.open("w", encoding="utf-8") as log:
         console = Console(sys.stdout, log)
         console.print(f"anonimizador batch: {len(exams)} original(s), {len(terms)} term(s), {mode}")
         if not terms:
             console.print(f"anonimizador batch: warning: {NO_TERMS}")
-        for outcome, result in verify_originals(exams, terms, options, run, console):
-            unreadable += bool(result.errors)
-            outcomes.append(outcome)
+        outcomes = [
+            anonymize(exam, terms, options, remove_dates, run, console, totals) for exam in exams
+        ]
         header.append(f"- Finished: {datetime.now().isoformat(timespec='seconds')}")
-        run.report.write_text(index(run, outcomes, header, console_log), encoding="utf-8")
+        report = index(run, outcomes, header, console_log, remove_dates)
+        run.report.write_text(report, encoding="utf-8")
+        console.print(
+            f"anonimizador batch: {sum(o.anonymized_status == 'ok' for o in outcomes)} of "
+            f"{totals.exams} copy(ies) verified ok, {totals.found} with something left, "
+            f"{totals.unreadable} with an error"
+        )
         console.print(f"anonimizador batch: index written to {run.report.resolve()}")
-    return len(exams), unreadable
+    return totals

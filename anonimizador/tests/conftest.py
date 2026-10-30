@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import sys
@@ -35,3 +36,18 @@ def check_report_privacy(out: str, words: set[str], allowed: re.Pattern[str]) ->
     bad = [i for i, line in enumerate(out.splitlines()) if not allowed.match(line)]
     if bad:
         pytest.fail(f"report line(s) {bad} have an unexpected shape", pytrace=False)
+
+
+def stub(bin_dir: Path, tool: str, script: str) -> None:
+    """A fake `tool` on PATH, as a crashed, hung, or misconfigured install would be."""
+    path = bin_dir / tool
+    path.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+    path.chmod(0o755)
+
+
+@pytest.fixture
+def stubs(tmp_path: Path, monkeypatch) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return bin_dir
