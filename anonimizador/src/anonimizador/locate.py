@@ -36,7 +36,7 @@ class Word:
     text: str
     box: Box
     # Words with the same line key are one line, in reading order.
-    line: tuple[str, int, ...]
+    line: tuple[int | str, ...]
 
 
 @dataclass
@@ -59,9 +59,21 @@ def render_pdf(path: Path, tmp: Path, dpi: int, timeout: int) -> list[Path]:
     return pages
 
 
+# What a malformed tool output raises while it is parsed.
+PARSE_ERRORS = (ET.ParseError, ValueError, KeyError, TypeError, OverflowError)
+
+
 def ocr_words(image: Path, lang: str, timeout: int) -> list[Word]:
     """The words tesseract reads in `image`, with their boxes."""
     tsv = run(["tesseract", str(image), "-", "-l", lang, "tsv"], timeout)
+    try:
+        return tsv_words(tsv)
+    except PARSE_ERRORS:
+        # The message would quote the output, which is document text (Codex CB-9).
+        raise ToolError("tesseract wrote output that could not be read") from None
+
+
+def tsv_words(tsv: str) -> list[Word]:
     words = []
     for row in csv.DictReader(io.StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE):
         text = (row.get("text") or "").strip()
@@ -83,6 +95,14 @@ def native_words(path: Path, timeout: int) -> list[tuple[float, float, list[Word
     """Per page: its width and height in points, and the words of its text layer with
     boxes in points."""
     xhtml = run(["pdftotext", "-bbox-layout", str(path), "-"], timeout)
+    try:
+        return bbox_pages(xhtml)
+    except PARSE_ERRORS:
+        # The message would quote the output, which is document text (Codex CB-9).
+        raise ToolError("pdftotext wrote output that could not be read") from None
+
+
+def bbox_pages(xhtml: str) -> list[tuple[float, float, list[Word]]]:
     # The XHTML header names a DTD that is never fetched; ElementTree does not resolve it.
     root = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", xhtml, count=1))
     strip_namespaces(root)

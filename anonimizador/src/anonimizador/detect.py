@@ -70,9 +70,10 @@ NUMBER_LABELS = ("crm", "cpf", "rg", "cns", "cnes", "crbm", "crf", "coren")
 NUMBER_VALUE_WORDS = 4
 # The states a council number is registered in ("CRM/SP").
 STATES = "ac al ap am ba ce df es go ma mt ms mg pa pb pr pe pi rj rn rs ro rr sc sp se to"
-# A word of a number's value: digits, a state, "nº", or a separator.
+# A word of a number's value: digits (an RG may end in the check letter X, Codex CB-6),
+# a state, "nº", or a separator.
 NUMBER_PART = re.compile(
-    r"^[\W_]*(?:(?:\d[\d\W_]*|(?:" + "|".join(STATES.split()) + r")|n[o°º]?)[\W_]*)?$"
+    r"^[\W_]*(?:(?:\d[\d\W_]*(?:x[\W_]*)?|(?:" + "|".join(STATES.split()) + r")|n[o°º]?)[\W_]*)?$"
 )
 SEPARATOR = re.compile(r"^[\W_]+$")
 LABEL_PREFIX = r"(?<![^\W_])"
@@ -148,8 +149,10 @@ def term_spans(term: Term, text: Text) -> list[tuple[int, int]]:
         positions = alnum_positions(folded)
         spans += spans_of(term.compact, "".join(folded[k] for k in positions), positions)
     elif parts := term.words.split():
+        # In a lookahead, so overlapping occurrences ("li li li" holds "li li" twice) are
+        # all found, as `Term.count` counts them (Codex CB-10).
         pattern = LABEL_PREFIX + r"[\W_]+".join(map(re.escape, parts)) + r"(?![^\W_])"
-        spans += [m.span() for m in re.finditer(pattern, folded)]
+        spans += [m.span(1) for m in re.finditer(f"(?=({pattern}))", folded)]
     return spans
 
 
@@ -192,22 +195,36 @@ def pattern_spans(text: Text, remove_dates: bool) -> list[tuple[str, tuple[int, 
     return found
 
 
+def colon_value(words: list[Word], line: list[int], last: int) -> list[int]:
+    """The words after the label word `last` in `line`, up to the next label."""
+    value = []
+    for index in (i for i in line if i > last):
+        if words[index].text.endswith(":"):
+            break
+        value.append(index)
+    return value
+
+
 def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
-    """The words that are the value of a field label, line by line."""
+    """The words that are the value of a field label."""
     values = []
-    for line in lines:
+    for k, line in enumerate(lines):
         text = join(words, [line])
         for m in COLON_LABEL.finditer(text.folded):
             # The value starts after the word holding the colon, or in it when it is
             # glued to the colon ("Paciente:Fulano").
             last = max(text.words(m.start(), m.end()))
-            if any(c.isalnum() for c in words[last].text.partition(":")[2]):
+            glued = any(c.isalnum() for c in words[last].text.partition(":")[2])
+            value = colon_value(words, line, last)
+            if glued:
                 values.append(last)
-            after = [i for i in line if i > last]
-            for index in after:
-                if words[index].text.endswith(":"):
-                    break
-                values.append(index)
+            elif not value and k + 1 < len(lines):
+                # A label that ends its line has its value on the next line of the same
+                # page (a date-of-birth label above the date, Codex CB-7).
+                below = lines[k + 1]
+                if words[below[0]].line[0] == words[last].line[0]:
+                    value = colon_value(words, below, below[0] - 1)
+            values += value
         for m in NUMBER_LABEL.finditer(text.folded):
             label_words = text.words(m.start(), m.end())
             after = [i for i in line if i > max(label_words)][:NUMBER_VALUE_WORDS]
@@ -219,14 +236,19 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
             # A value holds a digit: "CRM SP" alone, or a label in prose, is none.
             if any(any(c.isdigit() for c in words[i].text) for i in taken):
                 values += [i for i in taken if not SEPARATOR.match(words[i].text)]
-            # A number glued to its label ("CPF:12345678909") is in the label's word.
-            values += [i for i in label_words if sum(c.isdigit() for c in words[i].text) >= 4]
+            # A number glued to its label ("CRM:123") is in the label's word, however
+            # short (Codex CB-11).
+            values += [i for i in label_words if any(c.isdigit() for c in words[i].text)]
     return values
 
 
 def detect_reading(
-    page: int, reading: str, words: list[Word], terms: list[Term], remove_dates: bool
+    reading: str, pages: list[tuple[int, list[Word]]], terms: list[Term], remove_dates: bool
 ) -> list[Detection]:
+    """Detections in one reading of every page. The pages are searched as one text, a
+    line break between pages, so a term split across a page break is found, as `verify`
+    finds it (Codex CB-5). A word's line key starts with its page number."""
+    words = [Word(w.text, w.box, (number, *w.line)) for number, ws in pages for w in ws]
     if not words:
         return []
     lines = lines_of(words)
@@ -239,16 +261,18 @@ def detect_reading(
         marked += [(w, name, "patterns") for w in text.words(start, end)]
     marked += [(w, "label", "labels") for w in label_values(words, lines)]
     unique = dict.fromkeys(marked)
-    return [Detection(page, words[w].box, kind, det, reading) for w, kind, det in unique]
+    return [
+        Detection(words[w].line[0], words[w].box, kind, det, reading) for w, kind, det in unique
+    ]
 
 
 def detect(pages: list[Page], terms: list[Term], remove_dates: bool = True) -> list[Detection]:
     """Every detection on every page, in both readings."""
-    found = []
-    for page in pages:
-        for reading, words in (("native", page.native), ("ocr", page.ocr)):
-            found += detect_reading(page.number, reading, words, terms, remove_dates)
-    return found
+    native = [(p.number, p.native) for p in pages]
+    ocr = [(p.number, p.ocr) for p in pages]
+    return detect_reading("native", native, terms, remove_dates) + detect_reading(
+        "ocr", ocr, terms, remove_dates
+    )
 
 
 def summary(detections: list[Detection]) -> dict[str, int]:

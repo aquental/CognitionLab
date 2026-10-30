@@ -1,7 +1,9 @@
 """Detectors over words with boxes: what is found, and what is left alone."""
 
-from anonimizador.detect import Detection, cns_valid, cpf_valid, detect_reading
-from anonimizador.locate import Word
+from pathlib import Path
+
+from anonimizador.detect import Detection, cns_valid, cpf_valid, detect, detect_reading
+from anonimizador.locate import Page, Word
 from anonimizador.terms import Term
 
 # A valid CNS (weighted sum divisible by 11), invented.
@@ -16,12 +18,14 @@ def line(*texts: str, number: int = 0) -> list[Word]:
     ]
 
 
-def found(words: list[Word], terms=(), remove_dates=True) -> dict[str, set[str]]:
-    """The words detected, by kind (the test knows the words; detections do not)."""
-    by_box = {w.box: w.text for w in words}
+def found(words: list[Word], terms=(), remove_dates=True, pages=None) -> dict[str, set[str]]:
+    """The words detected, by kind (the test knows the words; detections do not).
+    `pages` splits the words into pages; by default they are all on page 1."""
+    pages = pages or [(1, words)]
+    by_box = {(n, w.box): w.text for n, ws in pages for w in ws}
     result: dict[str, set[str]] = {}
-    for d in detect_reading(1, "ocr", words, [Term(t) for t in terms], remove_dates):
-        result.setdefault(d.kind, set()).add(by_box[d.box])
+    for d in detect_reading("ocr", pages, [Term(t) for t in terms], remove_dates):
+        result.setdefault(d.kind, set()).add(by_box[d.page, d.box])
     return result
 
 
@@ -37,6 +41,32 @@ def test_a_numeric_term_is_found_by_its_digits_whatever_the_punctuation():
 
 def test_a_short_term_must_be_a_whole_word():
     assert found(line("Anabela", "Ana"), ["Ana"]) == {"term": {"Ana"}}
+
+
+def test_overlapping_occurrences_of_a_short_term_are_all_found():
+    # Codex CB-10: "Li Li Li" holds "Li Li" twice, as Term.count counts it.
+    words = line("Li", "Li", "Li", "x")
+    assert Term("Li Li").count("Li Li Li") == 2
+    assert [d.box for d in detect_reading("ocr", [(1, words)], [Term("Li Li")], True)] == [
+        w.box for w in words[:3]
+    ]
+
+
+def test_a_term_split_across_a_page_break_is_found_on_both_pages():
+    # Codex CB-5: verify searches the pages together, so the detector does too.
+    first, second = line("laudo", "Fulano", number=9), line("Ficticio", "ok", number=0)
+    pages = [(1, first), (2, second)]
+    detections = detect_reading("ocr", pages, [Term("Fulano Ficticio")], True)
+    assert sorted((d.page, d.box) for d in detections) == [(1, first[1].box), (2, second[0].box)]
+    # And `detect`, over whole pages, hands every page of a reading to it at once.
+    rendered = [
+        Page(1, Path("p1.png"), (900, 900), ocr=first),
+        Page(2, Path("p2.png"), (900, 900), ocr=second),
+    ]
+    assert sorted((d.page, d.box) for d in detect(rendered, [Term("Fulano Ficticio")])) == [
+        (1, first[1].box),
+        (2, second[0].box),
+    ]
 
 
 def test_only_cpf_and_cns_with_valid_check_digits_are_patterns():
@@ -84,6 +114,30 @@ def test_a_number_label_takes_the_number_after_it():
     assert found(line("CPF:12345678900")) == {"label": {"CPF:12345678900"}}
 
 
+def test_an_rg_with_the_check_letter_x_is_taken():
+    # Codex CB-6.
+    assert found(line("RG:", "12.345.671-X")) == {"label": {"12.345.671-X"}}
+    assert found(line("RG", "12.345.671-x", "emissor")) == {"label": {"12.345.671-x"}}
+
+
+def test_a_short_number_glued_to_its_label_is_taken():
+    # Codex CB-11: "CRM:123" and "CRM:" "123" are the same value.
+    assert found(line("CRM:123")) == {"label": {"CRM:123"}}
+    assert found(line("CRM:", "123")) == {"label": {"123"}}
+
+
+def test_a_label_that_ends_its_line_takes_the_next_line():
+    # Codex CB-7: the date of birth under its label goes, whatever the date policy.
+    words = line("Dt.", "Nasc.:", number=0) + line("01/02/1980", "Sexo:", "F", number=1)
+    assert found(words, remove_dates=False) == {"label": {"01/02/1980"}}
+    # Only when the label ends its line, and never across a page break.
+    assert found(line("Nome:", "Sicrano", number=0) + line("Fulano", number=1)) == {
+        "label": {"Sicrano"}
+    }
+    pages = [(1, line("Paciente:", number=5)), (2, line("Hemoglobina", "13,5", number=0))]
+    assert found([], pages=pages) == {}
+
+
 def test_a_number_label_without_a_number_takes_nothing():
     assert found(line("CRM", "SP", "assinatura")) == {}
     assert found(line("o", "crm", "do", "estado")) == {}
@@ -97,5 +151,5 @@ def test_laboratory_values_are_left_alone():
 
 
 def test_a_detection_holds_no_text():
-    [d] = detect_reading(1, "ocr", line("Paciente:", "Sicrano"), [], True)
+    [d] = detect_reading("ocr", [(1, line("Paciente:", "Sicrano"))], [], True)
     assert d == Detection(1, (100, 0, 190, 15), "label", "labels", "ocr")
