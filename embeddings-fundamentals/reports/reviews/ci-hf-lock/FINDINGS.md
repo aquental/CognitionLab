@@ -38,3 +38,16 @@ NO FINDINGS, with cited verdicts on lock acquisition and drop order, the unlocke
 ## Outcome
 
 Codex (round 3) and Antigravity (round 1) both have no unresolved finding on the final state `1f1172e`. Grok was not run (owner waiver for this fix). 3 findings, all Codex, all fixed and confirmed closed.
+
+## CI confirmation
+
+PR #11, run 40996386014 on `06b64c8`:
+
+- **Cache:** the HF cache was cold ("Cache not found for input keys: hf-d73eb2d5…").
+- **Results:**
+  - `fmt, clippy matrix, unit + BDD`: passed.
+  - Lib tests with the local engines: 171 passed.
+  - Integration: 18 passed in 815 s.
+- **Log:** no `Cache lock timed out` anywhere.
+- **Cache save:** the job saved the HF cache.
+
