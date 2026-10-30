@@ -35,7 +35,8 @@ pytestmark = [
 
 def name_words() -> set[str]:
     words = set()
-    for path in EXAMS.iterdir():
+    # Files only: the batch's output directory under the exams is not an exam.
+    for path in (p for p in EXAMS.iterdir() if p.is_file()):
         words.update(w for w in re.findall(r"[^\W\d_]+", fold(path.stem)) if len(w) >= 4)
     return words
 
@@ -51,3 +52,29 @@ def test_the_report_on_real_exams_reveals_no_file_name(capsys):
     if not out.startswith(f"anonimizador verify: {len(pdfs)} file(s)"):
         pytest.fail(f"the report does not start with the count of {len(pdfs)} files", pytrace=False)
     check_report_privacy(out, name_words(), REPORT_LINE)
+
+
+# The only lines `batch --no-ocr` without terms may print.
+BATCH_LINE = re.compile(
+    r"^(anonimizador batch: \d+ original\(s\), 0 term\(s\), no OCR|"
+    r"anonimizador batch: warning: no terms file: .*|"
+    r"anonimizador batch: index written to .*-anonimizer\.md|"
+    r"\[\d+\] original: (ok|FOUND)|\[\d+\] anonymized: pending \(stage 2\)|"
+    r"    possible identifiers \(patterns\):( [a-z]+=\d+)+)$"
+)
+
+
+def test_the_batch_console_on_real_exams_reveals_no_file_name(tmp_path, capsys):
+    """The batch prints positions and counts only; the index, outside the repository,
+    links every original."""
+    out = tmp_path / "anonymized"
+    code = main(["batch", "--no-ocr", "--out", str(out), str(EXAMS)])
+    console = capsys.readouterr().out
+    assert code == EXIT_OK
+    # The index path is the test's own temporary directory: drop it before the check.
+    check_report_privacy(console.replace(str(out), "<out>"), name_words(), BATCH_LINE)
+    [index] = out.glob("*-anonimizer.md")
+    pdfs = [p for p in EXAMS.iterdir() if p.suffix.lower() == ".pdf"]
+    rows = [line for line in index.read_text(encoding="utf-8").splitlines() if line[:2] == "| "]
+    if len(rows) != len(pdfs) + 1:
+        pytest.fail(f"the index has {len(rows) - 1} rows for {len(pdfs)} exams", pytrace=False)

@@ -152,8 +152,11 @@ def count_patterns(
 
 
 def committable(path: str) -> bool:
-    """True when `path` lies in a git work tree and git does not ignore it."""
+    """True when `path` lies in a git work tree and git does not ignore it. The path
+    need not exist yet: git runs from its nearest existing directory."""
     directory = os.path.dirname(os.path.abspath(path))
+    while not os.path.isdir(directory) and os.path.dirname(directory) != directory:
+        directory = os.path.dirname(directory)
     inside = subprocess.run(
         ["git", "-C", directory, "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
