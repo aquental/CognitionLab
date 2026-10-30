@@ -158,3 +158,11 @@ Codex rounds 1–3 and Antigravity round 1 (with the `rust-dev` plugin), from ba
 | Codex | CF-2 | low | `HfError::Lock` turned the `io::Error` into a string and lost the source chain | Valid. `#[source] source: io::Error`, still shown in the message because adapter build errors keep only the message |
 | Codex | CF-3 | medium | The CF-1 fallback skipped the lock whenever the lock file could not be created, though a cache can deny `.locks` and still accept downloads | Valid. The lock is an advisory lock on the hub cache directory itself, opened read-only; only a cache directory that cannot be created runs without it |
 
+**CI result.** PR #11, run 40996386014 on `06b64c8`, started with a cold Hugging Face cache ("Cache not found for input keys: hf-d73eb2d5…"), the case that failed on `main`. Every job passed:
+
+- `fmt, clippy matrix, unit + BDD`: 166 unit tests.
+- New step, lib tests with the local engines: 171, including the six `hf` tests, which never ran in CI before.
+- Integration: 18 of 18 in 815 s, with no `Cache lock timed out` in the log.
+
+The job then saved the model cache. A local run of the whole integration suite with an empty cache also passed 18 of 18.
+
