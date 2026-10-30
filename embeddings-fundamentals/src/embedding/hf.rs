@@ -64,12 +64,9 @@ pub enum HfError {
     },
 }
 
-/// Serializes downloads within the process. The file lock in [`exclusive`] alone is not
-/// enough: where it is a `fcntl` lock it belongs to the process, not to one thread.
+/// Serializes downloads within the process. The directory lock in [`exclusive`] alone is
+/// not enough: where it is a `fcntl` lock it belongs to the process, not to one thread.
 static FETCH: Mutex<()> = Mutex::new(());
-
-/// Lock file, under the hub cache's own `.locks` directory, held while models download.
-const LOCK_FILE: &str = "embeddings-fundamentals.lock";
 
 /// Attempts per file while a process outside this crate holds the blob lock (about 5 s
 /// each).
@@ -82,60 +79,44 @@ const LOCK_ATTEMPTS: u32 = 120;
 /// the ones EmbedAnything makes itself. Blocking: call it on the blocking pool, and never
 /// from inside `fetch`, which would wait for itself.
 ///
-/// A cache this process cannot write needs no lock file of its own: an existing one is
-/// locked read-only, and without one `fetch` runs under the in-process guard alone, since
-/// the process cannot download into that cache either.
+/// The lock is an advisory lock on the hub cache directory itself, opened read-only, so
+/// every process that can read the cache takes the same lock, whether or not it can
+/// write there.
 ///
 /// # Errors
 ///
-/// Returns [`HfError::Lock`] when the lock file cannot be opened or locked.
+/// Returns [`HfError::Lock`] when the cache directory cannot be created, opened, or
+/// locked.
 pub fn exclusive<T>(fetch: impl FnOnce() -> T) -> Result<T, HfError> {
-    exclusive_at(&hub_cache().join(".locks").join(LOCK_FILE), fetch)
+    exclusive_at(&hub_cache(), fetch)
 }
 
-fn exclusive_at<T>(lock: &Path, fetch: impl FnOnce() -> T) -> Result<T, HfError> {
+fn exclusive_at<T>(cache: &Path, fetch: impl FnOnce() -> T) -> Result<T, HfError> {
     let fail = |source: std::io::Error| HfError::Lock {
-        path: lock.to_owned(),
+        path: cache.to_owned(),
         source,
     };
     // A poisoned guard only means another download panicked; the cache is still valid.
     let _guard = FETCH.lock().unwrap_or_else(PoisonError::into_inner);
-    // Closing the file (it drops before the guard) releases the lock.
-    let file = open_lock(lock).map_err(fail)?;
-    if let Some(file) = &file {
-        file.lock().map_err(fail)?;
+    let dir = match std::fs::create_dir_all(cache) {
+        Ok(()) => Some(std::fs::File::open(cache).map_err(fail)?),
+        // A cache directory that does not exist and cannot be created holds no model and
+        // cannot receive one, so there is no download to serialize across processes.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            None
+        }
+        Err(e) => return Err(fail(e)),
+    };
+    // Closing the directory (it drops before the guard) releases the lock.
+    if let Some(dir) = &dir {
+        dir.lock().map_err(fail)?;
     }
     Ok(fetch())
-}
-
-/// Opens (or creates) the lock file; read-only when the cache cannot be written, and
-/// `None` when there is no lock file and none can be created.
-fn open_lock(lock: &Path) -> std::io::Result<Option<std::fs::File>> {
-    let read_only = |e: &std::io::Error| {
-        matches!(
-            e.kind(),
-            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
-        )
-    };
-    let created = lock
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(lock)
-        });
-    match created {
-        Ok(file) => Ok(Some(file)),
-        Err(e) if read_only(&e) => match std::fs::File::open(lock) {
-            Ok(file) => Ok(Some(file)),
-            Err(e) if read_only(&e) || e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        },
-        Err(e) => Err(e),
-    }
 }
 
 /// Downloads `files` of `model_id` at `revision` (or reuses them from the Hugging Face
@@ -353,16 +334,22 @@ mod tests {
         path
     }
 
+    /// Whether another process could lock `cache` now: a separate open of the directory
+    /// is what another process would have.
+    fn is_free(cache: &Path) -> Result<(), std::fs::TryLockError> {
+        std::fs::File::open(cache).expect("open").try_lock()
+    }
+
     #[test]
     fn exclusive_fetches_run_one_at_a_time() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let dir = tempfile::tempdir().expect("tmp");
-        let lock = dir.path().join("locks").join(LOCK_FILE);
+        let cache = dir.path().join("hub");
         let (running, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
         std::thread::scope(|scope| {
             for _ in 0..4 {
                 scope.spawn(|| {
-                    exclusive_at(&lock, || {
+                    exclusive_at(&cache, || {
                         let now = running.fetch_add(1, Ordering::SeqCst) + 1;
                         most.fetch_max(now, Ordering::SeqCst);
                         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -376,17 +363,15 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_lock_file_is_held_while_fetching_and_released_after() {
-        // Another process opens the lock file on its own, as `other` does here.
+    fn the_cache_is_locked_while_fetching_and_released_after() {
         let dir = tempfile::tempdir().expect("tmp");
-        let lock = dir.path().join("locks").join(LOCK_FILE);
-        let other = || std::fs::File::open(&lock).expect("open").try_lock();
-        let during = exclusive_at(&lock, other).expect("lock");
+        let cache = dir.path().join("hub");
+        let during = exclusive_at(&cache, || is_free(&cache)).expect("lock");
         assert!(
             matches!(during, Err(std::fs::TryLockError::WouldBlock)),
             "another process could take the lock mid-fetch: {during:?}"
         );
-        assert!(other().is_ok(), "the lock outlives the fetch");
+        assert!(is_free(&cache).is_ok(), "the lock outlives the fetch");
     }
 
     #[cfg(unix)]
@@ -397,32 +382,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_cache_that_cannot_be_written_is_read_without_a_lock_file_of_its_own() {
+    fn a_cache_that_cannot_be_written_is_still_locked() {
+        // CF-1 and CF-3: no write is needed to take the lock, so a read-only cache loads
+        // and every process that can read the cache is serialized.
         let dir = tempfile::tempdir().expect("tmp");
         let cache = dir.path().join("hub");
         std::fs::create_dir(&cache).expect("cache");
-        let lock = cache.join("locks").join(LOCK_FILE);
         set_mode(&cache, 0o555);
-        let fetched = exclusive_at(&lock, || "cached");
+        let during = exclusive_at(&cache, || is_free(&cache));
         set_mode(&cache, 0o755);
-        assert_eq!(fetched.expect("a read-only cache still reads"), "cached");
+        assert!(
+            matches!(during, Ok(Err(std::fs::TryLockError::WouldBlock))),
+            "the read-only cache was not locked: {during:?}"
+        );
     }
 
     #[cfg(unix)]
     #[test]
-    fn an_existing_lock_file_is_locked_even_when_it_cannot_be_written() {
+    fn a_cache_that_cannot_be_created_is_fetched_without_a_lock() {
         let dir = tempfile::tempdir().expect("tmp");
-        let lock = dir.path().join("locks").join(LOCK_FILE);
-        std::fs::create_dir(dir.path().join("locks")).expect("locks");
-        std::fs::write(&lock, "").expect("lock file");
-        set_mode(&lock, 0o444);
-        let other = || std::fs::File::open(&lock).expect("open").try_lock();
-        let during = exclusive_at(&lock, other);
-        set_mode(&lock, 0o644);
-        assert!(
-            matches!(during, Ok(Err(std::fs::TryLockError::WouldBlock))),
-            "the read-only lock file was not locked: {during:?}"
-        );
+        set_mode(dir.path(), 0o555);
+        let fetched = exclusive_at(&dir.path().join("hub"), || "cached");
+        set_mode(dir.path(), 0o755);
+        assert_eq!(fetched.expect("nothing can be downloaded there"), "cached");
     }
 
     #[test]
@@ -430,7 +412,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let file = dir.path().join("file");
         std::fs::write(&file, "").expect("file");
-        let failed = exclusive_at(&file.join(LOCK_FILE), || ()).expect_err("not a directory");
+        let failed = exclusive_at(&file.join("hub"), || ()).expect_err("not a directory");
         let source =
             std::error::Error::source(&failed).and_then(|e| e.downcast_ref::<std::io::Error>());
         assert!(
