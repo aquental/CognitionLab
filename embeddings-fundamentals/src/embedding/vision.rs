@@ -328,8 +328,9 @@ pub async fn load(
                     .to_owned(),
             ));
         }
-        let embedder =
-            ClipEmbedder::new(id.clone(), Some(&rev), None).map_err(|e| fail(e.to_string()))?;
+        // EmbedAnything downloads the weights itself, so it runs under the cache lock.
+        let embedder = hf::exclusive(|| ClipEmbedder::new(id.clone(), Some(&rev), None))?
+            .map_err(|e| fail(e.to_string()))?;
         if !embedder.model.supports_text() {
             return Err(fail("the checkpoint has no text tower".to_owned()));
         }

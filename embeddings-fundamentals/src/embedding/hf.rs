@@ -4,7 +4,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
@@ -52,56 +52,102 @@ pub enum HfError {
         /// Configured limit.
         configured: usize,
     },
+    /// The hub cache lock that serializes model downloads could not be taken.
+    #[error("cannot lock {path}: {reason}")]
+    Lock {
+        /// Lock file.
+        path: PathBuf,
+        /// Reason.
+        reason: String,
+    },
 }
 
-/// Serializes downloads within the process: hf-hub's file lock gives up after about
-/// five seconds instead of waiting for a concurrent download of the same blob.
+/// Serializes downloads within the process. The file lock in [`exclusive`] alone is not
+/// enough: where it is a `fcntl` lock it belongs to the process, not to one thread.
 static FETCH: Mutex<()> = Mutex::new(());
 
-/// Attempts per file while another process holds the blob lock (about 5 s each).
+/// Lock file, under the hub cache's own `.locks` directory, held while models download.
+const LOCK_FILE: &str = "embeddings-fundamentals.lock";
+
+/// Attempts per file while a process outside this crate holds the blob lock (about 5 s
+/// each).
 const LOCK_ATTEMPTS: u32 = 120;
 
-/// Downloads `files` of `model_id` at `revision` (or reuses them from the Hugging Face
-/// cache), in order. Blocking: call it on the blocking pool.
+/// Runs `fetch` while no other model download of this process, or of another process of
+/// this crate sharing the hub cache, runs. hf-hub gives up on its per-blob lock after a
+/// few seconds (0.5: about 5 s; 1.0, inside EmbedAnything: 10 s) instead of waiting for a
+/// concurrent download of the same blob, so every download goes through here, including
+/// the ones EmbedAnything makes itself. Blocking: call it on the blocking pool, and never
+/// from inside `fetch`, which would wait for itself.
 ///
 /// # Errors
 ///
-/// Returns [`HfError::Fetch`] naming the first file that cannot be fetched.
+/// Returns [`HfError::Lock`] when the lock file cannot be opened or locked.
+pub fn exclusive<T>(fetch: impl FnOnce() -> T) -> Result<T, HfError> {
+    exclusive_at(&hub_cache().join(".locks").join(LOCK_FILE), fetch)
+}
+
+fn exclusive_at<T>(lock: &Path, fetch: impl FnOnce() -> T) -> Result<T, HfError> {
+    let fail = |e: std::io::Error| HfError::Lock {
+        path: lock.to_owned(),
+        reason: e.to_string(),
+    };
+    // A poisoned guard only means another download panicked; the cache is still valid.
+    let _guard = FETCH.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(dir) = lock.parent() {
+        std::fs::create_dir_all(dir).map_err(fail)?;
+    }
+    // Closing the file (it drops before the guard) releases the lock.
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock)
+        .map_err(fail)?;
+    file.lock().map_err(fail)?;
+    Ok(fetch())
+}
+
+/// Downloads `files` of `model_id` at `revision` (or reuses them from the Hugging Face
+/// cache), in order, under [`exclusive`]. Blocking: call it on the blocking pool.
+///
+/// # Errors
+///
+/// Returns [`HfError::Fetch`] naming the first file that cannot be fetched, or
+/// [`HfError::Lock`].
 pub fn download(model_id: &str, revision: &str, files: &[&str]) -> Result<Vec<PathBuf>, HfError> {
     let fail = |file: &str, reason: String| HfError::Fetch {
         model: model_id.to_owned(),
         file: file.to_owned(),
         reason,
     };
-    // A poisoned guard only means another download panicked; the cache is still valid.
-    let _guard = FETCH
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .with_progress(false)
-        .build()
-        .map_err(|e| fail("*", e.to_string()))?;
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        model_id.to_owned(),
-        hf_hub::RepoType::Model,
-        revision.to_owned(),
-    ));
-    files
-        .iter()
-        .map(|file| {
-            let mut attempt = 1;
-            loop {
-                match repo.get(file) {
-                    Err(hf_hub::api::sync::ApiError::LockAcquisition(_))
-                        if attempt < LOCK_ATTEMPTS =>
-                    {
-                        attempt += 1;
+    exclusive(|| {
+        let api = hf_hub::api::sync::ApiBuilder::from_env()
+            .with_progress(false)
+            .build()
+            .map_err(|e| fail("*", e.to_string()))?;
+        let repo = api.repo(hf_hub::Repo::with_revision(
+            model_id.to_owned(),
+            hf_hub::RepoType::Model,
+            revision.to_owned(),
+        ));
+        files
+            .iter()
+            .map(|file| {
+                let mut attempt = 1;
+                loop {
+                    match repo.get(file) {
+                        Err(hf_hub::api::sync::ApiError::LockAcquisition(_))
+                            if attempt < LOCK_ATTEMPTS =>
+                        {
+                            attempt += 1;
+                        }
+                        other => return other.map_err(|e| fail(file, e.to_string())),
                     }
-                    other => return other.map_err(|e| fail(file, e.to_string())),
                 }
-            }
-        })
-        .collect()
+            })
+            .collect()
+    })?
 }
 
 /// Hugging Face hub cache directory: `$HF_HUB_CACHE`, `$HF_HOME/hub`, or
@@ -275,6 +321,42 @@ mod tests {
         let path = dir.join("config.json");
         std::fs::write(&path, json).expect("write");
         path
+    }
+
+    #[test]
+    fn exclusive_fetches_run_one_at_a_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().expect("tmp");
+        let lock = dir.path().join("locks").join(LOCK_FILE);
+        let (running, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    exclusive_at(&lock, || {
+                        let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                        most.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        running.fetch_sub(1, Ordering::SeqCst);
+                    })
+                    .expect("lock");
+                });
+            }
+        });
+        assert_eq!(most.into_inner(), 1, "two fetches overlapped");
+    }
+
+    #[test]
+    fn the_cache_lock_file_is_held_while_fetching_and_released_after() {
+        // Another process opens the lock file on its own, as `other` does here.
+        let dir = tempfile::tempdir().expect("tmp");
+        let lock = dir.path().join("locks").join(LOCK_FILE);
+        let other = || std::fs::File::open(&lock).expect("open").try_lock();
+        let during = exclusive_at(&lock, other).expect("lock");
+        assert!(
+            matches!(during, Err(std::fs::TryLockError::WouldBlock)),
+            "another process could take the lock mid-fetch: {during:?}"
+        );
+        assert!(other().is_ok(), "the lock outlives the fetch");
     }
 
     #[test]
