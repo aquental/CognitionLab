@@ -1,0 +1,28 @@
+name: anonimizador
+
+on:
+  push:
+    branches: [main]
+    paths: ["anonimizador/**", ".github/workflows/anonimizador.yml"]
+  pull_request:
+    paths: ["anonimizador/**", ".github/workflows/anonimizador.yml"]
+
+defaults:
+  run:
+    working-directory: anonimizador
+
+jobs:
+  check:
+    name: ruff, pytest (with poppler + tesseract)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install poppler and tesseract
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-por
+      - uses: astral-sh/setup-uv@v6
+      - name: Sync
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: "Tests (the real-exam checks skip themselves: the exams never reach CI)"
+        run: uv run pytest
