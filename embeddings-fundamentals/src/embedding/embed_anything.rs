@@ -123,11 +123,14 @@ pub async fn load(
         reason,
     };
     let (model, rev) = (model_id.to_owned(), revision.clone());
+    // EmbedAnything downloads the weights itself, so it runs under the cache lock.
     let embedder = tokio::task::spawn_blocking(move || {
-        Embedder::from_pretrained_hf(&model, Some(&rev), None, None, Some(Pooling::Mean))
+        hf::exclusive(|| {
+            Embedder::from_pretrained_hf(&model, Some(&rev), None, None, Some(Pooling::Mean))
+        })
     })
     .await
-    .map_err(|e| model_error(e.to_string()))?
+    .map_err(|e| model_error(e.to_string()))??
     .map_err(|e| model_error(e.to_string()))?;
     // Tokenizer deserialization and config reads are blocking file work (C2-8).
     let (model, rev) = (model_id.to_owned(), revision.clone());

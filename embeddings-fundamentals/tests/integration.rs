@@ -340,6 +340,70 @@ async fn embed_anything_always_enforces_a_finite_limit_within_the_model() {
     );
 }
 
+/// Builds the engine of `config_file` while this test holds the hub cache lock and
+/// checks that the build waits for it. Cold-cache CI runs failed when parallel tests
+/// loaded the same model and EmbedAnything's own downloads bypassed the lock, so
+/// hf-hub's blob lock timed out ("Cache lock timed out").
+#[cfg(feature = "engine-embed-anything")]
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a failed step must fail the calling test"
+)]
+async fn the_build_waits_for_the_cache_lock(config_file: &str) {
+    use embeddings_fundamentals::config::ExperimentConfig;
+    use embeddings_fundamentals::embedding::hf;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config/experiments")
+        .join(config_file);
+    let engine = ExperimentConfig::load(&path).expect("config").engine;
+    // A warm cache, so a cold download cannot pass for waiting, and the time of a warm
+    // build: one that skipped the lock would finish well within three times that.
+    embeddings_fundamentals::adapters::build(&engine)
+        .await
+        .expect("warm the cache");
+    let started = std::time::Instant::now();
+    embeddings_fundamentals::adapters::build(&engine)
+        .await
+        .expect("warm build");
+    let window = started.elapsed() * 3 + std::time::Duration::from_secs(2);
+    let (held, is_held) = std::sync::mpsc::channel();
+    let (release, is_released) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        hf::exclusive(|| {
+            held.send(()).expect("held");
+            is_released.recv().expect("release");
+        })
+    });
+    is_held.recv().expect("the lock is held");
+    let build = tokio::spawn(async move {
+        embeddings_fundamentals::adapters::build(&engine)
+            .await
+            .is_ok()
+    });
+    tokio::time::sleep(window).await;
+    let waited = !build.is_finished();
+    release.send(()).expect("release");
+    holder.join().expect("holder").expect("lock");
+    assert!(
+        waited,
+        "{config_file}: the build ran while the cache lock was held"
+    );
+    assert!(
+        build.await.expect("join"),
+        "{config_file}: the build failed once the lock was released"
+    );
+}
+
+#[cfg(feature = "engine-embed-anything")]
+#[tokio::test]
+#[ignore = "requires RUN_INTEGRATION=1 and downloads the pinned model"]
+async fn embed_anything_text_loads_wait_for_the_cache_lock() {
+    // The image adapter is not checked here: its own tokenizer download waits for the
+    // lock too, so its build would wait even if the weight load skipped it.
+    require_integration();
+    the_build_waits_for_the_cache_lock("baseline-text-embed-anything.toml").await;
+}
+
 #[cfg(any(feature = "engine-fastembed", feature = "engine-openai"))]
 #[expect(
     clippy::expect_used,
