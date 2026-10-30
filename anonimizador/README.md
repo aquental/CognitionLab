@@ -69,6 +69,23 @@ How to read the report:
 
 Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error, a missing tool or OCR language, or a file with an unreadable place. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR. `--timeout` (default 600 s) bounds each tool run. `--dpi` (up to 2400) and `--timeout` (up to 86400 s) must be whole numbers from 1.
 
+## `anonimizador batch`
+
+Runs the anonymization steps over every original in a directory and indexes the run:
+
+```bash
+uv run anonimizador batch --terms ~/private/terms.txt --out <outputs> <originals>
+scripts/anonymize-sample-exams.sh --terms ~/private/terms.txt   # the owner's sample exams
+```
+
+- **Originals** are the PDF, PNG, and JPEG files directly in the source directory; subdirectories are not walked, so the outputs can live under it. They are read, never written.
+- **Each anonymized copy** gets a neutral name from a digest of its original's bytes, `exam-<digest>.pdf`, never from its name.
+- **The index**, `<outputs>/<YYYYMMDD-HHMMSS>-anonimizer.md`, has one row per original. It links the original, its anonymized copy, the `verify` log of each, and the console output of the whole run (`<outputs>/logs/<YYYYMMDD-HHMMSS>/`).
+- **The index names the originals**, so `--out` must be a place git cannot commit: a git-ignored directory or one outside any repository. The script writes to `../embeddings-fundamentals/tests/sample-exams/anonymized/`, which git ignores. The console itself names originals by position and prints counts only.
+- **Until stage 2**, nothing redacts: each copy is marked `pending (stage 2)`, and only the originals are verified. `FOUND` on an original is the count before anonymization.
+
+It takes the reading options of `verify` (`--terms`, `--no-ocr`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). Exit status: 0 when every step ran, 2 when the run cannot start or a file has an unreadable place.
+
 ## Development
 
 ```bash
