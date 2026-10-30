@@ -153,3 +153,42 @@ def test_laboratory_values_are_left_alone():
 def test_a_detection_holds_no_text():
     [d] = detect_reading("ocr", [(1, line("Paciente:", "Sicrano"))], [], True)
     assert d == Detection(1, (100, 0, 190, 15), "label", "labels", "ocr")
+
+
+def placed(*words: tuple[str, int], number: int = 0, height: int = 15) -> list[Word]:
+    """Words of one line at the given left edges, each 90 px wide."""
+    top = 40 * number
+    return [Word(t, (x, top, x + 90, top + height), ("ocr", 1, 1, number)) for t, x in words]
+
+
+def test_a_name_label_without_a_colon_takes_the_name_beside_it():
+    # A form that prints "Nome" and the name, then a wide gap to the next field.
+    words = placed(
+        ("Nome", 0), ("Sicrano", 100), ("Inventado", 200), ("Data", 900), ("05/06", 1000)
+    )
+    assert found(words, remove_dates=False) == {"label": {"Sicrano", "Inventado"}}
+    assert found(line("Nome", "do", "paciente", "Beltrano")) == {"label": {"Beltrano"}}
+
+
+def test_a_name_label_without_a_colon_heads_the_column_of_the_name():
+    heading = placed(("Nome", 0), ("Data", 600), ("Altura", 900), number=0)
+    values = placed(("Sicrano", 0), ("Inventado", 100), ("05/06/2021", 600), number=1)
+    assert found(heading + values, remove_dates=False) == {"label": {"Sicrano", "Inventado"}}
+
+
+def test_a_name_label_without_a_colon_far_from_its_name_still_takes_it():
+    words = placed(("Nome", 0), ("Sicrano", 700), ("Inventado", 800))
+    assert found(words) == {"label": {"Sicrano", "Inventado"}}
+
+
+def test_a_name_word_that_is_no_bare_label_is_left_alone():
+    assert found(line("o", "nome", "do", "exame", "consta")) == {}
+    assert found(line("Nomenclatura", "padrao")) == {}
+    assert found(line("Nome", "do", "exame:", "Relatorio")) == {}
+    # With a colon, the colon label takes it.
+    assert found(line("Nome:", "Sicrano")) == {"label": {"Sicrano"}}
+
+
+def test_a_column_value_must_start_under_its_heading():
+    heading = placed(("Nome", 0), number=0)
+    assert found(heading + placed(("Hemoglobina", 600), number=1)) == {}

@@ -95,7 +95,7 @@ For each original, in order:
 3. **Detect identifiers** in both readings:
    - the owner's terms, matched as `verify` counts them;
    - CPF and CNS with valid check digits, phones, e-mails, CEPs, and dates (`--keep-dates` keeps dates);
-   - the value after a field label: `Paciente:`, `Nome:`, `Mãe:`, `Prontuário:`, `Pedido:`, `Médico:`, `Convênio:`, the date-of-birth labels (`Dt. Nasc.:`), and similar labels with a colon. Council and document numbers are taken after `CRM`, `CPF`, `RG`, and `CNS`, colon or not.
+   - the value after a field label: `Paciente:`, `Nome:`, `Mãe:`, `Prontuário:`, `Pedido:`, `Médico:`, `Convênio:`, the date-of-birth labels (`Dt. Nasc.:`), and similar labels with a colon. Council and document numbers are taken after `CRM`, `CPF`, `RG`, and `CNS`, colon or not. A `Nome` label that starts its line needs no colon: the name beside it is taken up to a wide gap, and when there is none, the name under it, as under a column heading.
 4. **Redact by rasterizing.** A black box is painted over every detected word. The copy is rebuilt from the page images alone, so no text layer, covered text, metadata, or earlier revision of the original survives. A PDF becomes a scanned PDF, with its pages stored losslessly (JPEG artifacts change what OCR reads), and an image becomes a PNG.
 5. **Verify the copy** with `verify`, a separate code path (R8). A term still found sends the copy back to review, and the run exits 1.
 
@@ -113,7 +113,7 @@ For each original, in order:
 
 The copy is checked by the same OCR engine that found the words, so a word that OCR misreads in both passes is missed by both. **A person still reviews every copy.**
 
-It takes the reading options of `verify` (`--terms`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). It refuses `--no-ocr`: a copy holds only pixels, and only OCR reads them. On a copy, `verify` can show e-mail or `crm` pattern hints taken from its pixel bytes: noise, not text. Exit status:
+It takes the reading options of `verify` (`--terms`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). It refuses `--no-ocr`: a copy holds only pixels, and only OCR reads them. On a copy, `verify` can show pattern hints (CPF, CNS, phone, e-mail, date) taken from its pixel bytes, by the hundred on a large page: noise, not text, since the copy has no text layer. Only `--strict-patterns` makes them fail it. Exit status:
 - 0: every copy was written and verifies clean;
 - 1: a copy still holds something `verify` finds;
 - 2: the run cannot start, or a file or step failed.
