@@ -96,13 +96,18 @@ class Totals:
 
 @dataclass
 class Run:
+    """Where one run writes: its own new directory for the copies and the logs, and the
+    index beside it. Nothing that exists before the run is ever written (Codex CB-1)."""
+
     stamp: str
     out: Path
+    copies: Path = field(init=False)
     logs: Path = field(init=False)
     report: Path = field(init=False)
 
     def __post_init__(self) -> None:
-        self.logs = self.out / "logs" / self.stamp
+        self.copies = self.out / self.stamp
+        self.logs = self.copies / "logs"
         self.report = self.out / f"{self.stamp}{REPORT_SUFFIX}"
 
 
@@ -143,24 +148,47 @@ def originals(source: Path) -> list[Exam]:
         raise VerifyError(f"cannot list the originals ({e.strerror or type(e).__name__})") from None
     if not paths:
         raise VerifyError("no PDF, PNG, or JPEG original to anonymize")
-    return [Exam(n, p, neutral_name(p)) for n, p in enumerate(paths, start=1)]
+    exams = []
+    taken: set[str] = set()
+    for n, path in enumerate(paths, start=1):
+        neutral = neutral_name(path)
+        if neutral in taken:
+            # Two originals with the same bytes: each copy gets its own name.
+            stem, suffix = os.path.splitext(neutral)
+            neutral = f"{stem}-{n}{suffix}"
+        taken.add(neutral)
+        exams.append(Exam(n, path, neutral))
+    return exams
 
 
 def start(out: Path, now: datetime) -> Run:
-    """Makes the output and log directories, refusing any place git could commit:
-    the index and the logs name the originals."""
+    """Makes the run's new directories, refusing any place git could commit, by its
+    path or where its links lead: the index and the logs name the originals (Codex
+    CB-2)."""
     run = Run(now.strftime(STAMP_FORMAT), out)
-    if committable(str(run.report)) or committable(str(run.logs / "console.txt")):
+    places = [run.report, run.logs / "console.txt"]
+    if any(committable(str(p)) or committable(os.path.realpath(p)) for p in places):
         raise VerifyError(
             "the output directory is inside a git work tree and not ignored; "
             "the index names the originals, so keep it where git cannot commit it"
         )
-    run.logs.mkdir(parents=True, exist_ok=False)
+    if run.report.exists() or run.report.is_symlink():
+        raise VerifyError("an index of this second already exists; run again")
+    out.mkdir(parents=True, exist_ok=True)
+    run.copies.mkdir()
+    run.logs.mkdir()
     return run
 
 
+def write_new(path: Path, text: str) -> None:
+    """Writes a file that must not exist yet, so no existing file or link is written
+    through."""
+    with path.open("x", encoding="utf-8") as f:
+        f.write(text)
+
+
 def write_log(path: Path, lines: list[str]) -> None:
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_new(path, "\n".join(lines) + "\n")
 
 
 def verify_one(
@@ -201,6 +229,9 @@ def anonymize(
     for line in labelled(lines, n, "original"):
         console.print(line)
     outcome.original_status, outcome.original_log = result.status(options.strict_patterns), log
+    # An original that cannot be read whole is an error of the run, even when its copy
+    # verifies clean (Codex CB-8).
+    unreadable = bool(result.errors)
     try:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -213,13 +244,12 @@ def anonymize(
                 options.dpi,
                 options.timeout,
                 pool,
-                options.use_ocr,
             )
             found = detect(pages, terms, remove_dates)
             detections = run.logs / f"{exam.log_prefix}-detections.json"
-            detections.write_text(json.dumps(as_json(found, pages), indent=1), encoding="utf-8")
+            write_new(detections, json.dumps(as_json(found, pages), indent=1))
             outcome.detections, outcome.detection_counts = detections, summary(found)
-            copy = run.out / exam.neutral
+            copy = run.copies / exam.neutral
             redact(pages, boxes_by_page(found), copy, options.dpi)
             outcome.anonymized = copy
     except (ToolError, OSError) as e:
@@ -240,7 +270,7 @@ def anonymize(
     for line in labelled(lines, n, "anonymized"):
         console.print(line)
     outcome.anonymized_status, outcome.anonymized_log = result.status(options.strict_patterns), log
-    totals.unreadable += bool(result.errors)
+    totals.unreadable += unreadable or bool(result.errors)
     totals.found += result.failed(options.strict_patterns)
     return outcome
 
@@ -319,11 +349,15 @@ def run_batch(
 ) -> Totals:
     """Runs every step over the originals in `source` and writes the copies and the index
     under `out`. Raises `VerifyError` when the run cannot start."""
+    if not options.use_ocr:
+        # The copy holds pixels only: without OCR nothing would read them, and a copy
+        # would pass unread (Codex CB-4).
+        raise VerifyError("batch needs OCR: a copy holds only pixels; drop --no-ocr")
     exams = originals(source)
     now = now or datetime.now()
     run = start(out, now)
     console_log = run.logs / "console.txt"
-    mode = "no OCR" if not options.use_ocr else f"OCR at {options.dpi} dpi ({options.lang})"
+    mode = f"OCR at {options.dpi} dpi ({options.lang})"
     header = [
         f"- Started: {now.isoformat(timespec='seconds')}",
         f"- Originals: {len(exams)}; terms: {len(terms)}; {mode}; "
@@ -332,7 +366,7 @@ def run_batch(
     if not terms:
         header.append(f"- **{NO_TERMS}**")
     totals = Totals(len(exams))
-    with console_log.open("w", encoding="utf-8") as log:
+    with console_log.open("x", encoding="utf-8") as log:
         console = Console(sys.stdout, log)
         console.print(f"anonimizador batch: {len(exams)} original(s), {len(terms)} term(s), {mode}")
         if not terms:
@@ -342,11 +376,12 @@ def run_batch(
         ]
         header.append(f"- Finished: {datetime.now().isoformat(timespec='seconds')}")
         report = index(run, outcomes, header, console_log, remove_dates)
-        run.report.write_text(report, encoding="utf-8")
+        write_new(run.report, report)
         console.print(
             f"anonimizador batch: {sum(o.anonymized_status == 'ok' for o in outcomes)} of "
             f"{totals.exams} copy(ies) verified ok, {totals.found} with something left, "
             f"{totals.unreadable} with an error"
         )
-        console.print(f"anonimizador batch: index written to {run.report.resolve()}")
+        # The name only: the directories above it can name a person (Codex CB-3).
+        console.print(f"anonimizador batch: index written: {run.report.name}")
     return totals
