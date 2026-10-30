@@ -80,6 +80,8 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-${{ hashFiles('embeddings-fundamentals/config/experiments/**') }}
+      - name: Unit tests of the local-engine modules
+        run: cargo test --features engine-embed-anything,engine-fastembed --lib
       - name: Integration tests
         env:
           RUN_INTEGRATION: "1"
