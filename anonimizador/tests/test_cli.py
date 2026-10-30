@@ -1,0 +1,408 @@
+"""End-to-end `anonimizador verify` on synthetic PDFs, with the real tools."""
+
+import os
+import zlib
+from pathlib import Path
+
+import pytest
+from conftest import FIXTURES, requires_tools
+from make_covered_name_pdf import build_pdf, covered_name_pdf
+
+from anonimizador.cli import EXIT_FOUND, EXIT_OK, EXIT_USAGE, main
+
+COVERED = FIXTURES / "covered-name.pdf"
+SECRETS = ("Fulano", "Ficticio", "123.456", "789", "covered-name")
+
+
+@pytest.fixture
+def terms(outside_repo: Path) -> Path:
+    path = outside_repo / "terms.txt"
+    path.write_text("# invented identifiers\nFulano Ficticio\n123.456.789-09\n", encoding="utf-8")
+    return path
+
+
+def test_the_committed_fixture_is_what_the_generator_writes():
+    assert COVERED.read_bytes() == covered_name_pdf()
+
+
+@requires_tools
+def test_a_covered_name_is_counted_and_flagged_without_being_printed(terms, capsys):
+    code = main(["verify", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert code == EXIT_FOUND, text
+    # The name is in the text layer, the metadata, and the raw bytes, not on the page.
+    assert "term 1: metadata=1 text=1 raw=2\n" in text
+    assert "hint: term 1 is in the file but not visible" in text
+    # The CPF is visible: OCR finds it, so no hint.
+    assert "term 2: text=1 ocr=1 raw=1\n" in text
+    assert "hint: term 2" not in text
+    assert "possible identifiers (patterns): cpf=1" in text
+    for secret in SECRETS:
+        assert secret not in text, f"the output reveals {secret}"
+
+
+@requires_tools
+def test_a_really_redacted_pdf_passes(terms, outside_repo, capsys):
+    clean = outside_repo / "clean.pdf"
+    clean.write_bytes(
+        build_pdf(
+            b"BT /F1 12 Tf 72 730 Td (Paciente: [REMOVIDO]) Tj ET\n"
+            b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n",
+            b"/Title (Laudo sintetico)",
+        )
+    )
+    code = main(["verify", "--terms", str(terms), str(clean)])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    assert out.splitlines()[1] == "[1] ok"
+
+
+@requires_tools
+def test_file_names_appear_only_on_request(terms, capsys):
+    main(["verify", "--no-ocr", "--terms", str(terms), str(COVERED)])
+    assert "covered-name" not in capsys.readouterr().out
+    main(["verify", "--no-ocr", "--show-names", "--terms", str(terms), str(COVERED)])
+    assert "[1] covered-name.pdf FOUND" in capsys.readouterr().out
+
+
+@requires_tools
+def test_strict_patterns_fail_on_a_pattern_alone(outside_repo, capsys):
+    pdf = outside_repo / "cpf.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (CPF: 987.654.321-00) Tj ET\n", b""))
+    assert main(["verify", "--no-ocr", str(pdf)]) == EXIT_OK
+    assert main(["verify", "--no-ocr", "--strict-patterns", str(pdf)]) == EXIT_FOUND
+    assert "987" not in capsys.readouterr().out
+
+
+def test_usage_errors_exit_2(outside_repo, capsys):
+    assert main(["verify", "--no-ocr", str(outside_repo / "missing.pdf")]) == EXIT_USAGE
+    assert "argument 1" in capsys.readouterr().err
+    (outside_repo / "notes.txt").write_text("x", encoding="utf-8")
+    assert main(["verify", "--no-ocr", str(outside_repo)]) == EXIT_USAGE
+
+
+def test_a_file_named_directly_is_checked_whatever_its_suffix(terms, outside_repo, capsys):
+    # Antigravity A0-6, refuted: a directory's other files are not the corpus, but a file
+    # named on the command line is never skipped; one that is no PDF, PNG, or JPEG
+    # image is an unread file, and the run exits 2.
+    (outside_repo / "notes.txt").write_text("x", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(outside_repo / "notes.txt")])
+    assert_unreadable(code, capsys.readouterr().out, "file: not a whole PNG or JPEG image")
+
+
+def stub(bin_dir: Path, tool: str, script: str) -> None:
+    """A fake `tool` on PATH, as a crashed, hung, or misconfigured install would be."""
+    path = bin_dir / tool
+    path.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+    path.chmod(0o755)
+
+
+LIST_LANGS = (
+    'if [ "$1" = "--list-langs" ]; then '
+    "printf 'List of available languages (2):\\neng\\npor\\n'; exit 0; fi\n"
+)
+
+
+@pytest.fixture
+def stubs(tmp_path: Path, monkeypatch) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return bin_dir
+
+
+def assert_unreadable(code: int, text: str, reason: str) -> None:
+    assert code == EXIT_USAGE, text
+    assert "[1] ERROR" in text and "[1] ok" not in text, text
+    assert f"    unreadable: {reason}" in text, text
+    assert "Traceback" not in text
+    for secret in SECRETS:
+        assert secret not in text, f"the output reveals {secret}"
+
+
+@requires_tools
+def test_a_failed_ocr_is_an_error_not_a_clean_file(terms, stubs, capsys):
+    # Regression (Grok G4-5): a tesseract that exits non-zero used to leave the OCR
+    # channel empty and the file "ok".
+    stub(stubs, "tesseract", LIST_LANGS + "exit 1\n")
+    code = main(["verify", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert_unreadable(code, out.out + out.err, "ocr: tesseract failed (exit 1)")
+
+
+@requires_tools
+def test_a_hung_tool_times_out_without_printing_the_path(terms, stubs, capsys):
+    stub(stubs, "tesseract", LIST_LANGS + "sleep 5\n")
+    code = main(["verify", "--timeout", "1", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert_unreadable(code, out.out + out.err, "ocr: tesseract timed out after 1 s")
+
+
+@requires_tools
+def test_missing_page_renders_are_an_error(terms, stubs, capsys):
+    stub(stubs, "pdftoppm", "exit 0\n")
+    code = main(["verify", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert_unreadable(code, out.out + out.err, "ocr: pdftoppm rendered 0 of 1 pages")
+
+
+@requires_tools
+def test_an_unreadable_pdf_reports_every_channel_it_could_not_read(terms, stubs, capsys):
+    # An encrypted PDF makes pdfinfo and pdftotext fail.
+    stub(stubs, "pdfinfo", "exit 1\n")
+    stub(stubs, "pdftotext", "exit 3\n")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(COVERED)])
+    text = capsys.readouterr().out
+    assert_unreadable(code, text, "metadata: pdfinfo failed (exit 1)")
+    assert "    unreadable: text: pdftotext failed (exit 3)" in text
+
+
+@requires_tools
+def test_missing_ocr_language_data_is_refused_before_any_file(terms, stubs, capsys):
+    stub(stubs, "tesseract", 'if [ "$1" = "--list-langs" ]; then echo eng; exit 0; fi\nexit 1\n')
+    assert main(["verify", "--terms", str(terms), str(COVERED)]) == EXIT_USAGE
+    out = capsys.readouterr()
+    assert "tesseract has no data for --lang language(s) 1" in out.err
+    assert out.out == ""
+
+
+@requires_tools
+def test_a_name_in_a_directory_is_searched_and_never_printed(outside_repo, capsys):
+    # Regression (Grok G4-6): only the file name used to be searched.
+    root = outside_repo / "corpus"
+    folder = root / "BELTRANO DA SILVA"
+    folder.mkdir(parents=True)
+    (folder / "lab-001.pdf").write_bytes(
+        build_pdf(b"BT /F1 12 Tf 72 700 Td (Hemoglobina 13,5 g/dL) Tj ET\n", b"")
+    )
+    terms = outside_repo / "names.txt"
+    terms.write_text("Beltrano da Silva\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(root)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: name=1\n" in out
+    assert "BELTRANO" not in out and "Beltrano" not in out
+
+
+def test_a_terms_file_that_is_not_utf8_exits_2_without_a_traceback(outside_repo, capsys):
+    # Regression (Grok G0-4): exit 1 meant "found", and the traceback showed the bytes.
+    terms = outside_repo / "terms.txt"
+    terms.write_bytes("Fulano Conceição\n".encode("latin-1"))
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    assert main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)]) == EXIT_USAGE
+    out = capsys.readouterr()
+    assert "the terms file is not UTF-8 text" in out.err
+    assert "Traceback" not in out.err and out.out == ""
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_an_unlisted_directory_fails_the_run(terms, outside_repo, capsys):
+    # Regression (Grok G0-3), end to end: a clean file beside an unreadable directory.
+    root = outside_repo / "corpus"
+    locked = root / "locked"
+    locked.mkdir(parents=True)
+    (root / "clean.pdf").write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (ok) Tj ET\n", b""))
+    locked.chmod(0)
+    try:
+        code = main(["verify", "--no-ocr", "--terms", str(terms), str(root)])
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "cannot read everything under argument 1" in out.err
+    assert "ok" not in out.out and "locked" not in out.out + out.err
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--dpi"])
+@pytest.mark.parametrize("value", ["-1", "0", "ten", "2147483648"])
+def test_a_nonpositive_number_is_a_usage_error(option, value, outside_repo, capsys):
+    # Regression (Grok G0-9, G0-31): a negative timeout raised ValueError in subprocess,
+    # and a huge one OverflowError: a traceback with exit 1 ("found").
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    with pytest.raises(SystemExit) as exit_:
+        main(["verify", "--no-ocr", option, value, str(pdf)])
+    assert exit_.value.code == EXIT_USAGE
+    err = capsys.readouterr().err
+    assert f"argument {option}: must be a whole number from 1 to" in err
+    assert "Traceback" not in err
+
+
+@requires_tools
+def test_a_leftover_hex_string_is_found_in_raw_bytes(outside_repo, capsys):
+    # Regression (Grok G0-14), end to end: an object no trailer references, as an
+    # incremental update leaves it, holding a UTF-16 hex author.
+    old = b"9 0 obj << /Author <FEFF005A0075006C0065006F> >> endobj\n"
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b"") + old)
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out
+    assert "Zuleo" not in out and "FEFF" not in out
+
+
+@requires_tools
+def test_strict_patterns_fail_on_a_pattern_in_the_name(outside_repo, capsys):
+    # Regression (Grok G0-16), end to end.
+    pdf = outside_repo / "123.456.789-09.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b""))
+    assert main(["verify", "--no-ocr", "--strict-patterns", str(pdf)]) == EXIT_FOUND
+    out = capsys.readouterr().out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_a_leftover_kerned_word_and_cpf_are_found(outside_repo, capsys):
+    # Regression (Grok G0-19, G0-21), end to end: an unreferenced old content stream
+    # draws a short name glyph by glyph, and an old object holds an unlisted CPF.
+    old = (
+        b"9 0 obj << >> stream\nBT [(Z) -2 (u) -2 (l) -2 (e) -2 (o)] TJ ET\nendstream endobj\n"
+        b"10 0 obj << /Subject (123.456.789-09) >> endobj\n"
+    )
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Assunto) Tj ET\n", b"") + old)
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "Zuleo" not in out and "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_an_image_file_is_read_like_a_pdf_in_raw_bytes(outside_repo, capsys):
+    # Regression (Grok G0-41): an image's raw bytes were read without the joins of
+    # ambiguous boundaries and without its PDF strings for patterns.
+    jpeg = outside_repo / "a.jpg"
+    # A whole JPEG (start, frame header, scan, end) whose scan data holds the text.
+    jpeg.write_bytes(
+        b"\xff\xd8\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"
+        b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
+        b"BT (Zu) Tj 7 0 Td (leo) Tj 30 0 Td (Assunto) Tj ET "
+        b"BT 72 700 Td (123) Tj 18 0 Td (.) Tj 6 0 Td (456) Tj 22 0 Td (.) Tj 6 0 Td (789) Tj"
+        b" 22 0 Td (-) Tj 6 0 Td (09) Tj ET\xff\xd9"
+    )
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\nZulea\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(jpeg)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out and "term 2" not in out
+    assert "possible identifiers (patterns): cpf=1" in out
+    assert "Zuleo" not in out and "123" not in out.replace("[1]", "")
+
+
+@requires_tools
+def test_a_leftover_word_around_a_comment_and_a_spaced_phone_are_found(outside_repo, capsys):
+    # Regression (Grok G0-44, G0-45), end to end: an unreferenced Flate stream draws a
+    # short name around a commented string and a phone whose space is drawn at a move.
+    old = zlib.compress(
+        b"BT (Zu) Tj % (XX)\n (leo) Tj ET\nBT (11) Tj 20 0 Td ( 98765-4321) Tj ET\n"
+    )
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(
+        build_pdf(b"BT /F1 12 Tf 72 700 Td (Assunto) Tj ET\n", b"")
+        + b"9 0 obj << /Filter /FlateDecode >> stream\n"
+        + old
+        + b"endstream endobj\n"
+    )
+    terms = outside_repo / "terms.txt"
+    terms.write_text("Zuleo\nZulea\n", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--strict-patterns", "--terms", str(terms), str(pdf)])
+    out = capsys.readouterr().out
+    assert code == EXIT_FOUND, out
+    assert "    term 1: raw=1\n" in out and "term 2" not in out
+    assert "possible identifiers (patterns): phone=1" in out
+    assert "Zuleo" not in out and "987" not in out and "432" not in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["verify", "one.pdf", "--no-ocr", "/private/Zuleo/two.pdf"],
+        ["Zuleo.pdf"],
+        ["verify", "--Zuleo", "one.pdf"],
+        ["verify", "--dpi", "Zuleo", "one.pdf"],
+        ["verify", "--s", "Zuleo.pdf"],
+    ],
+)
+def test_a_usage_error_never_prints_an_argument(argv, capsys):
+    # Regression (Codex C0-1): argparse printed rejected arguments, paths included.
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "error:" in err and "Zuleo" not in err and "zuleo" not in err.lower()
+
+
+@requires_tools
+def test_the_data_directory_in_the_language_list_is_no_language(terms, stubs, capsys):
+    # Regression (Codex C0-1): every word of `tesseract --list-langs` counted as a
+    # language, the header's data directory too, which was then printed.
+    header = 'List of available languages in "/private/Zuleo/tessdata/" (2):'
+    listing = f"printf '%s\\neng\\npor\\n' '{header}'"
+    stub(stubs, "tesseract", f'if [ "$1" = "--list-langs" ]; then {listing}; exit 0; fi\nexit 1\n')
+    lang = '"/private/Zuleo/tessdata/"'
+    code = main(["verify", "--lang", lang, "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "Zuleo" not in out.err + out.out
+
+
+@requires_tools
+def test_a_missing_language_is_named_by_position(terms, stubs, capsys):
+    # Regression (Codex C0-1): the language list was printed as typed.
+    stub(stubs, "tesseract", LIST_LANGS + "exit 1\n")
+    code = main(["verify", "--lang", "eng+Zuleo", "--terms", str(terms), str(COVERED)])
+    out = capsys.readouterr()
+    assert code == EXIT_USAGE
+    assert "tesseract has no data for --lang language(s) 2" in out.err
+    assert "Zuleo" not in out.err + out.out
+
+
+@requires_tools
+def test_a_stream_poppler_cannot_decode_is_an_unread_channel(terms, outside_repo, capsys):
+    # Regression (Codex C0-2): pdftotext exits 0 when it cannot decode a content stream,
+    # and only says so on stderr, so the page's text was read as empty and clean.
+    data = build_pdf(b"invalidcompressedbytes\n", b"")
+    data = data.replace(b"<< /Length 23 >>", b"<< /Length 23 /Filter /FlateDecode >>")
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(data)
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    text = capsys.readouterr().out
+    assert code == EXIT_USAGE, text
+    assert "[1] ERROR" in text and "    unreadable: text: pdftotext reported " in text, text
+    assert "flate" not in text.lower() and "Traceback" not in text
+
+
+@requires_tools
+def test_the_information_dictionary_and_the_xmp_packet_are_two_places(stubs, capsys):
+    # Regression (Codex C0-12): a name in both metadata places counted 1.
+    stub(stubs, "pdfinfo", "echo 'Author: Zuleo'; echo 'Pages: 1'\n")
+    terms = stubs.parent / "terms.txt"
+    terms.write_text("Zuleo\n", encoding="utf-8")
+    pdf = stubs.parent / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b""))
+    assert main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)]) == EXIT_FOUND
+    assert "    term 1: metadata=2\n" in capsys.readouterr().out
+
+
+@requires_tools
+def test_an_old_stream_that_cannot_be_decoded_is_an_unread_place(terms, outside_repo, capsys):
+    # Regression (Codex round 2, C0-3): a declared filter that failed on an object no
+    # page uses was silent, and Poppler never reads that object.
+    old = b"9 0 obj << /Filter /FlateDecode >> stream\ninvalidcompressedbytes\nendstream endobj\n"
+    pdf = outside_repo / "a.pdf"
+    pdf.write_bytes(build_pdf(b"BT /F1 12 Tf 72 700 Td (Laudo) Tj ET\n", b"") + old)
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(pdf)])
+    text = capsys.readouterr().out
+    assert code == EXIT_USAGE, text
+    assert "[1] ERROR" in text and "    unreadable: raw: 1 stream(s) cannot be decoded" in text
