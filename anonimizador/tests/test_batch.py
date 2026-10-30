@@ -1,16 +1,23 @@
-"""`anonimizador batch` on synthetic originals: the index, its links, and privacy."""
+"""`anonimizador batch` on synthetic originals: the redacted copies, the index, its
+links, and privacy (R5, R7, R8, R11)."""
 
+import contextlib
+import io
+import json
 import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-from conftest import requires_tools
+from conftest import requires_tools, stub
 from make_covered_name_pdf import build_pdf, covered_name_pdf
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
+import anonimizador.batch
 from anonimizador.batch import link, neutral_name, run_batch
-from anonimizador.cli import EXIT_OK, EXIT_USAGE, main
+from anonimizador.channels import run
+from anonimizador.cli import EXIT_FOUND, EXIT_OK, EXIT_USAGE, main
 from anonimizador.verify import Options
 
 # Invented originals: names with spaces and Markdown characters, as owners name files.
@@ -18,6 +25,66 @@ NAMES = ("Relatorio Fulano Ficticio.pdf", "hemograma [2] | x.pdf")
 SECRETS = ("Fulano", "Ficticio", "Relatorio", "hemograma")
 NOW = datetime(2026, 10, 30, 14, 5, 9)
 LINK = re.compile(r"\[(?:[^\]\\]|\\.)*\]\(([^)]+)\)")
+# Invented identifiers planted in every place an original can hold them: the text layer,
+# text under a drawn box, metadata, a scanned page, an image's pixels and its chunks.
+TERMS = "Fulano Ficticio\nSicrano Inventado\nBeltrano Inventado\n123.456.789-09\n"
+PLANTED = ("Fulano", "Ficticio", "Sicrano", "Beltrano", "Inventado", "98765", "exemplo")
+LABELLED = (
+    b"BT /F1 14 Tf 72 730 Td (Paciente: Beltrano Inventado) Tj ET\n"
+    b"BT /F1 14 Tf 72 700 Td (CPF 123.456.789-09   Dt. Nasc.: 01/02/1980) Tj ET\n"
+    b"BT /F1 14 Tf 72 670 Td (Telefone: \\(11\\) 98765-4321   b@exemplo.com) Tj ET\n"
+    b"BT /F1 14 Tf 72 640 Td (Hemoglobina 13,5 g/dL   CRM/SP 123456) Tj ET\n"
+)
+SCANNED_LINES = (
+    "Paciente: Sicrano Inventado",
+    "CNS 898001234567891",
+    "Hemoglobina 13,5 g/dL",
+)
+
+
+def drawn(lines: tuple[str, ...]) -> Image.Image:
+    """A white page with `lines` drawn on it, as a scanner would give it."""
+    page = Image.new("L", (1240, 600), 255)
+    draw = ImageDraw.Draw(page)
+    font = ImageFont.load_default(size=44)
+    for n, text in enumerate(lines):
+        draw.text((80, 80 + 90 * n), text, fill=0, font=font)
+    return page
+
+
+def write_originals(exams: Path) -> None:
+    exams.mkdir()
+    (exams / "Relatorio Fulano Ficticio.pdf").write_bytes(covered_name_pdf())
+    (exams / "ficha [2] | x.pdf").write_bytes(build_pdf(LABELLED, b"/Author (Beltrano Inventado)"))
+    drawn(SCANNED_LINES).save(exams / "scan Sicrano.pdf", "PDF", resolution=150.0)
+    chunks = PngImagePlugin.PngInfo()
+    chunks.add_text("Author", "Sicrano Inventado")
+    exif = Image.Exif()
+    exif[0x013B] = "Sicrano Inventado"  # Artist
+    drawn(("Sicrano Inventado", "Raio X torax")).save(
+        exams / "imagem.png", "PNG", pnginfo=chunks, exif=exif
+    )
+    (exams / "notes.txt").write_text("not an exam", encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def redacted(tmp_path_factory) -> tuple[Path, int, str]:
+    """One batch over every synthetic original, with OCR: the outputs, the exit status,
+    and the console."""
+    root = tmp_path_factory.mktemp("redacted")
+    write_originals(root / "exams")
+    (root / "terms.txt").write_text(TERMS, encoding="utf-8")
+    out = root / "exams" / "anonymized"
+    console = io.StringIO()
+    with contextlib.redirect_stdout(console), contextlib.redirect_stderr(console):
+        code = main(
+            ["batch", "--terms", str(root / "terms.txt"), "--out", str(out), str(root / "exams")]
+        )
+    return out, code, console.getvalue()
+
+
+def copies(out: Path) -> list[Path]:
+    return sorted(out.glob("exam-*"))
 
 
 @pytest.fixture
@@ -46,48 +113,127 @@ def links(report: Path) -> list[Path]:
 
 
 @requires_tools
-def test_the_index_links_every_original_and_log_and_the_console_names_none(source, terms, capsys):
-    out = source / "anonymized"
-    before = {name: (source / name).read_bytes() for name in NAMES}
-    code = main(["batch", "--no-ocr", "--terms", str(terms), "--out", str(out), str(source)])
-    console = capsys.readouterr()
-    assert code == EXIT_OK, console.out + console.err
+def test_every_copy_verifies_clean_and_keeps_what_is_not_an_identifier(redacted):
+    out, code, console = redacted
+    assert code == EXIT_OK, console
+    assert "4 of 4 copy(ies) verified ok" in console
+    assert [p.suffix for p in copies(out)].count(".png") == 1
+    for log in out.glob("logs/*/*-verify-anonymized.txt"):
+        text = log.read_text(encoding="utf-8")
+        assert text.splitlines()[0].endswith(" ok"), text
+        assert "term " not in text, text
+        # The CRM label stays (its number goes): no other pattern is left.
+        assert re.sub(r"possible identifiers \(patterns\): crm=\d+", "", text).count("=") == 0
+    # The lab value survives redaction: the boxes cover identifiers, not the page.
+    scans = [p for p in copies(out) if p.suffix == ".pdf"]
+    pages = [
+        run(["pdftoppm", "-r", "150", "-png", str(p), str(out / f"check-{p.stem}")], 60)
+        for p in scans
+    ]
+    assert pages
+    text = "".join(
+        run(["tesseract", str(png), "-", "-l", "por"], 60)
+        for png in sorted(out.glob("check-*.png"))
+    )
+    assert text.count("Hemoglobina") >= 2
 
+
+@requires_tools
+def test_a_copy_keeps_only_pixels(redacted):
+    out, _, _ = redacted
+    for copy in copies(out):
+        if copy.suffix == ".pdf":
+            assert run(["pdftotext", str(copy), "-"], 60).strip() == ""
+            info = run(["pdfinfo", str(copy)], 60)
+            assert not re.search(r"^(Title|Author|Subject|Keywords|Creator|Producer):", info, re.M)
+            assert "Metadata" not in run(["pdfinfo", "-meta", str(copy)], 60)
+            raw = copy.read_bytes()
+            assert b"/Font" not in raw and b"/Metadata" not in raw
+        else:
+            with Image.open(copy) as im:
+                assert set(im.info) <= {"dpi"} and not im.getexif()
+        assert not any(secret.encode() in copy.read_bytes() for secret in PLANTED)
+
+
+@requires_tools
+def test_the_index_links_every_file_and_nothing_names_an_original_but_the_index(redacted):
+    out, _, console = redacted
     [report] = out.glob("*-anonimizer.md")
     assert re.fullmatch(r"\d{8}-\d{6}-anonimizer\.md", report.name)
     targets = links(report)
-    for name in NAMES:
-        assert (source / name).resolve() in targets
-    logs = [t for t in targets if t.parent.parent.name == "logs"]
-    assert sorted(t.name for t in logs) == sorted(
-        [
-            f"{n:02d}-{neutral_name(source / name)[:-4]}-verify-original.txt"
-            for n, name in enumerate(sorted(NAMES), start=1)
-        ]
-        + ["console.txt"]
-    )
+    source = out.parent
+    originals = sorted(p for p in source.iterdir() if p.is_file() and p.suffix != ".txt")
+    assert all(p.resolve() in targets for p in originals)
     assert all(t.is_file() for t in targets)
+    kinds = sorted(
+        re.sub(r"^\d\d-exam-[0-9a-f]{12}", "", t.name)
+        for t in targets
+        if t.parent.parent.name == "logs"
+    )
+    assert kinds == sorted(
+        ["console.txt"] + ["-detections.json", "-verify-anonymized.txt", "-verify-original.txt"] * 4
+    )
+    assert sum(t.parent == out for t in targets) == 4
+    # Logs, detections, and the console carry positions, kinds, and counts only.
+    saved = [t.read_text(encoding="utf-8") for t in targets if t.parent.parent.name == "logs"]
+    for text in [console, *saved]:
+        for secret in (*PLANTED, *SECRETS):
+            assert secret not in text, f"a log reveals {secret}"
+    detections = [json.loads(t.read_text()) for t in targets if t.suffix == ".json"]
+    assert all(
+        set(d) == {"page", "box", "kind", "detector", "reading"}
+        for f in detections
+        for d in f["detections"]
+    )
 
-    # The covered name is counted in the first original, by term number only.
-    first = next(t for t in logs if t.name.startswith("01-"))
-    assert first.read_text(encoding="utf-8").startswith("[1] FOUND\n    term 1:")
-    # The console, and its saved copy, name originals by position, never by name.
-    saved = next(t for t in logs if t.name == "console.txt").read_text(encoding="utf-8")
-    for text in (console.out + console.err, saved):
-        for secret in SECRETS:
-            assert secret not in text, f"the console reveals {secret}"
-    assert "[2] anonymized: pending (stage 2)" in saved
-    # The originals are read, never written.
-    assert {name: (source / name).read_bytes() for name in NAMES} == before
+
+@requires_tools
+def test_the_originals_are_never_written(tmp_path):
+    exams = tmp_path / "exams"
+    write_originals(exams)
+    before = {p.name: p.read_bytes() for p in exams.iterdir()}
+    run_batch(exams, exams / "anonymized", [], Options(), NOW)
+    assert {p.name: p.read_bytes() for p in exams.iterdir() if p.is_file()} == before
+
+
+@requires_tools
+def test_a_detector_miss_is_caught_by_verify_and_fails_the_run(tmp_path, monkeypatch, capsys):
+    # R8: verify reads the copy by another path than the detector. With every detection
+    # dropped, the copy still shows the name, and the run says so.
+    exams = tmp_path / "exams"
+    exams.mkdir()
+    (exams / "a.pdf").write_bytes(build_pdf(LABELLED, b""))
+    (tmp_path / "terms.txt").write_text(TERMS, encoding="utf-8")
+    monkeypatch.setattr(anonimizador.batch, "detect", lambda *args: [])
+    code = main(
+        ["batch", "--terms", str(tmp_path / "terms.txt"), "--out", str(exams / "out"), str(exams)]
+    )
+    console = capsys.readouterr().out
+    assert code == EXIT_FOUND, console
+    assert "[1] anonymized: FOUND" in console
+    assert "0 of 1 copy(ies) verified ok, 1 with something left" in console
+
+
+@requires_tools
+def test_a_failed_step_is_an_error_row_not_a_traceback(source, stubs, capsys):
+    stub(stubs, "pdftoppm", "exit 3\n")
+    code = main(["batch", "--no-ocr", "--out", str(source / "out"), str(source)])
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert code == EXIT_USAGE, text
+    assert "[1] anonymized: ERROR\n    not written: pdftoppm failed (exit 3)" in text
+    assert "Traceback" not in text and "Fulano" not in text
+    [report] = (source / "out").glob("*-anonimizer.md")
+    assert "| ERROR |" in report.read_text(encoding="utf-8")
 
 
 @requires_tools
 def test_outputs_under_the_source_are_not_taken_for_originals(source):
     out = source / "anonymized"
     options = Options(use_ocr=False)
-    assert run_batch(source, out, [], options, NOW) == (2, 0)
+    assert run_batch(source, out, [], options, NOW).exams == 2
     (out / "exam-leftover.pdf").write_bytes(covered_name_pdf())
-    assert run_batch(source, out, [], options, NOW.replace(second=10)) == (2, 0)
+    assert run_batch(source, out, [], options, NOW.replace(second=10)).exams == 2
     assert len(list(out.glob("*-anonimizer.md"))) == 2
 
 
@@ -134,6 +280,10 @@ def test_neutral_names_come_from_the_bytes_not_the_name(outside_repo):
     b.write_bytes(b"%PDF same")
     assert neutral_name(a) == neutral_name(b)
     assert re.fullmatch(r"exam-[0-9a-f]{12}\.pdf", neutral_name(a))
+    c = outside_repo / "photo.JPG"
+    c.write_bytes(b"jpeg bytes")
+    # An image's copy is a PNG.
+    assert neutral_name(c).endswith(".png")
 
 
 def test_a_link_escapes_markdown_and_encodes_its_target(tmp_path):

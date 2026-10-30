@@ -11,7 +11,7 @@ This file guides Claude Code when it works in this subproject.
 - `docs/PLAN.md` holds the stages.
 - `docs/ANONYMIZATION.md` holds the manual procedure.
 
-Check the code before assuming a command or module exists: only `verify` is implemented.
+Check the code before assuming a command or module exists: `verify` and `batch` (detection, redaction by rasterizing, and verification of the copies) are implemented.
 
 The git root is the parent directory `CognitionLab/`. Reply to the owner in Portuguese.
 
@@ -22,6 +22,7 @@ Run all commands from this directory:
 ```bash
 uv sync
 uv run anonimizador verify --terms <file outside the repo> <paths...>
+uv run anonimizador batch --terms <file outside the repo> --out <git-ignored dir> <originals dir>
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 RUN_SAMPLE_EXAMS=1 uv run pytest tests/test_sample_exams.py    # local only

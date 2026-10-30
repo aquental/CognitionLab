@@ -58,19 +58,25 @@ def test_the_report_on_real_exams_reveals_no_file_name(capsys):
 BATCH_LINE = re.compile(
     r"^(anonimizador batch: \d+ original\(s\), 0 term\(s\), no OCR|"
     r"anonimizador batch: warning: no terms file: .*|"
+    r"anonimizador batch: \d+ of \d+ copy\(ies\) verified ok, \d+ with something left, "
+    r"\d+ with an error|"
     r"anonimizador batch: index written to .*-anonimizer\.md|"
-    r"\[\d+\] original: (ok|FOUND)|\[\d+\] anonymized: pending \(stage 2\)|"
+    r"\[\d+\] (original|anonymized): (ok|FOUND|ERROR)|"
+    r"\[\d+\] detections: (none|( ?[a-z]+=\d+)+) on \d+ page\(s\)|"
+    r"    text layer not placed on \d+ page\(s\): OCR boxes only|"
+    r"    not written: [a-z]+ (failed \(exit \d+\)|reported \d+ error\(s\) reading the file)|"
     r"    possible identifiers \(patterns\):( [a-z]+=\d+)+)$"
 )
 
 
 def test_the_batch_console_on_real_exams_reveals_no_file_name(tmp_path, capsys):
     """The batch prints positions and counts only; the index, outside the repository,
-    links every original."""
+    links every original. Without OCR, only the text layer is redacted."""
     out = tmp_path / "anonymized"
     code = main(["batch", "--no-ocr", "--out", str(out), str(EXAMS)])
     console = capsys.readouterr().out
-    assert code == EXIT_OK
+    if code != EXIT_OK:
+        pytest.fail(f"batch exited {code}", pytrace=False)
     # The index path is the test's own temporary directory: drop it before the check.
     check_report_privacy(console.replace(str(out), "<out>"), name_words(), BATCH_LINE)
     [index] = out.glob("*-anonimizer.md")
