@@ -253,6 +253,10 @@ STREAM_BOUNDARY = re.compile(rb">>\s*stream(?:\r\n|\r|\n)|endstream[\s\x00]*endo
 # The longest literal string read with deeper nesting (Grok G0-47). Binary data pairs
 # its parentheses over any length; text strings are short.
 MAX_NESTED_LITERAL = 1024
+# An inline image's dictionary up to its samples: `BI`, its entries, and `ID` with the
+# one whitespace byte after it. A `BI` with no `ID` after it starts no image, such as one
+# in another image's samples (Antigravity A0-4).
+INLINE_IMAGE_HEAD = rb"(?<![\w/])BI[\s\x00/].{0,4096}?(?<![\w/])ID[\s\x00]"
 # What surrounds the strings of PDF bytes: comments (whose "(" starts no string),
 # dictionary delimiters, stream keywords (at which binary data that looked like an open
 # dictionary ends), an inline image's dictionary up to its samples (`BI` ... `ID`,
@@ -261,7 +265,7 @@ MAX_NESTED_LITERAL = 1024
 PDF_STRUCTURE = re.compile(
     rb"(?=[%<>(esB])(?:(?P<comment>%[^\r\n]*)|(?P<open><<)|(?P<close>>>)"
     rb"|(?P<stream>(?:end)?stream\b)"
-    rb"|(?P<inline>(?<![\w/])BI[\s\x00/].{0,4096}?(?<![\w/])ID[\s\x00])"
+    rb"|(?P<inline>" + INLINE_IMAGE_HEAD + rb")"
     rb"|(?P<string>[(<]))",
     re.DOTALL,
 )
@@ -269,7 +273,7 @@ PDF_STRUCTURE = re.compile(
 # any whitespace, or (searched for) after whitespace.
 INLINE_IMAGE_END = re.compile(rb"[\s\x00]*EI(?![^\s\x00])")
 INLINE_IMAGE_EI = re.compile(rb"[\s\x00]EI(?![^\s\x00])")
-INLINE_IMAGE_START = re.compile(rb"(?<![\w/])BI[\s\x00/]")
+INLINE_IMAGE_START = re.compile(INLINE_IMAGE_HEAD, re.DOTALL)
 # The entries of an inline image's dictionary that give its samples' size.
 INLINE_IMAGE_ENTRY = re.compile(
     rb"/(?P<key>[A-Za-z]+)[\s\x00]*"
@@ -358,19 +362,30 @@ def decode_pdf_string(raw: bytes) -> str:
     strings store text without a mark, a dash or a symbol among Latin letters (Grok
     G0-30, G0-33); Latin-1 otherwise, which content strings (WinAnsi) and most
     PDFDocEncoding strings share (`PDFDOC` reads the rest)."""
-    if raw.startswith(b"\xfe\xff"):
-        return raw[2:].decode("utf-16-be", "ignore")
-    if raw.startswith(b"\xff\xfe"):
-        return raw[2:].decode("utf-16-le", "ignore")
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw[3:].decode("utf-8", "ignore")
+    codec, mark = pdf_string_codec(raw)
+    return raw[mark:].decode(codec, "ignore")
+
+
+def pdf_string_codec(raw: bytes) -> tuple[str, int]:
+    """The codec `decode_pdf_string` reads `raw` with, and the length of its byte order
+    mark."""
+    for mark, codec in BYTE_ORDER_MARKS:
+        if raw.startswith(mark):
+            return codec, len(mark)
     if len(raw) >= 2 and len(raw) % 2 == 0:
         units = len(raw) // 2
         if raw[0::2].count(0) * 2 >= units and any(raw[1::2]):
-            return raw.decode("utf-16-be", "ignore")
+            return "utf-16-be", 0
         if raw[1::2].count(0) * 2 >= units and any(raw[0::2]):
-            return raw.decode("utf-16-le", "ignore")
-    return raw.decode("latin-1")
+            return "utf-16-le", 0
+    return "latin-1", 0
+
+
+BYTE_ORDER_MARKS = (
+    (b"\xfe\xff", "utf-16-be"),
+    (b"\xff\xfe", "utf-16-le"),
+    (b"\xef\xbb\xbf", "utf-8"),
+)
 
 
 @dataclass(frozen=True)
@@ -437,15 +452,17 @@ def pdf_string_spans(blob: bytes) -> list[PdfString]:
 
 
 def outer_text(blob: bytes, literal: PdfString, spans: list[PdfString]) -> PdfString:
-    """`literal` without the strings in it, each gap on its own line."""
+    """`literal` without the strings in it, each gap on its own line: a line break in the
+    string's own encoding, so a UTF-16 string stays aligned (Antigravity A0-3)."""
     pieces = []
     pos = literal.start + 1
     for span in spans:
         if pos <= span.start and span.end < literal.end:
-            pieces.append(blob[pos : span.start])
+            pieces.append(unescape_literal(blob[pos : span.start]))
             pos = span.end
-    pieces.append(blob[pos : literal.end - 1])
-    return PdfString(literal.start, literal.end, unescape_literal(b"\n".join(pieces)))
+    pieces.append(unescape_literal(blob[pos : literal.end - 1]))
+    codec, _ = pdf_string_codec(b"".join(pieces))
+    return PdfString(literal.start, literal.end, "\n".encode(codec).join(pieces))
 
 
 def inline_image_entries(head: bytes) -> dict[bytes, bytes]:

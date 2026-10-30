@@ -62,7 +62,14 @@ HEADER_TRIES = 16
 # readers) CR alone (Grok G0-43); `endstream` is not one.
 STREAM_START = re.compile(rb"(?<![A-Za-z])stream(?:\r\n|\r|\n)")
 STREAM_END = re.compile(rb"[\s\x00]*endstream")
-SPACE = b" \t\r\n\f\x00"
+# What may come between a stream's dictionary and its keyword: whitespace, and comments,
+# each ended by its line break (Antigravity A0-2).
+GAP = re.compile(rb"(?:[\s\x00]|%[^\r\n]*[\r\n])*")
+# A dictionary's end before a stream keyword, when the dictionary cannot be read,
+# looked for in the bytes just before the keyword.
+DICTIONARY_BEFORE = re.compile(rb">>(?:[\s\x00]|%[^\r\n]*[\r\n])*\Z")
+DICTIONARY_WINDOW = 4096
+ENDOBJ = re.compile(rb"(?:[\s\x00]|%[^\r\n]*)*endobj(?![A-Za-z0-9])")
 
 
 def name_of(token: bytes) -> bytes:
@@ -134,31 +141,46 @@ class Document:
         headers = list(OBJECT_HEADER.finditer(data))
         self.starts = [header.start() for header in headers]
         self.headers = headers
-        # The last definition of an object wins, as in an incremental update.
-        self.objects = {(int(h[1]), int(h[2])): h.end() for h in headers}
+        # Every header of each object, in order: a string or a stream may hold one.
+        self.objects: dict[tuple[int, int], list[int]] = {}
+        for header in headers:
+            self.objects.setdefault((int(header[1]), int(header[2])), []).append(header.end())
 
-    def resolve(self, value: object, depth: int = 0) -> object:
+    def definition(self, number: int, generation: int) -> object:
+        """The object `number generation`: the last definition that `endobj` ends, as in
+        an incremental update, so a header in a string or a comment is none (Antigravity
+        A0-5); `ValueError` when there is none (an object in an object stream)."""
+        for pos in reversed(self.objects.get((number, generation), [])):
+            try:
+                value, end = parse_object(self.data, pos)
+            except ValueError:
+                continue
+            if ENDOBJ.match(self.data, end):
+                return value
+        raise ValueError("unresolved reference")
+
+    def resolve(self, value: object) -> object:
         """`value`, or the object an indirect reference points to; `ValueError` when it
         cannot be found (an object in an object stream, a missing one)."""
-        while isinstance(value, Ref):
-            pos = self.objects.get((value.number, value.generation))
-            if pos is None or depth > MAX_DEPTH:
-                raise ValueError("unresolved reference")
-            value, _ = parse_object(self.data, pos)
-            depth += 1
-        return value
+        for _ in range(MAX_DEPTH):
+            if not isinstance(value, Ref):
+                return value
+            value = self.definition(value.number, value.generation)
+        raise ValueError("unresolved reference")
 
     def stream_dictionary(self, keyword: int) -> dict[bytes, object] | None:
         """The dictionary of the stream whose keyword starts at `keyword`: the object
-        before it, when it is a dictionary that ends right at the keyword."""
+        before it, when it is a dictionary that ends before the keyword, with only
+        whitespace and comments between them (Antigravity A0-1, A0-2)."""
         last = bisect.bisect_right(self.starts, keyword) - 1
         for index in range(last, max(-1, last - HEADER_TRIES), -1):
             try:
                 value, end = parse_object(self.data, self.headers[index].end())
             except ValueError:
                 continue
-            between = self.data[end:keyword]
-            if isinstance(value, dict) and not between.strip(SPACE):
+            # A dictionary that ends after the keyword holds it in a string, and
+            # `fullmatch` finds nothing when `end` is past `keyword`.
+            if isinstance(value, dict) and GAP.fullmatch(self.data, end, keyword):
                 return value
         return None
 
@@ -278,7 +300,7 @@ def unpredict(data: bytes, parameters: dict[bytes, object]) -> bytes:
                 line[i] = (line[i] + line[i - pixel]) & 0xFF
             out += line
         return bytes(out)
-    if predictor < 10:
+    if not 10 <= predictor <= 15:
         raise Unread(data)
     above = bytearray(row)
     for start in range(0, len(data), row + 1):
@@ -326,8 +348,9 @@ def as_list(value: object) -> list[object]:
 
 
 def decode_stream(document: Document, entries: dict[bytes, object], body: bytes) -> bytes | None:
-    """`body` through the stream's filters; None when they end in an image codec.
-    Raises `Unread`."""
+    """`body` through the stream's filters, up to an image codec: None when the codec is
+    the first filter, whose data is in the file as it is; otherwise the codec's data, which
+    may hold the image's metadata (Antigravity A0-5). Raises `Unread`."""
     try:
         filters = [document.resolve(f) for f in as_list(document.resolve(entries.get(b"Filter")))]
         parameters = as_list(document.resolve(entries.get(b"DecodeParms")))
@@ -335,15 +358,16 @@ def decode_stream(document: Document, entries: dict[bytes, object], body: bytes)
     except ValueError:
         raise Unread() from None
     parameters += [None] * (len(filters) - len(parameters))
-    if entries.get(b"Subtype") == b"Image":
-        # An image's samples are pixels, which the image channel reads: they are
-        # inflated, without undoing a predictor, which would only cost time.
-        parameters = [None] * len(filters)
-    for filter_name, given in zip(filters, parameters, strict=False):
+    image = entries.get(b"Subtype") == b"Image"
+    for index, (filter_name, given) in enumerate(zip(filters, parameters, strict=False)):
         if not isinstance(filter_name, Name) or not isinstance(given, dict | None):
             raise Unread()
         if filter_name in IMAGE_FILTERS:
-            return None
+            return body if index else None
+        if image and given:
+            # An image's samples are pixels, which the image channel reads: they are
+            # inflated, without undoing a predictor, which would only cost time.
+            given = {key: value for key, value in given.items() if key != b"Predictor"}
         identity = given is None or given.get(b"Name", b"Identity") == b"Identity"
         if filter_name == b"Crypt" and identity:
             continue
@@ -374,9 +398,12 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
     """Every stream of `data` decoded, and how many could not be. A stream with no
     filter, or whose dictionary is not found, is still tried as zlib data, silently:
     some writers leave the filter out. But a dictionary that cannot be read (nested too
-    deep, malformed) before data that is no zlib stream is an unread stream. A stream the
-    file is cut in, with no `endstream`, runs to the end of the file; unless it decodes
-    whole, it is unread too (Antigravity round 1)."""
+    deep, malformed) is an unread stream, whose filters and parameters are unknown
+    (Antigravity A0-2). A "stream" keyword with no dictionary, in a comment or a string,
+    whose data is no zlib stream, is no stream: the scan goes on right after it, so it
+    hides no stream after it (Antigravity A0-1). A stream the file is cut in, with no
+    `endstream`, runs to the end of the file; unless it decodes whole, it is unread too
+    (Antigravity round 1)."""
     document = Document(data)
     decoded, unread = [], 0
     pos = 0
@@ -389,14 +416,20 @@ def decoded_streams(data: bytes) -> tuple[list[bytes], int]:
             end = len(data)
         pos = end
         body = data[start:end]
+        unknown = entries is None and bool(
+            DICTIONARY_BEFORE.search(
+                data, max(0, keyword.start() - DICTIONARY_WINDOW), keyword.start()
+            )
+        )
+        unread += unknown
         if entries is None or entries.get(b"Filter") is None:
             try:
                 decoded.append(flate_decode(body))
             except Unread as e:
                 decoded.extend([e.partial] if e.partial else [])
-                unread += cut or (
-                    entries is None and data[: keyword.start()].rstrip(SPACE).endswith(b">>")
-                )
+                unread += cut and entries is not None
+                if entries is None and not unknown:
+                    pos = start
             continue
         try:
             if (stream := decode_stream(document, entries, body)) is not None:
