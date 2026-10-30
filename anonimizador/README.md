@@ -8,7 +8,7 @@ Local tools to anonymize medical PDFs and images, and to verify that no identifi
 
 | Stage | Command | Status |
 |---|---|---|
-| 0 | `anonimizador verify`: counts the owner's identifiers left in a file, in six places | **Implemented** |
+| 0 | `anonimizador verify`: counts the owner's identifiers left in a file, in six places | **Done.** Reviewed by Grok (15 rounds), Codex (2 rounds), and Antigravity (3 rounds, no open finding); merged by the owner's decision with Grok round 16 and Codex's confirmation of the later fixes pending ([`FINDINGS.md`](reports/reviews/stage-0/FINDINGS.md)) |
 | 1 | `detect`: finds identifiers with their positions on the page | Planned ([`docs/PLAN.md`](docs/PLAN.md)) |
 | 2 | `redact` and `scrub`: true text removal, pixel boxes, metadata removal, and PDF rewrite | Planned |
 | 3 | Name recognition, barcodes and QR codes, and text burned into images | Planned |

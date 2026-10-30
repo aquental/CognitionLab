@@ -318,3 +318,7 @@ The first attempt (`agy-round3-attempt1.md`) answered only `NO FINDINGS`, about 
 The second attempt confirmed A0-1, A0-2, A0-3, A0-4 (the fix of part 2 and the refutation of part 1), A0-5, and A0-6 (the refutation), citing each fix and test; the implementer checked the cited lines against `949a2ba`, and they match. It found no new defect and ended with `NO FINDINGS`.
 
 Antigravity has no open finding on stage 0. Still pending: Grok round 16 (G0-46, G0-47, and every fix after round 15) and Codex's confirmation of its round 2 fixes, I3-1..I3-4, IA1-1, and A0-1..A0-6, both waiting for quota.
+
+## Merge decision (2026-10-29)
+
+With Antigravity's approval and Grok and Codex out of quota, the owner chose to open the pull request and merge stage 0 now, with the pending confirmations recorded here: Grok round 16 (G0-46, G0-47, and every fix after round 15) and Codex's confirmation of its round 2 fixes, I3-1..I3-4, IA1-1, and A0-1..A0-6. They run when quota returns; a valid finding then is fixed on a new branch.
