@@ -966,3 +966,93 @@ def test_a_stream_the_file_is_cut_in_is_read_or_unread():
         data = page + b"9 0 obj << " + entries + b" >> stream\n" + body
         raw = raw_readings(data)
         assert (raw.unread, raw_count("Zuleo", data)) == (unread, found), entries
+
+
+def test_a_stream_keyword_in_a_comment_or_a_string_hides_no_stream():
+    # Regression (Antigravity A0-1): "stream" in a comment or a string was taken for a
+    # stream whose data ran to the next stream's "endstream", which was then skipped.
+    stream = b"2 0 obj << /Filter /FlateDecode >> stream\n" + zlib.compress(b"BT (Zuleo) Tj ET")
+    stream += b"\nendstream endobj\n"
+    for before in (
+        b"%PDF-1.4\n% stream\n",
+        b"%PDF-1.4\n1 0 obj << /Title (line1\nstream\nline2) >> endobj\n",
+    ):
+        raw = raw_readings(before + stream)
+        assert (raw.unread, raw_count("Zuleo", before + stream)) == (0, 1), before
+
+
+def test_a_stream_dictionary_that_cannot_be_read_is_unread_even_when_it_inflates():
+    # Regression (Antigravity A0-2): a dictionary that cannot be read before data that
+    # inflated was silent, though its predictor or further filters were unknown; and a
+    # comment between the dictionary and the keyword hid the dictionary.
+    content = b"BT (Zu) Tj (leo) Tj ET\n" + b" " * 77
+    deep = b"<< /Y " * 300 + b"1" + b" >>" * 300
+    data = b"9 0 obj << /Filter /Fl /DecodeParms << /Predictor 15 /Columns 40 >> /X " + deep
+    for gap in (b" ", b" % note\n"):
+        stream = gap + b"stream\n" + zlib.compress(png_predict(content, 40)) + b"\nendstream"
+        assert raw_readings(data + b" >>" + stream).unread == 1, gap
+    a85 = base64.a85encode(zlib.compress(b"BT (Zu) Tj (leo) Tj ET")) + b"~>"
+    for gap in (b" % note\n", b"\n%a\r\n%b\n"):
+        data = b"9 0 obj << /Filter [/A85 /Fl] >>" + gap + b"stream\n" + a85 + b"\nendstream"
+        raw = raw_readings(data)
+        assert (raw.unread, raw_count("Zuleo", data)) == (0, 1), gap
+
+
+def test_a_deeper_literal_keeps_its_utf16_text_aligned():
+    # Regression (Antigravity A0-3): the line break put between the gaps of a deeper
+    # nested literal was one byte, which shifted or hid UTF-16 text after it.
+    name = b"\\000Z\\000u\\000l\\000e\\000o"
+    for value in (
+        b"(\\376\\377(obs (2))" + name + b")",
+        b"((obs (2))\\376\\377" + name + b")",
+        b"(" + name + b"(obs (2)))",
+        b"(\\376\\377" + name + b"(obs (2))" + name + b")",
+    ):
+        data = b"9 0 obj << /Author " + value + b" >> endobj"
+        assert raw_count("Zuleo", data) == value.count(name), value
+    # Latin-1 text keeps its one-byte break.
+    assert raw_count("Zuleo", b"9 0 obj << /Author (Zul\\351o (obs (2))) >> endobj") == 1
+
+
+def test_a_bi_in_an_image_with_no_id_after_it_starts_no_image():
+    # Regression (Antigravity A0-4): "BI" in an unsized image's samples was taken for
+    # the next image, so the first " EI " in the samples looked like a clear end.
+    data = b"BI /W 12 /H 1 /CS /Cs1 /BPC 8 ID  EI % BI \x00\x00\x00 EI BT (Zu) Tj (leo) Tj ET"
+    assert raw_readings(data).unclear_images == 1
+    # Refuted part: "ID" is followed by one whitespace byte, so after "ID" and CRLF the
+    # LF is data, which no Flate stream starts with; the end is then unclear, the safe
+    # error, not a silent one.
+    data = b"BI /W 8 /H 1 /CS /G /BPC 8 /F /Fl ID\r\n" + zlib.compress(b" EI %abc", 0)
+    assert raw_readings(data + b" EI BT (Zu) Tj (leo) Tj ET").unclear_images == 1
+
+
+def test_object_definitions_filter_chains_and_predictors_are_read_as_a_reader_does():
+    # Regression (Antigravity A0-5): a header in a later string shadowed the object a
+    # reference points to; a filter before an image codec decoded data that was then
+    # dropped; an image's /EarlyChange was dropped; and a predictor above 15 was read
+    # as a PNG predictor.
+    a85 = base64.a85encode(zlib.compress(b"BT (Zu) Tj (leo) Tj ET")) + b"~>"
+    data = b"10 0 obj [/A85 /Fl] endobj\n9 0 obj << /Filter 10 0 R >> stream\n" + a85
+    data += b"\nendstream endobj\n11 0 obj << /Note (10 0 obj /DCTDecode) >> endobj\n"
+    assert (raw_readings(data).unread, raw_count("Zuleo", data)) == (0, 1)
+    # The last definition ended by "endobj" wins, as in an incremental update.
+    update = data + b"10 0 obj /DCTDecode endobj\n"
+    assert (raw_readings(update).unread, raw_count("Zuleo", update)) == (0, 0)
+    jpeg = JPEG_START + b"\xff\xe1\x00\x10Exif\x00\x00Zuleo" + JPEG_SCAN
+    for filters, body, found in (
+        (b"[/FlateDecode /DCTDecode]", zlib.compress(jpeg), 1),
+        (b"[/A85 /DCT]", base64.a85encode(jpeg) + b"~>", 1),
+        # Data in the codec's own encoding is in the file as it is.
+        (b"/DCTDecode", jpeg, 1),
+    ):
+        data = b"4 0 obj << /Subtype /Image /Filter " + filters + b" >> stream\n" + body
+        data += b"\nendstream endobj\n"
+        assert (raw_readings(data).unread, raw_count("Zuleo", data)) == (0, found), filters
+    # Enough codes for the code size to grow, which /EarlyChange moves.
+    samples = bytes(range(256)) * 8 + b" Zuleo "
+    data = b"4 0 obj << /Subtype /Image /Filter /LZW /DecodeParms << /EarlyChange 0 >> >>"
+    data += b" stream\n" + lzw_encode(samples, 0) + b"\nendstream endobj\n"
+    assert (raw_readings(data).unread, raw_count("Zuleo", data)) == (0, 1)
+    data = b"9 0 obj << /Filter /Fl /DecodeParms << /Predictor 20 /Columns 4 >> >> stream\n"
+    data += zlib.compress(b"\x00abcd") + b"\nendstream endobj\n"
+    assert raw_readings(data).unread == 1

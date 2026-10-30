@@ -82,6 +82,15 @@ def test_usage_errors_exit_2(outside_repo, capsys):
     assert main(["verify", "--no-ocr", str(outside_repo)]) == EXIT_USAGE
 
 
+def test_a_file_named_directly_is_checked_whatever_its_suffix(terms, outside_repo, capsys):
+    # Antigravity A0-6, refuted: a directory's other files are not the corpus, but a file
+    # named on the command line is never skipped; one that is no PDF, PNG, or JPEG
+    # image is an unread file, and the run exits 2.
+    (outside_repo / "notes.txt").write_text("x", encoding="utf-8")
+    code = main(["verify", "--no-ocr", "--terms", str(terms), str(outside_repo / "notes.txt")])
+    assert_unreadable(code, capsys.readouterr().out, "file: not a whole PNG or JPEG image")
+
+
 def stub(bin_dir: Path, tool: str, script: str) -> None:
     """A fake `tool` on PATH, as a crashed, hung, or misconfigured install would be."""
     path = bin_dir / tool
