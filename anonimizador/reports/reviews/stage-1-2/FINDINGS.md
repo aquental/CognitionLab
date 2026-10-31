@@ -138,3 +138,16 @@ Validation: `uv run pytest` 194 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS
 ## Antigravity round 3 (`agy-round3.md`, reviewed `111487c`)
 
 `NO FINDINGS`. Antigravity has no open finding on stages 1–2.
+
+## Codex round 5 (`codex-round5.md`, reviewed `e748fd3`)
+
+Codex reported 4 findings. All are valid; CB-26 to CB-28 were reproduced before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-26 | high | A dash glued to the first word of a name (`-Sicrano`) failed the name as uncapitalized | Leading non-word characters are not a word's initial | `test_a_dash_glued_to_the_first_word_of_a_name_is_not_its_initial` (also prose after a glued dash, taken by nothing); mutant killed | fixed |
+| CB-27 | medium | Separators read as words of their own counted toward the four-word limit of a number, so its last digits survived | Only words with content count; the limit still bounds them | `test_separators_read_as_words_do_not_shorten_a_number`; mutant killed | fixed |
+| CB-28 | medium | A numeric term in fullwidth digits was compared unfolded with the folded text, unlike `Term.count` | The term's digits are folded too | `test_a_numeric_term_in_fullwidth_digits_is_found_as_count_counts_it`; mutant killed | fixed |
+| CB-29 | low | The CB-25 test replaced an attribute that Pillow 10.1 lacks, so it would fail there before the check | `raising=False` | The test itself | fixed |
+
+Validation: `uv run pytest` 197 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.

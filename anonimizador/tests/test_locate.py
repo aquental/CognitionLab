@@ -149,5 +149,5 @@ def test_a_transparent_16_bit_image_needs_no_pillow_newer_than_declared(tmp_path
         pytest.fail("a pixel API newer than Pillow 10.1 was called")
 
     for name in ("get_flattened_data", "getdata"):
-        monkeypatch.setattr(Image.Image, name, unavailable)
+        monkeypatch.setattr(Image.Image, name, unavailable, raising=False)
     test_a_16_bit_image_with_a_transparent_value_keeps_its_contrast(tmp_path)

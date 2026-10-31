@@ -161,7 +161,9 @@ def term_spans(term: Term, text: Text) -> list[tuple[int, int]]:
         for run in DIGIT_RUN.finditer(folded):
             positions = [k for k in range(run.start(), run.end()) if folded[k].isdigit()]
             digits = "".join(folded[k] for k in positions)
-            spans += spans_of(term.digits, digits, positions)
+            # The text is folded, so the term's digits are too: fullwidth digits
+            # become ASCII, as `Term.count` compares them (Codex CB-28).
+            spans += spans_of(fold(term.digits), digits, positions)
     elif term.compact:
         positions = alnum_positions(folded)
         spans += spans_of(term.compact, "".join(folded[k] for k in positions), positions)
@@ -304,7 +306,10 @@ def name_shaped(words: list[Word], value: list[int]) -> bool:
     """Capitalized words, with particles and separators, as a name is written; running
     text is not."""
     words_of_name = content(words, value)
-    return bool(words_of_name) and all(words[i].text[:1].isupper() for i in words_of_name)
+    # A dash glued to the first word ("-Sicrano") is not its initial (Codex CB-26).
+    return bool(words_of_name) and all(
+        re.sub(r"^[\W_]+", "", words[i].text)[:1].isupper() for i in words_of_name
+    )
 
 
 def has_digit(words: list[Word], value: list[int]) -> bool:
@@ -360,9 +365,14 @@ def bare_value(words: list[Word], label: set[int], accepts: Accepts) -> list[int
 def number_value(words: list[Word], seq: list[int]) -> list[int]:
     """The words that start `seq` and make a number, without its separators. A value
     holds a digit: "CRM SP" alone, or a label in prose, is none."""
-    taken = []
-    for index in seq[:NUMBER_VALUE_WORDS]:
-        if not NUMBER_PART.match(fold(words[index].text)):
+    taken: list[int] = []
+    for index in seq:
+        separator = SEPARATOR.match(words[index].text)
+        # Separators read as words of their own do not count (Codex CB-27).
+        if not NUMBER_PART.match(fold(words[index].text)) or (
+            not separator
+            and sum(not SEPARATOR.match(words[i].text) for i in taken) >= NUMBER_VALUE_WORDS
+        ):
             break
         taken.append(index)
     if not has_digit(words, taken):

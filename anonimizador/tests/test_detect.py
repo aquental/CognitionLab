@@ -358,3 +358,26 @@ def test_a_dash_between_a_bare_label_and_a_name_is_not_the_name():
     # A dash alone is no name, and prose after a dash is still prose.
     assert found(line("Paciente", "-")) == {}
     assert found(line("Paciente", "-", "refere", "dor")) == {}
+
+
+def test_a_dash_glued_to_the_first_word_of_a_name_is_not_its_initial():
+    # Codex CB-26.
+    assert found(line("Paciente", "-Sicrano", "Inventado")) == {"label": {"-Sicrano", "Inventado"}}
+    assert found(line("Mae", "\N{EN DASH}Beltrana")) == {"label": {"\N{EN DASH}Beltrana"}}
+    assert found(line("Paciente", "-refere", "dor")) == {}
+
+
+def test_separators_read_as_words_do_not_shorten_a_number():
+    # Codex CB-27: the four-word limit counted them.
+    words = line("RG:", "12", ".", "345", ".", "678", "-", "9")
+    assert found(words) == {"label": {"12", "345", "678", "9"}}
+    # The limit still bounds the words with digits.
+    assert found(line("CRM", "1", "2", "3", "4", "5")) == {"label": {"1", "2", "3", "4"}}
+
+
+def test_a_numeric_term_in_fullwidth_digits_is_found_as_count_counts_it():
+    # Codex CB-28.
+    term = "\uff11\uff12\uff13\uff14\uff15"
+    assert Term(term).count(term) == 1
+    assert found(line("x", term), [term]) == {"term": {term}}
+    assert found(line("x", "12345"), [term]) == {"term": {"12345"}}
