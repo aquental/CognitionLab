@@ -9,8 +9,8 @@ Local tools to anonymize medical PDFs and images, and to verify that no identifi
 | Stage | Command | Status |
 |---|---|---|
 | 0 | `anonimizador verify`: counts the owner's identifiers left in a file, in six places | **Done.** Reviewed by Grok (15 rounds), Codex (2 rounds), and Antigravity (3 rounds, no open finding); merged by the owner's decision with Grok round 16 and Codex's confirmation of the later fixes pending ([`FINDINGS.md`](reports/reviews/stage-0/FINDINGS.md)) |
-| 1 | `detect`: finds identifiers with their positions on the page | Planned ([`docs/PLAN.md`](docs/PLAN.md)) |
-| 2 | `redact` and `scrub`: true text removal, pixel boxes, metadata removal, and PDF rewrite | Planned |
+| 1 | Detection: identifiers with their positions on the page (terms, validated patterns, field labels) | **Implemented, in review**: runs inside `batch`; no separate `detect` command yet |
+| 2 | Redaction: pixel boxes on rasterized pages, metadata removal, PDF rewrite, automatic `verify` of each copy | **Implemented, in review**: `batch`, with the rasterize fallback of R5 only (no true text removal, so no PDF library) |
 | 3 | Name recognition, barcodes and QR codes, and text burned into images | Planned |
 | 4 | `review` and `approve`: a review packet, and recording the review in the manifest only on human approval | Planned |
 
@@ -68,6 +68,55 @@ How to read the report:
 - **ERROR** marks a file in which a place could not be read: a tool failed or timed out, a PDF is encrypted, or pages did not render. The `unreadable:` lines name the place and the tool, never the file. An unread place proves nothing, so such a file is never reported `ok`.
 
 Exit status: 0 means nothing was found, 1 means something was found, and 2 means a usage error, a missing tool or OCR language, or a file with an unreadable place. `--no-ocr` skips rendering and OCR. `--lang` and `--dpi` tune the OCR. `--timeout` (default 600 s) bounds each tool run. `--dpi` (up to 2400) and `--timeout` (up to 86400 s) must be whole numbers from 1.
+
+## `anonimizador batch`
+
+Anonymizes every original in a directory and indexes the run:
+
+```bash
+uv run anonimizador batch --terms ~/private/terms.txt --out <outputs> <originals>
+scripts/anonymize-sample-exams.sh --terms ~/private/terms.txt   # the owner's sample exams
+```
+
+> [!WARNING]
+> **"Anonymized" does not yet mean "free of names."** Stages 1–2 remove only what is in your terms list and what a few patterns match. Other names can stay in the file.
+>
+> - Stages 1–2 look for identifiers in three ways:
+>   - the terms **you** write in the terms file, which stays outside the repository;
+>   - patterns such as CPF, phone, e-mail, CEP, and dates;
+>   - labels such as `Paciente:` or `Médico:`, and the value after them.
+> - Automatic recognition of person names comes only in **stage 3**. Until then, a name that is not in your list and does not follow a label can get through.
+> - `verify` also searches only for what is in the list. A count of zero means "nothing from the list is left", not "no name is left".
+> - **Before you run the script, put in the list every name and number that can appear**, including those of the doctors, the mother, and the clinic. Then look at the output pages with your own eyes.
+
+For each original, in order:
+1. **Verify the original**, for the counts before anonymization.
+2. **Locate the words.** Each page is rendered at `--dpi`. Its words are read twice, with their boxes: from the PDF text layer (`pdftotext -bbox-layout`, scaled onto the image) and by OCR of the image (`tesseract … tsv`). A text layer whose page shape does not match the image, such as a rotated page, is not placed; that page gets OCR boxes only, and the console says so.
+3. **Detect identifiers** in both readings:
+   - the owner's terms, matched as `verify` counts them;
+   - CPF and CNS with valid check digits, phones, e-mails, CEPs, and dates (`--keep-dates` keeps dates);
+   - the value after a field label: `Paciente:`, `Nome:`, `Mãe:`, `Prontuário:`, `Pedido:`, `Médico:`, `Convênio:`, the date-of-birth labels (`Dt. Nasc.:`), and similar labels with a colon. Council and document numbers are taken after `CRM`, `CPF`, `RG`, and `CNS`, colon or not. A value runs to the next field, whose colon may be glued (`Idade:45`) or apart (`Idade :`). A label that ends its line takes the value on its row, even in another block of the extraction, else the value under it, as under a column heading. A `Nome`, `Paciente`, `Mãe`, or date-of-birth label that starts its line needs no colon: `Nome` takes the words beside it up to a wide gap, else the words under it; `Paciente` and `Mãe` take only a capitalized name, and a date-of-birth label only a value with digits.
+4. **Redact by rasterizing.** A black box is painted over every detected word. The copy is rebuilt from the page images alone, so no text layer, covered text, metadata, or earlier revision of the original survives. A PDF becomes a scanned PDF, with its pages stored losslessly (JPEG artifacts change what OCR reads), and an image becomes a PNG.
+5. **Verify the copy** with `verify`, a separate code path (R8). A term still found sends the copy back to review, and the run exits 1.
+
+- **Originals** are the PDF, PNG, and JPEG files directly in the source directory. Subdirectories are not walked, so the outputs can live under the source. Originals are read, never written.
+- **Each copy** is named from a digest of its original's bytes, `exam-<digest>.pdf` or `.png`, never from the original's name. Each run writes into its own new directory, `<outputs>/<YYYYMMDD-HHMMSS>/`, and creates every file there, so no original, earlier copy, or link is ever written over.
+- **The index**, `<outputs>/<YYYYMMDD-HHMMSS>-anonimizer.md`, has one row per original. Each row links the original, the original's `verify` log, the detections (boxes with page, kind, and detector, never text), the copy, and the copy's `verify` log. It also links the console output of the whole run. Logs are in `<outputs>/<YYYYMMDD-HHMMSS>/logs/`.
+- **The index names the originals**, and a copy is unreviewed, so `--out` must be a place where git can commit neither the index, the logs, nor the copies: a git-ignored directory or one outside any repository. When git cannot tell, the run is refused. The script writes to `../embeddings-fundamentals/tests/sample-exams/anonymized/`, which git ignores. The console names originals by position and prints counts only.
+- **Without `--terms`**, only patterns and labels are detected and verified. `ok` then does not mean that no name is left, and the run warns about it.
+
+**What it does not do yet:**
+- recognize names without a label or a term (stage 3);
+- read barcodes, QR codes, or repeated headers (stage 3);
+- replace the date of birth with the age or shift dates (R6): it removes them;
+- remove text while keeping a text layer (true redaction, R5).
+
+The copy is checked by the same OCR engine that found the words, so a word that OCR misreads in both passes is missed by both. **A person still reviews every copy.**
+
+It takes the reading options of `verify` (`--terms`, `--lang`, `--dpi`, `--timeout`, `--strict-patterns`). It refuses `--no-ocr`: a copy holds only pixels, and only OCR reads them. On a copy, `verify` can show pattern hints (CPF, CNS, phone, e-mail, date) taken from its pixel bytes, by the hundred on a large page: noise, not text, since the copy has no text layer. Only `--strict-patterns` makes them fail it. Exit status:
+- 0: every copy was written and verifies clean;
+- 1: a copy still holds something `verify` finds;
+- 2: the run cannot start, or a file or step failed.
 
 ## Development
 

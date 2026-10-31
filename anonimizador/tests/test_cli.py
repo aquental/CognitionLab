@@ -5,7 +5,7 @@ import zlib
 from pathlib import Path
 
 import pytest
-from conftest import FIXTURES, requires_tools
+from conftest import FIXTURES, requires_tools, stub
 from make_covered_name_pdf import build_pdf, covered_name_pdf
 
 from anonimizador.cli import EXIT_FOUND, EXIT_OK, EXIT_USAGE, main
@@ -91,25 +91,10 @@ def test_a_file_named_directly_is_checked_whatever_its_suffix(terms, outside_rep
     assert_unreadable(code, capsys.readouterr().out, "file: not a whole PNG or JPEG image")
 
 
-def stub(bin_dir: Path, tool: str, script: str) -> None:
-    """A fake `tool` on PATH, as a crashed, hung, or misconfigured install would be."""
-    path = bin_dir / tool
-    path.write_text("#!/bin/sh\n" + script, encoding="utf-8")
-    path.chmod(0o755)
-
-
 LIST_LANGS = (
     'if [ "$1" = "--list-langs" ]; then '
     "printf 'List of available languages (2):\\neng\\npor\\n'; exit 0; fi\n"
 )
-
-
-@pytest.fixture
-def stubs(tmp_path: Path, monkeypatch) -> Path:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    return bin_dir
 
 
 def assert_unreadable(code: int, text: str, reason: str) -> None:

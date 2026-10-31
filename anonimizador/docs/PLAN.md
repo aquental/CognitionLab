@@ -13,7 +13,8 @@ Every stage ends the same way:
 | 3 | Name recognition (local Portuguese model), barcodes and QR codes, repeated header and footer zones, and burned-in text in images | R4 (rest) | Recall measured per detector on fixtures with planted names, codes, and burned-in text. False positives on clinical terms are reported |
 | 4 | `review`: a per-file packet (R9). `approve`: writes the manifest review on human approval (R10), so the `embeddings-fundamentals` manifest accepts the output | R9, R10 | The packet shows every box. Without `approve`, the gate still refuses the files; after it, the gate accepts them |
 
-## Decisions still open
+## Decisions
 
-- **PDF library.** True text removal needs a PDF library with redaction. Compare the candidates' licenses before stage 2; some are AGPL.
-- **Date policy default.** The choice is between shifting and removing (R6).
+- **Redaction by rasterizing (owner, 2026-10-30).** Stage 2 implements the R5 fallback only: each page is rendered, boxes are painted, and the PDF is rebuilt from the images with Pillow (HPND license, permissive). This removes every text layer, covered text, metadata entry, and earlier revision by construction. No PDF library with true text removal is needed, so the AGPL candidates are avoided. The cost is the text layer: copies are scanned PDFs, which the `embeddings-fundamentals` pipeline already reads by OCR.
+- **The batch runs the stages (owner, 2026-10-30).** `anonimizador batch` runs detection, redaction, and verification over a directory and writes a Markdown index of the run. Separate `detect`, `redact`, and `scrub` commands are not needed for now.
+- **Date policy default: remove.** Every date is boxed unless `--keep-dates` is given. The date of birth is boxed with its label either way. Shifting dates and replacing the date of birth with the age (R6) would need text drawn into the image, so both remain open.
