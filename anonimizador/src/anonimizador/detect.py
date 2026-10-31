@@ -74,11 +74,18 @@ NUMBER_LABELS = ("crm", "cpf", "rg", "cns", "cnes", "crbm", "crf", "coren")
 NUMBER_VALUE_WORDS = 4
 # The states a council number is registered in ("CRM/SP").
 STATES = "ac al ap am ba ce df es go ma mt ms mg pa pb pr pe pi rj rn rs ro rr sc sp se to"
-# A word of a number's value: digits, which may end in the check letter X of an RG
-# (Codex CB-6) or in a state ("123456-SP", Codex CB-19); a state; "nº"; or a separator.
+# A word of a number's value: digits, which may start with a state ("MG-12.345.678",
+# Codex CB-23) and end in the check letter X of an RG (Codex CB-6) or in a state
+# ("123456-SP", Codex CB-19); a state; "nº"; or a separator.
 STATE = "(?:" + "|".join(STATES.split()) + ")"
 NUMBER_PART = re.compile(
-    r"^[\W_]*(?:(?:\d[\d\W_]*(?:(?:x|" + STATE + r")[\W_]*)?|" + STATE + r"|n[o°º]?)[\W_]*)?$"
+    r"^[\W_]*(?:(?:(?:"
+    + STATE
+    + r"[\W_]*)?\d[\d\W_]*(?:(?:x|"
+    + STATE
+    + r")[\W_]*)?|"
+    + STATE
+    + r"|n[o°º]?)[\W_]*)?$"
 )
 SEPARATOR = re.compile(r"^[\W_]+$")
 # The words a label alone is no value of ("Nome do exame:").
@@ -279,15 +286,25 @@ def beside(words: list[Word], last: int, reach: float) -> list[int]:
     return run_from(words, row, words[last].box[2], reach, label_gap(words, last))
 
 
+def content(words: list[Word], value: list[int]) -> list[int]:
+    """The words of `value` that are not particles or separators: a dash between a label
+    and its value is neither a name nor its absence (Codex CB-24)."""
+    return [
+        i
+        for i in value
+        if fold(words[i].text) not in PARTICLES and not SEPARATOR.match(words[i].text)
+    ]
+
+
 def not_particles(words: list[Word], value: list[int]) -> bool:
-    return not all(fold(words[i].text) in PARTICLES for i in value)
+    return bool(content(words, value))
 
 
 def name_shaped(words: list[Word], value: list[int]) -> bool:
-    """Capitalized words and particles, as a name is written; running text is not."""
-    return not_particles(words, value) and all(
-        words[i].text[:1].isupper() or fold(words[i].text) in PARTICLES for i in value
-    )
+    """Capitalized words, with particles and separators, as a name is written; running
+    text is not."""
+    words_of_name = content(words, value)
+    return bool(words_of_name) and all(words[i].text[:1].isupper() for i in words_of_name)
 
 
 def has_digit(words: list[Word], value: list[int]) -> bool:

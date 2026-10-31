@@ -140,3 +140,14 @@ def test_a_rendered_page_past_the_pixel_limit_is_a_tool_error(tmp_path, monkeypa
     (tmp_path / "pages").mkdir()
     with pytest.raises(ToolError, match="too many pixels; lower --dpi"):
         read(pdf, tmp_path / "pages")
+
+
+def test_a_transparent_16_bit_image_needs_no_pillow_newer_than_declared(tmp_path, monkeypatch):
+    # Codex CB-25: `get_flattened_data` exists only in Pillow 11.3+; the project allows
+    # 10.1. Every pixel API newer than that is made to fail here.
+    def unavailable(self, *args, **kwargs):
+        pytest.fail("a pixel API newer than Pillow 10.1 was called")
+
+    for name in ("get_flattened_data", "getdata"):
+        monkeypatch.setattr(Image.Image, name, unavailable)
+    test_a_16_bit_image_with_a_transparent_value_keeps_its_contrast(tmp_path)
