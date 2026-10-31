@@ -624,3 +624,37 @@ See `reports/reviews/classifier/classifier-findings.md`.
 
 ### Reviews
 - Suspended by the owner. Phase 5 joins the pending list.
+
+## Classifier — Phase 6: the anonymizer's index (Python, `../anonimizador`)
+
+### Implementation
+- **`anonimizador/classifier.py`:** runs `<binary> classify --json [--enviar] <copy>` as a child process, without a shell. Its stdin is closed, its stderr is discarded, and the timeout is `2 * (RLCD_TIMEOUT_S + 5) + 5` seconds.
+  - **Accepted output:** exactly one UTF-8 JSON object whose state is known and whose `codigo_saida` equals the exit code and fits the state.
+  - **Index cells:** as in §11.2. The weights use three decimals, highest first, with ties in the classifier's order. A reason or error category must be a snake_case word.
+  - **Failures:** a timeout, a child that cannot start, or anything else is `error: classifier failed`.
+- **`batch.py`:**
+  - `start(..., classify=True)` creates `<run>/classifier/` and adds it to the git probes.
+  - After each exam, a copy whose re-verification is `ok` is classified, and its valid JSON line is kept with `write_new`.
+  - The index gains the two columns and the header line from the first valid line, saying whether sending was requested. Without `--classifier`, the index is byte-for-byte as before.
+- **CLI:** `--classifier BINARY` and `--classify-remote`, which needs `--classifier`. The child still requires `CLASSIFIER_REMOTE_ALLOWED=1`.
+- **Spec §11.1:** fixed a contradiction with the §11.2 table. A valid CLI error (codes 1, 2, 5) shows its reason. An exit code that differs from the line or does not fit its state is a failure.
+
+### Validation (local, 2026-10-31)
+- **Checks:** `uv run ruff check .`, `uv run ruff format --check .` and `uv run pytest`: 215 passed, 2 skipped (the real-exam opt-ins). This includes the 13 new tests of `tests/test_classifier.py`, which use fake binaries (scripts that print fixed lines). The new tests cover:
+  - every state;
+  - every malformed output;
+  - the tie order;
+  - the timeout formula;
+  - `--enviar` only with `--classify-remote`;
+  - a hung, missing or non-executable binary;
+  - the header without the binary's path;
+  - the git probe of `classifier/`;
+  - end to end with poppler and tesseract: classified copies with kept and linked lines, a copy that fails verification never classified, a failing classifier that leaves exit 0 and keeps nothing, and the index unchanged without `--classifier`.
+- **Mutants:** 11 tried on `classifier.py` and `batch.py`.
+  - All are detected.
+  - Two of them needed a new test, written as the mutants showed it: an exit code valid for the state but not the line's, and the git probe of `classifier/`.
+- **Smoke test, with no sending:** the real binary (`--features classifier-jev`) ran over two synthetic fixtures (PDF and PNG), with the outputs in the scratchpad. The index showed the columns and the header line (`model none`, `sending not requested`), and each copy appeared as `not sent`. The two JSON lines were in `classifier/`.
+- **Not run:** the owner's run with sending (`--classify-remote` with `CLASSIFIER_REMOTE_ALLOWED=1` over the anonymized sample exams). It is the owner's to run (§20, Phase 6), and nothing from it is committed.
+
+### Reviews
+- Suspended by the owner. Phase 6 joins the pending list. When the review resumes, it follows the anonymizer's stage review, with a Python reviewer prompt.

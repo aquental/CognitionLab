@@ -99,6 +99,18 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep dates other than the date of birth (default: remove every date)",
     )
+    b.add_argument(
+        "--classifier",
+        metavar="BINARY",
+        help="the embeddings-fundamentals binary: classify the exam type of every copy that "
+        "verifies ok (sends nothing unless --classify-remote)",
+    )
+    b.add_argument(
+        "--classify-remote",
+        action="store_true",
+        help="let the classifier send each copy's masked text to TypeSafe's Jev; it still "
+        "needs CLASSIFIER_REMOTE_ALLOWED=1 in the environment",
+    )
     add_reading_options(b)
     return root
 
@@ -185,7 +197,13 @@ def run_batch_command(args: argparse.Namespace) -> int:
     try:
         terms = prepare(args, options)
         totals = run_batch(
-            Path(args.source), Path(args.out), terms, options, remove_dates=not args.keep_dates
+            Path(args.source),
+            Path(args.out),
+            terms,
+            options,
+            remove_dates=not args.keep_dates,
+            classifier=Path(args.classifier) if args.classifier else None,
+            classify_remote=args.classify_remote,
         )
     except (VerifyError, TermsError, ToolError) as e:
         print(f"anonimizador batch: {e}", file=sys.stderr)
@@ -204,5 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "verify":
         return run_verify(args)
     if args.command == "batch":
+        if args.classify_remote and not args.classifier:
+            parser().error("--classify-remote needs --classifier")
         return run_batch_command(args)
     return EXIT_USAGE

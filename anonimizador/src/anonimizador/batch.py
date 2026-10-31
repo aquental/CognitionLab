@@ -13,6 +13,10 @@ For each original the run:
 4. verifies the copy with `verify`, a separate code path (R8).
 
 A copy in which `verify` still finds a term goes back to review: the run exits 1.
+
+With `--classifier`, each copy whose re-verification is `ok` is also classified by exam
+type (`classifier`): the index gains two columns and a header line, and each copy's JSON
+line is kept in `<run>/classifier/`. A classifier failure never changes the exit status.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote
 
+from anonimizador import classifier as cls
 from anonimizador.channels import ToolError
 from anonimizador.detect import as_json, detect, summary
 from anonimizador.locate import Box, read_pages
@@ -85,6 +90,8 @@ class Outcome:
     anonymized: Path | None = None
     anonymized_status: str = NOT_WRITTEN
     anonymized_log: Path | None = None
+    classification: cls.Classification | None = None
+    classification_file: Path | None = None
 
 
 @dataclass
@@ -105,11 +112,13 @@ class Run:
     out: Path
     copies: Path = field(init=False)
     logs: Path = field(init=False)
+    classified: Path = field(init=False)
     report: Path = field(init=False)
 
     def __post_init__(self) -> None:
         self.copies = self.out / self.stamp
         self.logs = self.copies / "logs"
+        self.classified = self.copies / "classifier"
         self.report = self.out / f"{self.stamp}{REPORT_SUFFIX}"
 
 
@@ -168,10 +177,10 @@ def originals(source: Path) -> list[Exam]:
     return exams
 
 
-def start(out: Path, now: datetime) -> Run:
+def start(out: Path, now: datetime, classify: bool = False) -> Run:
     """Makes the run's new directories, refusing any place git could commit, by its
     path or where its links lead: the index and the logs name the originals (Codex
-    CB-2)."""
+    CB-2). With `classify`, also the directory of the classifier's JSON lines."""
     run = Run(now.strftime(STAMP_FORMAT), out)
     # The copies too: a rule that ignores the index and logs by name can leave them
     # committable, and a copy is unreviewed (Antigravity AB-5).
@@ -180,6 +189,7 @@ def start(out: Path, now: datetime) -> Run:
         run.logs / "console.txt",
         run.logs / f"01-{NEUTRAL_PROBE}-detections.json",
         *(run.copies / f"{NEUTRAL_PROBE}{suffix}" for suffix in (".pdf", ".png")),
+        *([run.classified / f"{NEUTRAL_PROBE}.json"] if classify else []),
     ]
     for place in places:
         uncommittable(place)
@@ -188,6 +198,8 @@ def start(out: Path, now: datetime) -> Run:
     out.mkdir(parents=True, exist_ok=True)
     run.copies.mkdir()
     run.logs.mkdir()
+    if classify:
+        run.classified.mkdir()
     return run
 
 
@@ -298,6 +310,32 @@ def anonymize(
     return outcome
 
 
+def classify_copy(outcome: Outcome, binary: Path, remote: bool, run: Run, console: Console) -> None:
+    """Classifies the copy when its re-verification was `ok`, and keeps its JSON line.
+    Nothing here raises: a failure is the cell `error: classifier failed`."""
+    if outcome.anonymized is None or outcome.anonymized_status != "ok":
+        return
+    result = cls.classify(binary, outcome.anonymized, remote)
+    if result.line is not None:
+        path = run.classified / f"{Path(outcome.exam.neutral).stem}.json"
+        try:
+            write_new(path, result.line + "\n")
+            outcome.classification_file = path
+        except (OSError, VerifyError):
+            result = cls.failed()
+    outcome.classification = result
+    console.print(f"[{outcome.exam.position}] classifier: {result.state}")
+
+
+def classifier_cells(o: Outcome, base: Path) -> str:
+    """The two classifier cells of a row: `—` for a copy that was not classified."""
+    c = o.classification
+    if c is None:
+        return f" {cls.NOT_CLASSIFIED} | {cls.NOT_CLASSIFIED} |"
+    cell = link(o.classification_file, base, c.cell) if o.classification_file else c.cell
+    return f" {cell} | {c.weights} |"
+
+
 def link(target: Path, base: Path, text: str) -> str:
     """A Markdown link to `target`, relative to the directory `base`."""
     href = quote(os.path.relpath(target, base).replace(os.sep, "/"))
@@ -306,7 +344,12 @@ def link(target: Path, base: Path, text: str) -> str:
 
 
 def index(
-    run: Run, outcomes: list[Outcome], header: list[str], console_log: Path, remove_dates: bool
+    run: Run,
+    outcomes: list[Outcome],
+    header: list[str],
+    console_log: Path,
+    remove_dates: bool,
+    classified: bool = False,
 ) -> str:
     base = run.report.parent
     rows = []
@@ -321,9 +364,10 @@ def index(
             if o.anonymized_log
             else o.anonymized_status
         )
-        rows.append(
-            f"| {o.exam.position} | {original} | {verified} | {found} | {anonymized} | {after} |"
-        )
+        row = f"| {o.exam.position} | {original} | {verified} | {found} | {anonymized} | {after} |"
+        rows.append(row + (classifier_cells(o, base) if classified else ""))
+    columns = " Exam type (classifier) | Weights |" if classified else ""
+    rule = "---|---|" if classified else ""
     return "\n".join(
         [
             f"# Anonymization run {run.stamp}",
@@ -335,8 +379,8 @@ def index(
             f"- Console output of the whole run: {link(console_log, base, console_log.name)}",
             "",
             "| # | Original | Verify original | Detections (boxes) | Anonymized | "
-            "Verify anonymized |",
-            "|---:|---|---|---|---|---|",
+            "Verify anonymized |" + columns,
+            "|---:|---|---|---|---|---|" + rule,
             *rows,
             "",
             "A verify log holds counts per term (by its line in the terms file) and per place, "
@@ -369,16 +413,19 @@ def run_batch(
     options: Options,
     now: datetime | None = None,
     remove_dates: bool = True,
+    classifier: Path | None = None,
+    classify_remote: bool = False,
 ) -> Totals:
     """Runs every step over the originals in `source` and writes the copies and the index
-    under `out`. Raises `VerifyError` when the run cannot start."""
+    under `out`. Raises `VerifyError` when the run cannot start. With `classifier`, the
+    `embeddings-fundamentals` binary classifies every copy that verifies `ok`."""
     if not options.use_ocr:
         # The copy holds pixels only: without OCR nothing would read them, and a copy
         # would pass unread (Codex CB-4).
         raise VerifyError("batch needs OCR: a copy holds only pixels; drop --no-ocr")
     exams = originals(source)
     now = now or datetime.now()
-    run = start(out, now)
+    run = start(out, now, classify=classifier is not None)
     console_log = run.logs / "console.txt"
     mode = f"OCR at {options.dpi} dpi ({options.lang})"
     header = [
@@ -394,11 +441,20 @@ def run_batch(
         console.print(f"anonimizador batch: {len(exams)} original(s), {len(terms)} term(s), {mode}")
         if not terms:
             console.print(f"anonimizador batch: warning: {NO_TERMS}")
-        outcomes = [
-            anonymize(exam, terms, options, remove_dates, run, console, totals) for exam in exams
-        ]
+        outcomes = []
+        for exam in exams:
+            outcome = anonymize(exam, terms, options, remove_dates, run, console, totals)
+            if classifier is not None:
+                classify_copy(outcome, classifier, classify_remote, run, console)
+            outcomes.append(outcome)
+        if classifier is not None:
+            valid = (o.classification for o in outcomes if o.classification is not None)
+            first = next((c for c in valid if c.fields is not None), None)
+            header.append(cls.header(first, classify_remote))
         header.append(f"- Finished: {datetime.now().isoformat(timespec='seconds')}")
-        report = index(run, outcomes, header, console_log, remove_dates)
+        report = index(
+            run, outcomes, header, console_log, remove_dates, classified=classifier is not None
+        )
         write_new(run.report, report)
         console.print(
             f"anonimizador batch: {sum(o.anonymized_status == 'ok' for o in outcomes)} of "
