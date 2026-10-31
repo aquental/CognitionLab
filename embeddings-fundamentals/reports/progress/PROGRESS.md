@@ -677,4 +677,11 @@ See `reports/reviews/classifier/classifier-findings.md`.
 - fmt, clippy with and without `classifier-jev`, `cargo test` (306 tests) and `cargo test --features classifier-jev` (326 tests): all pass.
 - With `RUN_INTEGRATION=1`: a `.env` that sets `CLASSIFIER_REMOTE_ALLOWED=1` leaves the run `preparado`. A key and a base URL from the working directory's `.env` reach the local server, and the result is `ok`.
 - Mutant: dropping the process-only rule is detected by the unit test and by the binary test.
-- **Not run: the live test itself.** The local `.env` has no TypeSafe key yet. Once the owner adds it, the command is in `CLAUDE.md`.
+- **Live run against the real Jev (2026-10-31, after the owner added the key to `.env`).** Only synthetic text was sent.
+  - `classifier_live`: all 3 synthetic documents gave `ok` with `jev-1.13.0` and confidence 1.000: echocardiogram with strain → Eco avançado, Holter → Holter, blood test → Outro. Each call took 0.2 to 0.8 s.
+  - The release binary with `--enviar`, with the key from the crate's `.env` and the authorization on the command, ran on two synthetic fixtures:
+    - `holter_24h.pdf` → `holter`;
+    - `eco_strain.png`, read by OCR → `eco_avancado`.
+
+    Both gave `ok` and exit 0, with `envio_realizado` and a `provider_request_id`, and about 1 200 input tokens each.
+  - The owner's anonymized copies were **not** sent: that run is the owner's.
