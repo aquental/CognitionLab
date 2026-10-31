@@ -361,7 +361,8 @@ pub struct Classificacao {
     pub tipo: Option<Categoria>,
     /// Probability of the chosen type (TD §10).
     pub confianca: Option<f64>,
-    /// Chosen probability minus the next highest.
+    /// The highest probability minus the second highest, at least 0, whichever type was
+    /// chosen (spec/CLASSIFIER.md §7.2).
     pub margem: Option<f64>,
     /// Probability of each type, in the order of [`Categoria::TODAS`]; `None` without a
     /// valid answer.
