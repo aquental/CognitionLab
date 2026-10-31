@@ -104,6 +104,20 @@ For each original, in order:
 - **The index**, `<outputs>/<YYYYMMDD-HHMMSS>-anonimizer.md`, has one row per original. Each row links the original, the original's `verify` log, the detections (boxes with page, kind, and detector, never text), the copy, and the copy's `verify` log. It also links the console output of the whole run. Logs are in `<outputs>/<YYYYMMDD-HHMMSS>/logs/`.
 - **The index names the originals**, and a copy is unreviewed, so `--out` must be a place where git can commit neither the index, the logs, nor the copies: a git-ignored directory or one outside any repository. When git cannot tell, the run is refused. The script writes to `../embeddings-fundamentals/tests/sample-exams/anonymized/`, which git ignores. The console names originals by position and prints counts only.
 - **Without `--terms`**, only patterns and labels are detected and verified. `ok` then does not mean that no name is left, and the run warns about it.
+- **Exam type (optional).** `--classifier <binary>` takes the `embeddings-fundamentals` binary. With it, every copy whose verification is `ok` is also classified by exam type (`classify`, `../embeddings-fundamentals/spec/CLASSIFIER.md` §11):
+  - The index gains the columns *Exam type (classifier)* and *Weights*, and a header line with the classifier's identity. Each copy's JSON line is kept in `<outputs>/<YYYYMMDD-HHMMSS>/classifier/`.
+  - A copy that fails verification is never classified.
+  - Nothing is sent by default: the cell says `not sent`. `--classify-remote` lets the classifier send each copy's masked text to TypeSafe's Jev, and only when `CLASSIFIER_REMOTE_ALLOWED=1` is also set. The key comes from `RLCD_API_KEY` or `TYPESAFE_API_KEY`.
+  - **For `--classify-remote`, the binary must be built with the `classifier-jev` feature:**
+
+    ```bash
+    (cd ../embeddings-fundamentals && cargo build --release --features classifier-jev)
+    CLASSIFIER_REMOTE_ALLOWED=1 scripts/anonymize-sample-exams.sh --terms ~/private/terms.txt \
+        --classifier ../embeddings-fundamentals/target/release/embeddings-fundamentals --classify-remote
+    ```
+
+    A binary built without it cannot send. Every copy then shows `error: configuracao_invalida`, and nothing leaves the machine.
+  - A classifier failure (timeout, crash, invalid output) is the cell `error: classifier failed` and never changes the exit status.
 
 **What it does not do yet:**
 - recognize names without a label or a term (stage 3);

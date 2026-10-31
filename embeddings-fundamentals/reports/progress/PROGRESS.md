@@ -348,3 +348,313 @@ PLAN §2.3 deviations: none.
 - Live OpenAI run (key and `remote_allowed`).
 - Latency on an idle host.
 
+
+## Classifier (`spec/CLASSIFIER.md`) — Phase 0: preparation
+
+Branch `embeddings/classifier`, on top of the spec branch (PR #13). The owner asked, on 2026-10-31:
+- implement the phases in order, with TDD;
+- after each phase, run an adversarial review by Antigravity and then by Codex (Codex only after 03:30);
+- validate and fix every finding;
+- record each finding in `reports/reviews/classifier/classifier-findings.md`;
+- move on to the next phase after 3 cycles if only low-severity findings remain.
+
+### Implementation
+- **Dependencies:** `unicode-normalization` pinned to `=0.1.24`, which has the Unicode 16.0.0 tables of the vectors; 0.1.26 had Unicode 18. `pdf-extract` and `stringprep` accept any `0.1`. Also added: `fancy-regex = "0.19.2"` and the feature `classifier-jev = ["dep:reqwest"]`.
+- **Vectors:** `tests/fixtures/classifier/vetores.json` is TestoDoc's file (sha256 `f14676c7…db22e`), with its origin in the README next to it. A count-only check found no word used as a person's name that matches the exam file names.
+- **`src/classifier/`:** `categorias.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `tipos.rs` holds the types of §5.2–§5.5, `Classificacao` included.
+- **`tests/classifier_vectors.rs`:**
+  - the sha256 pin;
+  - the partition of the vectors' sections into covered, pending (a list that only shrinks) and excluded;
+  - `meta`, `constantes` and `criterio` checked against the Rust constants;
+  - a guard that the normalization tables are Unicode 16.0.0.
+
+### Validation (local, 2026-10-31)
+- **Checks:** `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`, with and without `classifier-jev`; `cargo test` (172 lib tests, all test targets, BDD exit 0).
+- **Mutants:** four tried, all detected:
+  - option order in `TODAS`;
+  - `TOLERANCIA_LIMIAR`;
+  - slug of `Outro`;
+  - one character of a description.
+
+### Reviews
+See `reports/reviews/classifier/classifier-findings.md`.
+
+- **Antigravity, round 1:** 4 findings.
+  - A0-1 (medium): `Classificacao` was missing; fixed.
+  - A0-2 (medium): a covered section could go untested; fixed with a registry of checks.
+  - A0-3 (low): key sets and deserialization were not tested; fixed.
+  - A0-4 (low): open; it waits for the owner to push the TestoDoc rename commit.
+- **Validation of the fixes:** `cargo fmt --check`; clippy with and without `classifier-jev`; 10 mutants tried, all detected.
+- **Antigravity, round 2:** it confirmed that A0-1, A0-2 and A0-3 are closed, and gave NO FINDINGS.
+- **Codex, round 1** (03:35 to 10:03): it agreed with those closures and found two low findings, both fixed:
+  - C0-1: the doc of `margem` was wrong;
+  - C0-2: the evidence lacked `cargo test --features classifier-jev`. The five §14.8 commands now pass at `76b5eba` and at `08c9cbf`.
+
+## Classifier — Phase 1: primitives and Unicode
+
+### Implementation
+- **Python character classes (`scripts/gen-pyclasses.py` → `src/classifier/pyclasses.rs`).**
+  - The script runs under Python 3.14 (UCD 16.0.0) and stops on any other UCD.
+  - It writes, as sorted ranges or maps:
+    - the `re` classes `\d`, `\w`, `\s`, `[^\W\d_]` and `[^\W_]`;
+    - the `str` predicates `isupper`, `islower`, `isdigit`, `isdecimal`, `isspace` and the Cased property;
+    - the titlecase set, category `Lt` (what CPython's `str.isupper` tests; not `str.istitle`);
+    - the full `lower`, `upper` and `title` mappings.
+  - The file carries the generator's sha256. `tests/classifier_pyclasses.rs` checks it on every run.
+  - Two opt-in tests (`RUN_PYTHON_DIFF=1 PYTHON314=…`) regenerate the file and compare it byte for byte, and compare the primitives with Python on 2 000 random strings.
+- **`texto.rs`:**
+  - the predicates, and `lower`, `upper`, `title` and `str_isupper` with Python's semantics;
+  - `strip` and `split` with Python's whitespace;
+  - `compor` (NFC plus every `splitlines` break turned into LF);
+  - `dobrar` (per code point: the first code point of its NFD decomposition, lowered when Python's `lower` gives one code point; the same number of code points);
+  - `MapaOffsets`.
+- **`canonico.rs`:** `json_canonico`, equal to `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, without NFC; it refuses floats. `digest` is the sha256 of that output.
+- **`listas.rs`:** the 13 lists of the vectors, in their order.
+- **`mascaramento::partes_de_nome`** and **`estado::termos_permitidos`.**
+- **Vectors:** `listas`, `dobrar`, `compor`, `partes_de_nome`, `termos_permitidos` and `json_canonico` moved to the check registry. A section with no cases, or a list with a value that is not a string, fails.
+- **Spec:**
+  - §6.3 now says the titlecase table is category `Lt`; TDD found this.
+  - It also says that no table of assigned code points is generated, because the pin of `unicode-normalization` holds.
+
+### Validation (local, 2026-10-31)
+- **Checks:**
+  - `cargo fmt --check`;
+  - clippy with and without `classifier-jev`;
+  - `cargo test` (246 tests, BDD exit 0);
+  - `RUN_PYTHON_DIFF=1 PYTHON314=/opt/homebrew/bin/python3.14 cargo test --test classifier_pyclasses -- --include-ignored` (3 tests).
+- **§14.4 tests in this phase:** `ª` and `ǆ` in `title`, `ß` in `upper`, `İ` in `lower`, initial versus string `isupper`, marks and `‿` outside `\w`, `²`/`½`/`Ⅻ` in `[^\W\d_]`, U+001C–U+001F in `\s`, `\x1f` outside `compor`, and U+A7CE, a letter only from Unicode 17 on, seen as unassigned.
+  - The regex items (`İ`/`ı` under IGNORECASE) belong to Phase 2 (`pyre.rs`), and so does `extract_patient_hints`.
+  - Mutant: `is_upper` through Rust's `char::is_uppercase`, which has Unicode 17 tables; it is detected.
+
+### Reviews
+- **Antigravity:** not run. The run at 02:56 hit the individual quota (429, reset in about 124 h). The step stays open until the reset or a written waiver from the owner.
+- **Codex, round 1:** two medium findings, both fixed:
+  - C1-1: the final sigma in `lower` and `title`;
+  - C1-2: Python's float `repr` in `json_canonico`, with a new float differential against Python.
+- **Owner decision (10:30):** Codex only while Antigravity has no quota; Antigravity reviews this phase after its quota resets.
+
+## Classifier — Phase 2: masking
+
+### Implementation
+- **`pyre.rs`: Python `re` patterns translated to `fancy-regex`.** Each pattern is kept as its Python text. A translator covers the subset TestoDoc uses and refuses the rest:
+  - `\w`, `\d`, `\s` and their negations become classes generated from Python 3.14, inside and outside brackets;
+  - `\b` becomes lookarounds over Python's `\w`;
+  - without MULTILINE, `$` becomes `(?=\n?\z)`;
+  - under IGNORECASE, `İ`/`ı` are added to every literal `i`/`I` and to every class that holds `i` or `I`, ranges included; `(?i:…)` and `(?-i:…)` are tracked per group.
+  - `search(s, pos, endpos)` cuts at `endpos` but not at `pos`, so lookbehind and `\b` see before it. `match` is an anchored search, and `fullmatch` compiles `\A(?:…)\z`.
+- **`mascaramento/`:** the five layers, `_substituir`, the marker collapse, `conferir` and `nomes_dos_rotulos`. Positions are code points: a search on the folded text is mapped back through two `MapaOffsets`. The Python texts of the regexes are built as `mascaramento.py` builds them. A regex failure is an error (`ErroMascaramento`), never a silent pass.
+- **`indicios.rs`:** the `nome` field of `extract_patient_hints`, and `_nomes_dos_indicios`.
+- **Vectors:** `regexes`, `remover_dados_pessoais` (126), `conferir` (12), `nomes_dos_rotulos` and `nomes_dos_indicios` moved to the check registry. Only `montar_estado`, `decidir_classificacao` and `validar_respostas` are still pending.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, and `cargo test` with and without the feature: 267 tests, all pass.
+- **Regex differential** (`tests/classifier_pyre.rs`, opt-in): the 22 vector regexes against Python 3.14's `re`, on 1 510 texts. It compares `finditer`, `search(s, pos, endpos)` and, as TestoDoc uses them, the 40-code-point windows and `match` at every position. Mutants detected: `İ`/`ı` dropped (in literals, in classes, or both); Rust's `\b`; Rust's `$`.
+- **Masking differential** (`tests/classifier_differential.rs`, opt-in, `RUN_DIFFERENTIAL=1 TESTODOC_DIR=…`): 3 000 synthetic texts through TestoDoc's own Python, through `uv` with Python 3.14, as TestoDoc's vector generator does.
+  - It compares `remover_dados_pessoais` (text, counts and a second pass), `conferir`, `nomes_dos_rotulos` and `_nomes_dos_indicios`. All match.
+  - A second test checks the sha256 of the three TestoDoc files and finds each helper regex in them.
+- **Mutants:** 17 tried on the layers.
+  - 9 were detected by the vectors and 1 by the masking differential (the 40-code-point window).
+  - 6 were detected by unit tests whose expected values come from running TestoDoc on the same input:
+    - name of 2 to 6 words;
+    - two words that are not particles;
+    - literals of 3 code points or more;
+    - the order `(−length, text)` of the literals;
+    - marker merge inside a value;
+    - `title()` of an all-caps hint name.
+  - Two of those six cannot be seen through the public functions, only by a unit test:
+    - the marker merge, because the final collapse gives the same text;
+    - `title()` in `_nomes_dos_indicios`, because `dobrar` undoes the case.
+  - 1 was not detected and is equivalent: the column loop's advance after a lone label skips a line that is never a label. The order of name parts inside the `\b(?:…)\b` regex is also equivalent: two parts never match at the same start.
+- **Properties (§14.2):**
+  - Idempotence does **not** hold in TestoDoc. The differential found 65 non-idempotent texts in 5 000 (spec §0.4, F9). The port follows TestoDoc: the differential compares the second pass, and a test pins the example.
+  - The marker property holds on separated pieces (256 cases). A known name glued to a digit escapes, in TestoDoc too (F10, a privacy gap reported to the owner).
+
+### DV10: a known name glued to digits or `_` (owner decision, 2026-10-31)
+- **Owner:** "não seja compatível com o Python, corrija no Rust".
+- **The leak, confirmed with TestoDoc's own code.** These texts kept the whole name, and `conferir` found nothing:
+  - `"Ref 12345Zanoni Prado"`, glued to a number that is not a pattern;
+  - `"arquivo_Zanoni_Prado_eco"`, between underscores;
+  - `"Zanoni2 Prado3"`, followed by a digit.
+- **Fix.** Each known-name part is now bounded by non-letters (`(?<![^\W\d_])…(?![^\W\d_])`) instead of `\b`. Layer 2 and `conferir` share the pattern, so the fix covers both.
+  - The vectors are unchanged: they have no such case.
+  - The port carries its own masking version, `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"`.
+  - The spec records it as DV10 (§13), in F10 (§0.4), in §2.2, in §5.1, in §14.2 and in invariant 3.
+- **Tests.**
+  - A unit test written first (red, then green) covers the three cases, and `ana` inside `Banana` stays.
+  - The marker proptest now also glues the pieces, with `""` and `"_"` separators.
+  - The masking differential applies the same change on the Python side, so every other behaviour is still compared with TestoDoc. Without that change it fails, which shows that glued cases come up.
+
+
+### Reviews
+- **Pending.** Codex hit its usage limit at 11:22, before this phase's round 1 and before Phase 1's round 2; nothing was sent. Grok has no balance (402), and Antigravity is out until about 2026-11-05.
+- **Owner decision (11:30):** go on with the next phases and run the pending reviews in phase order when Codex returns (2026-11-04 03:38), then Antigravity's.
+- **Owner decision (11:35):** review suspended until the owner resumes it. Pending:
+  - Codex: Phase 1 round 2 (closure of C1-1, C1-2), then Phase 2 and each later phase;
+  - Antigravity: Phases 1 and 2 and each later phase.
+- The acceptance at `c99abcc` passed in a clean worktree: the five §14.8 commands (268 tests each run) and the three differentials.
+
+## Classifier — Phase 3: state and decision
+
+### Implementation
+- **`estado.rs`: `montar_estado`, following TD §6.**
+  - Pages are composed (NFC) and selected by mode before empty pages are dropped.
+  - The known names are `nomes_conhecidos`, then the hint names and the label names of the whole text.
+  - Each page is masked, then `conferir` runs on the whole masked page, then the page is cut at the page and total limits, dropping a broken marker. A page left empty by the cut ends the loop.
+  - The other strings of the state (file terms, title terms, extension, mode) are checked one by one. Origins are sorted.
+- **`decisao.rs`:**
+  - `validar_respostas` takes the single `tipo_documento` key. Missing or null probabilities become one-hot on the choice. Keys must be options, values finite and in [0, 1], and the sum within 1e-3 of 1. The values are read as Python's `float()` reads them, and the sum is Python's compensated `sum()`.
+  - `decidir_classificacao` sorts with `total_cmp`. The margin is the top-two difference, never below 0. A confidence equal to the threshold is `ok`.
+- **`tipos.rs`:** `EstadoEnviado::para_value()` (canonical form, for the digest) and `json_fio()` (wire JSON in TestoDoc's key order).
+- **Vectors:** `montar_estado` (21), `validar_respostas` (12) and `decidir_classificacao` (7) moved to the check registry. `PENDING` is now empty. Only the two documented exclusions remain (`referencia_pseudonima`, `bloco_tipo_detectado`).
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, and `cargo test` with and without the feature: 279 tests, all pass.
+- **TestoDoc differential** (`tests/classifier_differential.rs`): each of the 3 000 cases now also carries a synthetic document. It has 1 to 4 pages with random origins, a random mode, file name, title and extension. The test compares `montar_estado` with TestoDoc's: state, digest, counts, block, origins, useful characters and type term. All match, with DV10 applied on both sides.
+- **Mutants on `montar_estado`:**
+  - Detected by the vectors:
+    - the cut not setting `truncado`;
+    - the broken marker kept;
+    - extension dots kept;
+    - label words counted as useful characters;
+    - generic terms counted as type terms;
+    - the other strings not checked;
+    - the mode ignored.
+  - Two survived the vectors and are now detected by unit tests whose expected values come from running TestoDoc on the same input:
+    - `continue` instead of `break` after a page left empty by the cut. TestoDoc sends 10 pages and 59 991 code points, with `truncado`.
+    - Unsorted origins.
+  - In `decidir_classificacao`, replacing `max(0.0, d)` by `d` is equivalent: `d` is never negative after the descending sort.
+- **Timing (§15, `tests/classifier_medicao.rs`, opt-in, release).** Recorded, not gated:
+  - The 21 vector cases take 401 ms, including the one-time regex compile.
+  - A synthetic document of 200 pages (627 504 code points) takes 90 ms in mode `1`, 100 ms in mode `2` and 300 ms in mode `todas`. Mode `todas` sends 21 pages and 60 000 code points, cut.
+
+### Reviews
+- Suspended by the owner (11:35). This phase joins the pending list: Codex and Antigravity, in phase order, when the owner resumes the review.
+
+## Classifier — Phase 4: Jev adapter and `classificar`
+
+### Implementation
+- **`provedor.rs`** (always compiled, no I/O):
+  - the neutral contract: `CriterioEscolha` and `CRITERIO_TIPO_DOCUMENTO`, `RequestNeutro` (`alvo_versao` = first 16 hex digits of the digest, `politica_versao` = `MASCARAMENTO_VERSAO_PORTE`), `RespostaProvedor`, and the `RlcdProvider` trait (native `async fn`, generics, no `dyn`);
+  - `Avaliador`: the deadline wraps the wait for a slot and the call, as in TestoDoc. There is no retry, and the latency is measured from the start of the wait;
+  - `classificar(prep, limiar, envio)` in TD §9.1 order: no content, then privacy block (with the `conferencia_<camada>` counts), then authorization, then the call and the decision. `Envio` has three variants (`NaoPedido`, `NaoAutorizado`, `Autorizado`), and only the authorized one can reach the provider.
+- **`jev.rs`** (feature `classifier-jev`):
+  - The request is `POST {base}/v1/systemone`. Its body is written by hand in the SDK's key order, with `criteria` in the order of `Categoria::TODAS`. The headers are `Authorization: Bearer`, `Content-Type`, `Accept` and `User-Agent`.
+  - The model must match TestoDoc's `MODELO_JEV_RE` after `strip()`, with Python's `\d`.
+  - The base URL must be `https`, or `http` on `127.0.0.1` or `localhost`, without credentials, query or fragment.
+  - Status and transport map to categories as §8.5–§8.6 say. An error body is never read.
+  - A 200 is decoded in two steps: the envelope (`answers` as a map, `usage` required), then the conversion to the neutral format and `validar_respostas`. Each case keeps the metadata §8.4 lists, and `confianca_provedor` is kept only with a valid answer.
+  - The key is redacted in `Debug`, and it is never in errors or logs.
+- **Types:** `Classificacao.model` is now `Option<String>`. It is `None` when sending is not authorized, since `RLCD_MODEL` is then never read (spec §5.5 updated).
+- **Spec:**
+  - §5.6 now describes `Avaliador` and `Envio`.
+  - §8.5: a cut 200 body is marked `is_decode()` by `reqwest`, not `is_body()`. Any `bytes()` error other than a timeout is therefore `rede`, as the SDK's `httpx` read errors are.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, `cargo test` (286 tests) and `cargo test --features classifier-jev` (304 tests): all pass.
+- **Unit tests:**
+  - `classificar` and `Avaliador` against a test double: no call without content or with a block; `preparado` with and without the not-authorized reason; the decision; the error path; the deadline including the wait for the slot; the minimal state keys against `CHAVES_PROIBIDAS_NO_ESTADO`.
+  - `jev`:
+    - the model, with expected values from TestoDoc's `modelo_rlcd_fixo`;
+    - the endpoint and the status table;
+    - the redacted key;
+    - the body's order and escapes;
+    - every invalid answer and envelope listed in §14.5.
+- **Local server** (`tests/classifier_jev.rs`: a `TcpListener` on `127.0.0.1`, no network):
+  - the exact body and headers, a missing request id (DV2), and an invalid 200 that keeps its request id (DV8);
+  - the 11 statuses, a server past the deadline, the wait for a slot inside the deadline, a closed port, a cut body, and a `reqwest` timeout mapped to `timeout`;
+  - logs: a global subscriber captures every log line of the test binary, and none has the key, the error body or the exam text.
+- **SDK differential** (`classifier_differential.rs` with `--features classifier-jev`): for each of the 3 000 synthetic documents, the request body is compared byte for byte with the one that typesafe-sdk 0.7.4 builds through TestoDoc's own path (`minimizar_estado`, `sdk.Choice`, `prepare_system_one`). All match. Nothing is sent.
+- **Mutants:** 30 tried on `provedor.rs` and `jev.rs`.
+  - 28 are detected by the unit tests or the local server, among them: the order of `criteria`, `state`/`model`, `instructions`/`criteria`; every check of `classificar`; the deadline; one more slot; the latency; each metadata field; each status and transport class; each header; the model `strip()`; the local-only `http`.
+  - 2 survived the first run:
+    - a `type` other than `choice` with an otherwise valid shape is now detected, by a new case;
+    - a non-number `confidence` was an equivalent mutant: `as_f64()` already refuses a string. The redundant filter was removed, and a case pins the behaviour.
+
+### Reviews
+- Suspended by the owner. Phase 4 joins the pending list.
+- Not run: the live Jev test (§14.6) is optional and is for the owner to run.
+
+## Classifier — Phase 5: `classify` CLI
+
+### Implementation
+- **`src/classify.rs`**, with the `classify` subcommand wired in `cli.rs`:
+  - `executar(args, fonte, ambiente)` is the whole command except printing. It follows §10.1 in order:
+    1. mode and threshold, with Python's `float()`;
+    2. the file and its format;
+    3. the R-P1 double opt-in. Only then are `RLCD_MODEL`, the key (`RLCD_API_KEY`, else `TYPESAFE_API_KEY`), `RLCD_BASE_URL` and `RLCD_TIMEOUT_S` read and validated;
+    4. the tools;
+    5. the extraction, with the §10.2 OCR rule and the §10.4 visual page;
+    6. `montar_estado` and `classificar`.
+  - The extraction is a `Fonte` trait: `FontePoppler` (poppler + tesseract with `por`) in the binary, a double in the tests. The environment is a lookup function. In the binary it reads process variables first, then a `.env` read by `dotenvy::dotenv_iter` without changing the environment.
+  - `LinhaCli` holds the §10.3 keys in order, and the error envelope fills only what the stop established. `--mostrar-estado` prints the state in wire order, only when it is safe. The readable mode prints the same fields. Every stderr message is a fixed phrase per reason, with no path and no error text (DV9).
+  - A binary built without `classifier-jev` refuses authorized sending with code 5 and reads no sending variable (spec §12).
+- **`TesseractOcr::ocr_image`:** OCR of a standalone image, outside the `OcrEngine` trait (§10.2).
+- **Fixtures** (`tests/fixtures/classifier/cli/`, from `examples/gen_classifier_fixtures.rs`; invented text and names): a Holter PDF with native text, the A9 echocardiogram `eco_mapa.pdf`, a scanned PDF and a PNG.
+
+### Finding while running the real exams locally (§14.7): the backtracking limit
+- **Symptom.** The local, no-send run over the owner's sample exams failed with `erro_interno` on 10 of the 12 PDFs. The diagnosis printed only exam indices and error categories, never content.
+- **Cause.** `fancy-regex` stops a search after 1 000 000 backtracking steps. Some layer-1 patterns cost a quadratic number of steps on long whitespace runs, which `pdftotext -layout` puts between columns. 3 000 spaces were enough. Python's `re` has no step limit: TestoDoc takes 1.8 s on those 3 000 spaces and leaves the text unchanged.
+- **Fix.** Every regex is now compiled with `backtrack_limit(usize::MAX)`, so a search takes as long as Python's would. A regression test written first (red, then green) runs three whitespace-heavy texts and checks them against TestoDoc's outputs: unchanged text, no counts, no names, empty `conferir`. Removing the fix makes it fail again. The synthetic vectors and the differential never had such runs. Spec §6.4 now records this.
+- **After the fix,** all 12 exams classify locally without sending. The states are `preparado`, `sem_conteudo` or `bloqueado_privacidade`, and every limit holds. The output has no file name and no `estado_preparado`. The run takes 12.9 s in release.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, `cargo test` (304 tests) and `cargo test --features classifier-jev` (324 tests): all pass.
+- **In process** (`tests/classifier_cli.rs`, with the extraction double):
+  - every exit code: 0, 2, 3, 4, 5 and 6, plus 1 in the unit tests;
+  - the double opt-in: with `CLASSIFIER_REMOTE_ALLOWED` missing, `0`, `true`, ` 1` or `1 `, nothing `RLCD_*` and no key is even looked up;
+  - the step-3 validations and the binary without the adapter;
+  - the tools check: tesseract is checked lazily, at the first PDF page that needs OCR;
+  - the OCR and visual-page rules on selected pages only, an OCR failure that keeps the page, and the join of native and OCR text;
+  - A9 without `estado_preparado`, and no state in `sem_conteudo` or before the classification;
+  - the key order and the complete envelope;
+  - no path or text in either output mode;
+  - with the local server: `ok` (0) and a provider error (4, `envio_realizado`).
+- **Binary** (`tests/classifier_cli_bin.rs`):
+  - Always: the stops before the extraction print exactly one JSON line, with the right code. Neither stdout nor stderr has the path, in JSON or readable mode.
+  - With `RUN_INTEGRATION=1` and real poppler and tesseract:
+    - the four fixtures give `preparado` (`nativo` or `ocr_local`);
+    - `--enviar` with `CLASSIFIER_REMOTE_ALLOWED=0` and an invalid model gives `preparado`, code 0;
+    - `--mostrar-estado` on the Holter shows the labelled name masked;
+    - A9 gives code 6 without the state;
+    - with the feature and a local server, the binary gives `ok` with `tipo = holter`.
+- **Unit tests:** the `pdfimages -list` area (images and stencils, not masks; a zero resolution is unreadable), the `pdfinfo` page size, and the exit codes.
+- **Mutants:** 18 tried on `classify.rs`.
+  - 17 are detected; 2 of those 17 needed a stronger test, written as the mutants showed it: OCR outside the selected pages, and a blank image text (`total_paginas` 0, as in TestoDoc).
+  - 1 is equivalent: showing the state despite a block. `classificar` already returns `bloqueado_privacidade`, which is not among the states that show it. The check stays as defense, mirroring TP.
+
+### Reviews
+- Suspended by the owner. Phase 5 joins the pending list.
+
+## Classifier — Phase 6: the anonymizer's index (Python, `../anonimizador`)
+
+### Implementation
+- **`anonimizador/classifier.py`:** runs `<binary> classify --json [--enviar] <copy>` as a child process, without a shell. Its stdin is closed, its stderr is discarded, and the timeout is `2 * (RLCD_TIMEOUT_S + 5) + 5` seconds.
+  - **Accepted output:** exactly one UTF-8 JSON object whose state is known and whose `codigo_saida` equals the exit code and fits the state.
+  - **Index cells:** as in §11.2. The weights use three decimals, highest first, with ties in the classifier's order. A reason or error category must be a snake_case word.
+  - **Failures:** a timeout, a child that cannot start, or anything else is `error: classifier failed`.
+- **`batch.py`:**
+  - `start(..., classify=True)` creates `<run>/classifier/` and adds it to the git probes.
+  - After each exam, a copy whose re-verification is `ok` is classified, and its valid JSON line is kept with `write_new`.
+  - The index gains the two columns and the header line from the first valid line, saying whether sending was requested. Without `--classifier`, the index is byte-for-byte as before.
+- **CLI:** `--classifier BINARY` and `--classify-remote`, which needs `--classifier`. The child still requires `CLASSIFIER_REMOTE_ALLOWED=1`.
+- **Spec §11.1:** fixed a contradiction with the §11.2 table. A valid CLI error (codes 1, 2, 5) shows its reason. An exit code that differs from the line or does not fit its state is a failure.
+
+### Validation (local, 2026-10-31)
+- **Checks:** `uv run ruff check .`, `uv run ruff format --check .` and `uv run pytest`: 215 passed, 2 skipped (the real-exam opt-ins). This includes the 13 new tests of `tests/test_classifier.py`, which use fake binaries (scripts that print fixed lines). The new tests cover:
+  - every state;
+  - every malformed output;
+  - the tie order;
+  - the timeout formula;
+  - `--enviar` only with `--classify-remote`;
+  - a hung, missing or non-executable binary;
+  - the header without the binary's path;
+  - the git probe of `classifier/`;
+  - end to end with poppler and tesseract: classified copies with kept and linked lines, a copy that fails verification never classified, a failing classifier that leaves exit 0 and keeps nothing, and the index unchanged without `--classifier`.
+- **Mutants:** 11 tried on `classifier.py` and `batch.py`.
+  - All are detected.
+  - Two of them needed a new test, written as the mutants showed it: an exit code valid for the state but not the line's, and the git probe of `classifier/`.
+- **Smoke test, with no sending:** the real binary (`--features classifier-jev`) ran over two synthetic fixtures (PDF and PNG), with the outputs in the scratchpad. The index showed the columns and the header line (`model none`, `sending not requested`), and each copy appeared as `not sent`. The two JSON lines were in `classifier/`.
+- **Not run:** the owner's run with sending (`--classify-remote` with `CLASSIFIER_REMOTE_ALLOWED=1` over the anonymized sample exams). It is the owner's to run (§20, Phase 6), and nothing from it is committed.
+
+### Reviews
+- Suspended by the owner. Phase 6 joins the pending list. When the review resumes, it follows the anonymizer's stage review, with a Python reviewer prompt.

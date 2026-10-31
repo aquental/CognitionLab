@@ -26,6 +26,9 @@ uv run anonimizador batch --terms <file outside the repo> --out <git-ignored dir
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 RUN_SAMPLE_EXAMS=1 uv run pytest tests/test_sample_exams.py    # local only
+# Exam type in the index: the binary sends to Jev only if built with `--features classifier-jev`
+# (without it, --classify-remote gives `error: configuracao_invalida` on every copy).
+uv run anonimizador batch --classifier ../embeddings-fundamentals/target/release/embeddings-fundamentals ...
 ```
 
 External tools: poppler (`pdftotext`, `pdfinfo`, `pdftoppm`, `pdfimages`) and `tesseract` with `por` data. End-to-end tests skip themselves when a tool is missing.

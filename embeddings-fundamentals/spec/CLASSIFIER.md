@@ -52,6 +52,8 @@ Se qualquer hash do §0.1 ou do §0.3 mudar, a implementação para e este docum
 | F5 | TS-MOD × TP | `typesafe.py` diz que `jev-latest` resolve para `jev-1.13.0` (14/10/2026). Hoje resolve para `jev-1.14.0` (lançado em 14/10/2026). | O modelo fixo continua `jev-1.13.0` (§12). Trocar exige recalibrar (Q-C3). |
 | F6 | TP `_finito` | `float(valor)` aceita string numérica e `bool`. No caminho real, quem decodifica é o pydantic do SDK. | Divergência deliberada DV3 (§13). |
 | F7 | TS-JAG #8 | "jev-1.13 leans toward the option that comes first." A ordem das opções faz parte do request. | §8.2 fixa a ordem do fio. A conferência por reordenação fica na Fase 7 (opcional). |
+| F9 | TD §7.3 × TP | TD diz que a remoção é idempotente. TP não é: o diferencial da Fase 2 achou 65 textos não idempotentes em 5 000, todos com peças separadas por espaço ou pontuação. Exemplo: `"Paciente:: Médico responsável:\t123.456.789-09: "` dá `"Paciente:[REMOVIDO]: "` na primeira passada e `"Paciente:[REMOVIDO] "` na segunda. | O porte reproduz TP. A propriedade do §14.2 virou a comparação da segunda passada com TP no diferencial (§14.3), mais um teste com o exemplo. |
+| F10 | TP, camadas 2 e 4 | Um texto colado a dígitos escapa: em `"CRM/SP 123456Zanoni Prado"`, o nome conhecido não sai, porque não há `\b` entre `6` e `Z`, e a `conferir` usa o mesmo padrão e também não acha. O número de registro colado ao texto seguinte só sai numa segunda passada. | **Corrigido no porte por decisão do dono (31/10/2026: "não seja compatível com o Python, corrija no Rust"), DV10.** O mesmo vazamento vale para `"Ref 12345Zanoni Prado"` (número que não é padrão), `"arquivo_Zanoni_Prado_eco"` e `"Zanoni2 Prado3"`: em TP o nome sai inteiro e a `conferir` não acha. O número de registro colado continua como em TP: não sai na primeira passada, mas a `conferir` o acha e bloqueia o envio. A correção no TestoDoc é do dono. |
 | F8 | TV | Duas palavras usadas como **nome sintético** nos vetores (uma de 6 letras, 6 ocorrências depois de rótulo de nome; uma de 4 letras, numa lista de nomes conhecidos) coincidiam com palavras dos nomes de arquivo dos exames reais em `tests/sample-exams/`. A verificação foi feita só por contagem: nenhuma palavra foi lida nem impressa. | **Resolvido em 31/10/2026 (Q-P2, opção a):** trocadas por nomes inventados (§3.4) e vetores regenerados. |
 
 ## 1. Objetivo e contexto
@@ -93,7 +95,7 @@ O classificador em produção é Python, no TestoDoc. Este documento especifica 
 
 - Gravar classificações, reutilizar respostas anteriores ou fazer cache. Cada execução com envio chama o Jev uma vez por documento.
 - Os modos `observe`/`ativo` e qualquer efeito sobre um laudo. Aqui o resultado só é mostrado e escrito no relatório.
-- Mudar categorias, pergunta, descrições, limites ou o mascaramento. Qualquer mudança nessas partes exige nova `PERGUNTAS_VERSAO` ou `MASCARAMENTO_VERSAO` **no TestoDoc** e vetores regenerados lá (TD §17.1, invariante 8).
+- Mudar categorias, pergunta, descrições, limites ou o mascaramento. Qualquer mudança nessas partes exige nova `PERGUNTAS_VERSAO` ou `MASCARAMENTO_VERSAO` **no TestoDoc** e vetores regenerados lá (TD §17.1, invariante 8). Exceção decidida pelo dono: a DV10 (§13).
 
 ## 3. Privacidade: regras que bloqueiam
 
@@ -135,8 +137,9 @@ Copiar TV para `tests/fixtures/classifier/` o publica no GitHub, e a regra "dado
 
 ```
 src/classifier/
-├── mod.rs            # API pública: tipos (§5), montar_estado, classificar
-├── categorias.rs     # Categoria (9), pergunta, PERGUNTAS_VERSAO, listas (VOCABULARIO_TIPO etc.)
+├── mod.rs            # API pública: reexporta os tipos, montar_estado, classificar
+├── categorias.rs     # Categoria (9), pergunta, PERGUNTAS_VERSAO e as constantes de TV `constantes`
+├── tipos.rs          # tipos do §5: entrada, estado preparado, resposta, estados e motivos
 ├── pyclasses.rs      # GERADO: classes de caracteres do `re`/`str` do Python 3.14 (UCD 16.0.0), §6.3
 ├── texto.rs          # compor, dobrar, isupper/lower à Python, mapa de offsets, fatiamento em code points
 ├── pyre.rs           # Envoltório de regex com a semântica do `re` do Python (pos/endpos, `$`, IGNORECASE), §6.4
@@ -206,7 +209,7 @@ impl Categoria {
 ```
 
 - `PERGUNTA` é o literal de TD §3.3(a) (= TV `criterio.pergunta`).
-- `CRITERIO_ID = "tipo_documento"`, `PERGUNTAS_VERSAO = "classificador-documento-1"`, `MASCARAMENTO_VERSAO = "mascaramento-5"`.
+- `CRITERIO_ID = "tipo_documento"`, `PERGUNTAS_VERSAO = "classificador-documento-1"`, `MASCARAMENTO_VERSAO = "mascaramento-5"` (a de TV) e `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"` (a do mascaramento do porte, com a DV10; é a que sai em `mascaramento_versao` e em `politica_versao`).
 - Um teste compara cada constante com TV (`criterio`, `constantes`, `meta`). Os textos **não** são redigitados: são copiados do TV e conferidos.
 
 ### 5.2 Entrada (TD §5.1)
@@ -297,7 +300,8 @@ pub struct Classificacao {
     pub erro_categoria: Option<ErroCategoria>,
     pub motivo_codigo: Option<MotivoCodigo>,
     pub provider: &'static str,                    // "typesafe"
-    pub model: String,                             // o pedido; com chamada, o ecoado pela resposta (TD §9.1)
+    pub model: Option<String>,                     // o pedido; com chamada, o ecoado pela resposta (TD §9.1);
+                                                   // None sem envio autorizado, quando RLCD_MODEL nem é lido (§12)
     pub adapter_version: &'static str,             // §8.1
     pub perguntas_versao: &'static str, pub mascaramento_versao: &'static str,
     pub limiar_aplicado: f64,
@@ -317,7 +321,7 @@ pub struct RequestNeutro<'a> {
     pub estado: &'a EstadoEnviado,
     pub criterio: &'static CriterioEscolha,  // id, pergunta, opções em ordem
     pub perguntas_versao: &'static str,
-    pub politica_versao: &'static str,       // MASCARAMENTO_VERSAO (TD §9.2)
+    pub politica_versao: &'static str,       // MASCARAMENTO_VERSAO_PORTE (TD §9.2; DV10)
     pub alvo_versao: String,                 // digest.hex()[..16] (TD §9.2)
 }
 pub struct RespostaProvedor {
@@ -334,6 +338,8 @@ pub trait RlcdProvider: Send + Sync {
 ```
 
 `evaluate` nunca devolve `Err`: toda falha vira `RespostaProvedor` com `ErroCategoria`, como no Python ("nenhuma sobe para a política", `typesafe.py`, docstring). O `request_id` uuid4 de TD §9.2 não é enviado ao Jev nem gravado, então não existe aqui.
+
+O prazo e o semáforo do §8.3 ficam num `Avaliador { semaforo, prazo }`, separado do provedor, e `Avaliador::avaliar(&P, &RequestNeutro)` é o `avaliar` de TP. Ele mede `latencia_ms` do início da espera pela vaga até o fim, em todos os casos, como o `evaluate` do Python mede antes do `async with self._semaforo`. A autorização chega a `classificar(prep, limiar, envio)` como `enum Envio { NaoPedido, NaoAutorizado, Autorizado { provedor, avaliador } }`: só a variante autorizada tem como chamar o provedor.
 
 ## 6. Núcleo N1: texto, Unicode e regex
 
@@ -367,9 +373,12 @@ As classes do motor de regex do Rust **não** servem. Verificado em 31/10/2026 c
 
 - `scripts/gen-pyclasses.py` gera `src/classifier/pyclasses.rs`. São listas de faixas de code points para:
   - as classes de regex `\d`, `\w`, `[^\W\d_]`, `[^\W_]` e `\s`;
-  - os predicados de caractere `isupper`, `islower`, `istitle`, `iscased` (a propriedade Unicode Cased, que o CPython usa em `_PyUnicode_IsCased`; para um caractere, `ch.isupper() or ch.islower() or ch.istitle()`), `isdigit`, `isdecimal` e `isspace`;
+  - os predicados de caractere `isupper`, `islower`, `isdigit`, `isdecimal` e `isspace`, o de titlecase e `iscased`:
+    - **titlecase** é a categoria `Lt` (`unicodedata.category(ch) == "Lt"`), a flag que o `s.isupper()` de string testa no CPython. Não serve o `str.istitle()` de um caractere, que também é verdadeiro para maiúsculas (`"A".istitle()`); a Fase 1 achou isso pelo TDD;
+    - **`iscased`** é a propriedade Unicode Cased, que o CPython usa em `_PyUnicode_IsCased`; para um caractere, `ch.isupper() or ch.islower() or category == "Lt"`;
   - os mapeamentos completos `lower()`, `upper()` e `title()` de cada caractere em que o resultado difere da entrada, inclusive os de mais de um code point (`ß` → `SS`, `İ` → `i̇`, `ǆ` → `ǅ`);
-  - o conjunto de code points atribuídos.
+  - **Case_Ignorable**, para o sigma final: o `lower()` e o ramo minúsculo do `title()` do CPython trocam `Σ` por `ς` quando, pulando os code points Case_Ignorable, há um code point com caixa antes e nenhum depois (`handle_capital_sigma`; `"ΟΣ".lower() == "ος"`). O `unicodedata` não expõe a propriedade, e o gerador a lê do próprio `str.lower()`. O `dobrar` não usa o contexto: dobra cada code point sozinho, como TP (achado C1-1 do Codex);
+  - o conjunto de code points atribuídos: só no caminho com guarda do §4.2. Não é gerado, porque o pin na 0.1.24 deu certo (Fase 0).
 - O gerador roda com o **Python 3.14** e **aborta** se `unicodedata.unidata_version != "16.0.0"`. Nesta máquina, `python3` é o 3.15.2, com UCD 17.0.0; o 3.14.10 (`/opt/homebrew/bin/python3.14`) tem a 16.0.0.
 - O cabeçalho do arquivo gerado registra a versão do Python, a UCD e o sha256 do gerador. Um teste confere que o arquivo gerado bate com o gerador (como `test_vetores_classificador` faz no TestoDoc).
 - Cada regex portada usa essas faixas como classes explícitas `[...]`, e `\b` vira `(?:(?<=W)(?!W)|(?<!W)(?=W))`, com `W` a classe `\w` do Python. O `fancy-regex` aceita lookbehind de largura fixa.
@@ -399,6 +408,7 @@ As classes do motor de regex do Rust **não** servem. Verificado em 31/10/2026 c
 | Dinâmicas | `_padroes_conhecidos`: `\b(?:p1\|p2\|…)\b` e um `re.escape(literal)` por literal (`:342,344`); `_nomes_dos_indicios`: `\s+`.join(`re.escape(p)`) com `IGNORECASE` (`classificador_documento.py:239`) | `IGNORECASE` só na de `_nomes_dos_indicios` | testes de TV `remover_dados_pessoais` e `nomes_dos_indicios` |
 
 - **Escape das dinâmicas:** `re.escape` do Python vira um escape equivalente no `fancy-regex`, e `\s` vira a classe `isspace` gerada.
+- **Sem limite de passos.** O `re` do Python não limita o backtracking, e alguns padrões da camada 1 custam um número quadrático de passos em sequências longas de espaços, que o `pdftotext -layout` gera entre colunas. O TestoDoc leva 1,8 s em 3 000 espaços. Com o limite padrão do `fancy-regex` (1 000 000 de passos), a busca falhava, e `montar_estado` dava erro em 10 dos 12 exames reais da Fase 5 (§14.7). O porte compila toda regex com `backtrack_limit(usize::MAX)`: uma busca leva o tempo que levaria no Python. Um teste fixa o caso com as saídas do TestoDoc.
 - **Texto das traduções:** um teste confere cada constante de texto Python com TV `regexes`. As que não estão em TV são conferidas com o arquivo TP fixado, por um teste opcional que lê o checkout do TestoDoc (`TESTODOC_DIR`). Quando os vetores mudarem, o teste aponta a regex que precisa de nova tradução.
 - **Flags:** TV guarda só o texto das regexes. As flags acima são conferidas pelos casos de TV e pelos testes do §14.4.
 
@@ -477,7 +487,7 @@ Equivale a `json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=Fa
 
 Depois, `sha256` dos bytes UTF-8. O escape de strings do `serde_json::to_string` coincide com o do Python (verificado: `"\u{1f}\u{7f}\u{2028}"` vira `"\u001f` + U+007F + U+2028 literais), então pode ser usado para **cada string**.
 
-`canonico::json_canonico(v: &serde_json::Value) -> String` serve para **qualquer** `Value`, como em TP e TV `json_canonico`, onde os casos são objetos arbitrários. Ela percorre o valor recursivamente e, em cada `Value::Object`, coleta as chaves e as **ordena explicitamente** por code point (`str::cmp` em Rust ordena por bytes UTF-8, o que dá a mesma ordem). Assim a ordem não depende de `preserve_order`. Números inteiros saem em decimal. Um float sai com `serde_json`, mas o estado não tem floats, e TV `json_canonico` também não. O digest do estado é `sha256(json_canonico(&estado_como_value))`.
+`canonico::json_canonico(v: &serde_json::Value) -> String` serve para **qualquer** `Value`, como em TP e TV `json_canonico`, onde os casos são objetos arbitrários. Ela percorre o valor recursivamente e, em cada `Value::Object`, coleta as chaves e as **ordena explicitamente** por code point (`str::cmp` em Rust ordena por bytes UTF-8, o que dá a mesma ordem). Assim a ordem não depende de `preserve_order`. Números inteiros saem em decimal. Um float sai como o `repr` do Python, que é o que o `json.dumps` escreve: os dígitos mais curtos que voltam ao mesmo float, com empate para o dígito par; notação científica com sinal e ao menos dois dígitos no expoente quando o expoente decimal fica abaixo de −4 ou acima de 16 (`1e-05`, `1e+16`); senão posicional, com `.0` quando não há parte fracionária (`1.0`, `-0.0`). O `serde_json` escreve outro formato (`1e-9`, `1e16`). O estado não tem floats, e TV `json_canonico` também não; um diferencial opcional compara com o Python (achado C1-2 do Codex). O digest do estado é `sha256(json_canonico(&estado_como_value))`.
 
 **Não reusar `ids::canonical_json`.** Ele normaliza toda string e toda chave para NFC (`src/ids.rs`, `write_string`), e o Python não normaliza. `extensao` passa só por `dobrar`, sem `compor` (TD §6, passo 5), e pode ter uma marca combinante solta, que o NFC juntaria à letra anterior, mudando o digest. Vetores: TV `json_canonico` (3) e os digests de TV `montar_estado`.
 
@@ -543,7 +553,7 @@ Testado nesta ordem; a primeira verdadeira decide. É a mesma ordem do SDK, que 
 | # | Situação | Categoria |
 |---|---|---|
 | 1 | O `tokio::time::timeout` estourou, em qualquer fase (fila do semáforo, conexão, envio, leitura), ou um `reqwest::Error` tem `is_timeout()` | `timeout` |
-| 2 | Falha de DNS, conexão, TLS ou leitura do corpo (`reqwest::Error` com `is_connect()`, `is_request()` ou `is_body()`) | `rede` |
+| 2 | Falha de DNS, conexão, TLS ou leitura do corpo (`reqwest::Error` com `is_connect()`, `is_request()` ou `is_body()`; e qualquer erro de `bytes()` na leitura de um 200, que o `reqwest` marca como `is_decode()` quando o corpo vem cortado, embora ali nada seja decodificado) | `rede` |
 | 3 | Qualquer outro `reqwest::Error` | `outro` |
 
 ### 8.6 Status HTTP (TD §9.3, TS-ERR)
@@ -587,6 +597,8 @@ O estado enviado só tem `arquivo.{termos_nome_arquivo, termos_titulo, extensao,
 embeddings-fundamentals classify <arquivo> [--paginas 1|2|todas] [--json] [--enviar] [--limiar X]
                                  [--titulo T] [--nome-paciente N]... [--mostrar-estado]
 ```
+
+**Dependência de compilação do envio:** só um binário compilado com a feature `classifier-jev` (`cargo build --release --features classifier-jev`, ou `cargo run --features classifier-jev -- classify …`) consegue enviar ao Jev. A feature vem desligada por padrão. Sem ela, o envio autorizado (`--enviar` com `CLASSIFIER_REMOTE_ALLOWED=1`) dá `erro`, código 5 (`configuracao_invalida`), sem ler nenhuma variável do passo 3 nem enviar nada (§12). Sem `--enviar`, os dois binários se comportam igual (`preparado`). Vale também para o binário que o `anonimizador batch --classifier` chama (§11.1).
 
 O padrão de `--paginas` é `CLASSIFIER_PAGINAS`, ou `"2"` (TD §16.1). Há uma linha JSON com `--json`; sem ele, um texto legível com os mesmos campos e nenhum texto do exame.
 
@@ -661,7 +673,7 @@ O TestoDoc decide se uma página é visual pelo PyMuPDF (`pdf_extract._is_visual
 - Com ela, `start()` também cria `<run>/classifier/` e o inclui nas sondagens de `uncommittable`, como já faz com `run.copies` e `run.logs` (`batch.py`, `start`).
 - Classifica **a cópia anonimizada**, não o original, e só quando a re-verificação da cópia deu `ok` (`anonymized_status`). Uma cópia que falhou na verificação nunca é classificada. Justificativa: defesa em profundidade, com o mascaramento do Jev por cima de uma cópia rasterizada, já sem texto, metadados nem os achados do `verify`.
 - Chama `<binário> classify --json [--enviar] <cópia>` como processo filho, sem shell, com um timeout de `2 × (RLCD_TIMEOUT_S + 5) + 5` segundos, a mesma fórmula do teto da etapa de TD §12.2. `--enviar` só é passado se o próprio `batch` recebeu `--classify-remote`, e o processo filho ainda exige `CLASSIFIER_REMOTE_ALLOWED=1` (R-P1).
-- **Uma falha do classificador nunca falha a anonimização** (análogo de TD §17.1, invariante 1). Timeout do processo filho, falha ao iniciá-lo, stdout que não é exatamente uma linha JSON válida ou código de saída fora de {0, 3, 4, 6} viram a célula `error: classifier failed` (§11.2). O código de saída do `batch` não muda.
+- **Uma falha do classificador nunca falha a anonimização** (análogo de TD §17.1, invariante 1). Timeout do processo filho, falha ao iniciá-lo, stdout que não é exatamente uma linha JSON válida, ou código de saída diferente do `codigo_saida` da linha ou impróprio para o estado dela (`ok`, `incerto` e `preparado` com 0; `sem_conteudo` com 3; `bloqueado_privacidade` com 6; `erro` com 1, 2, 4 ou 5) viram a célula `error: classifier failed` (§11.2). Um `erro` válido do CLI (1, 2, 5) mostra o seu `motivo_codigo`, como na tabela do §11.2. Na versão anterior, este parágrafo dizia "fora de {0, 3, 4, 6}" e contradizia a tabela. O código de saída do `batch` não muda.
 
 ### 11.2 O que entra no índice
 
@@ -687,7 +699,9 @@ Os nomes das colunas e o formato dos pesos são decisões de apresentação dest
 
 ## 12. Configuração
 
-Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. Nenhum valor de chave é impresso.
+Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. O `.env` é lido com `dotenvy::dotenv_iter`, a partir do diretório corrente para cima, sem alterar o ambiente do processo, e uma variável do processo tem precedência sobre a do `.env`. Nenhum valor de chave é impresso.
+
+Um binário compilado **sem** a feature `classifier-jev` não tem como enviar: com o envio autorizado, sai com o código 5 (`configuracao_invalida`), sem ler nenhuma variável do passo 3.
 
 | Variável | Padrão | Quando é lida | Validação (código 5, com o motivo indicado, se inválida) |
 |---|---|---|---|
@@ -713,6 +727,7 @@ Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já d
 | DV7 | `confianca_provedor` (o `confidence` do Jev) guardado | É informação que o Jev já devolve e o Python descarta | Só aparece na saída; não muda a decisão |
 | DV8 | Numa resposta 200 cujo envelope não decodifica, `provider_request_id` vem do header | No Python, a exceção do SDK descarta o id (`typesafe.py`, `resposta_erro` sem `provider_request_id`) | Só metadado; ajuda a rastrear o erro com a TypeSafe |
 | DV9 | Mensagens do CLI sem caminho do arquivo nem texto de exceção (§10.3) | TP põe `{caminho}` e `{exc}` no stderr; aqui viola R-P2 | Só a mensagem humana muda |
+| DV10 | Na camada 2 (e na `conferir`, que a usa), cada parte de nome conhecido é delimitada por "não letra", `(?<![^\W\d_])(?:…)(?![^\W\d_])`, e não por `\b` | F10 (§0.4): para o `\b`, dígitos e `_` são letras de palavra, e um nome colado a um número ou entre sublinhados saía inteiro e passava pela conferência. Decisão do dono, 31/10/2026 | O texto mascarado difere de TP só quando uma parte de nome conhecido encosta num dígito ou `_`. TV não tem esse caso e continua idêntico. A saída e o request usam `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"`; `MASCARAMENTO_VERSAO` continua a de TV, conferida pelos vetores. O diferencial (§14.3) aplica a mesma troca ao lado Python e compara todo o resto |
 
 ## 14. Testes e conformidade
 
@@ -738,8 +753,8 @@ Um teste confere o sha256 de TV com o §0.1.
 ### 14.2 Propriedades (proptest, já dev-dependency)
 
 - `dobrar` preserva a contagem de code points.
-- A remoção é idempotente: `remover(remover(x)) == remover(x)` (TD §7.3).
-- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto.
+- A remoção **não** é idempotente em TP (F9, §0.4): o diferencial (§14.3) compara a segunda passada com a de TP, e um teste fixa o exemplo de F9.
+- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto, também com as peças coladas umas às outras, a dígitos ou a `_` (DV10; em TP o nome colado escapa, F10).
 - Determinismo: a mesma entrada dá o mesmo estado e o mesmo digest.
 - Limites: `caracteres_enviados ≤ 60 000`, cada página ≤ 6 000, e `truncado` coerente.
 - `json_canonico` independe da ordem de inserção, com `preserve_order` ligada.
@@ -793,7 +808,7 @@ cargo test --features classifier-jev
 
 1. O Jev nunca é chamado com `sem_conteudo`, com bloqueio ou sem a autorização R-P1.
 2. O estado enviado só tem as chaves do §9.2. Os termos de nome de arquivo e título vêm só de `VOCABULARIO_TIPO`.
-3. N1 reproduz TV byte a byte. Qualquer mudança no mascaramento exige outra `MASCARAMENTO_VERSAO`, feita no TestoDoc.
+3. N1 reproduz TV byte a byte. Qualquer mudança no mascaramento exige outra `MASCARAMENTO_VERSAO`, feita no TestoDoc. A única exceção é a DV10 (§13), decidida pelo dono, que tem versão própria (`MASCARAMENTO_VERSAO_PORTE`) e não muda nenhum caso de TV.
 4. `criteria` vai na ordem de `Categoria::TODAS`, e o `state` na ordem de construção, sejam quais forem as features do `serde_json`.
 5. Logs, saída e relatório nunca têm texto do exame, nome de pessoa, nome do arquivo de entrada, chave nem corpo de erro do provedor.
 6. Uma falha do classificador nunca falha a anonimização.
@@ -857,7 +872,7 @@ Cada fase termina com os comandos do §14.8 verdes, um registro em `reports/prog
   3. resolver o `unicode-normalization` (`cargo update -p unicode-normalization --precise 0.1.24`, se possível; senão, a guarda do §4.2);
   4. acrescentar `fancy-regex = "0.19.2"` e a feature `classifier-jev`;
   5. criar o esqueleto de `src/classifier/` com os tipos do §5;
-  6. criar o teste de conformidade com uma lista de seções pendentes, que só pode encolher. Uma seção pendente falha se passar a ser coberta sem sair da lista, e nenhuma seção fica pulada em silêncio.
+  6. criar o teste de conformidade com uma lista de seções pendentes, que só pode encolher. Uma seção pendente falha se passar a ser coberta sem sair da lista, e nenhuma seção fica pulada em silêncio. Uma seção só é coberta se estiver registrada com a sua verificação, e um único teste roda todas as verificações registradas.
 - **Saída:** compila; testes dos tipos e das constantes contra TV (`meta`, `constantes`, `criterio`).
 
 ### Fase 1: primitivas e Unicode

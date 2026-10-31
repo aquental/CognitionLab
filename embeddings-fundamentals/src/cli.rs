@@ -61,6 +61,10 @@ pub enum Command {
     /// Draft relevance labels pooled from the top results of indexed runs
     /// (`TESTS.md`).
     DraftLabels(DraftLabelsArgs),
+    /// Classify the exam type of one anonymized PDF or image (spec/CLASSIFIER.md §10).
+    /// Sends the masked text to TypeSafe's Jev only with `--enviar` and
+    /// `CLASSIFIER_REMOTE_ALLOWED=1`.
+    Classify(crate::classify::ClassifyArgs),
 }
 
 /// Arguments of `draft-manifest`.
@@ -315,6 +319,7 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Report(args) => blocking(move || report(&args)).await,
         Command::DraftManifest(args) => draft_manifest(&args).await,
         Command::DraftLabels(args) => draft_labels(&args).await,
+        Command::Classify(args) => Ok(crate::classify::comando(&args).await),
     }
 }
 
