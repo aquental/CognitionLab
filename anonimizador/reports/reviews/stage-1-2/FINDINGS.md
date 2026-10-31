@@ -187,3 +187,15 @@ Validation: `uv run pytest` 202 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS
 ## Codex round 9 (`codex-round9.md`, reviewed `c3f2539`)
 
 `NO FINDINGS`. Codex has no open finding on stages 1–2. Antigravity's last round (3) predates the fixes of CB-26 to CB-34, which changed detection, so it reviews again.
+
+## Antigravity round 4 (`agy-round4.md`, reviewed `e9f2174`)
+
+`NO FINDINGS`. With Codex's round 9 (`NO FINDINGS`) on the same state, no reviewer has an open finding on stages 1–2. Grok was waived by the owner.
+
+### Summary of the review
+
+| Reviewer | Rounds | Findings | Valid | Refuted in part or whole |
+|---|---|---|---|---|
+| Codex | 9 | 34 (CB-1 to CB-34) | 34 | 0 |
+| Antigravity | 4 | 10 (AB-1 to AB-10) | 10 | 4 parts (AB-4, AB-5, AB-6, AB-7) |
+| Owner | | 1 (OW-1) | 1 | 0 |
