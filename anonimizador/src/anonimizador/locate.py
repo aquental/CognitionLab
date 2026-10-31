@@ -13,6 +13,7 @@ import io
 import re
 import struct
 import xml.etree.ElementTree as ET
+from array import array
 from collections.abc import Callable
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
@@ -224,8 +225,10 @@ def eight_bit(im: Image.Image) -> Image.Image:
     scaled = Image.frombytes("L", im.size, scaled.tobytes())
     key = im.info.get("transparency")
     if isinstance(key, int):
-        alpha = Image.new("L", im.size)
-        alpha.putdata([0 if v == key else 255 for v in samples.get_flattened_data()])
+        # Read as bytes, which every supported Pillow gives (Codex CB-25): a mode "I"
+        # image holds native 32-bit integers.
+        values = array("i", samples.tobytes())
+        alpha = Image.frombytes("L", im.size, bytes(0 if v == key else 255 for v in values))
         scaled.putalpha(alpha)
     return scaled
 

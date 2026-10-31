@@ -338,3 +338,23 @@ def test_a_border_before_a_colon_label_leaves_it_a_colon_label():
     # with a border before it too (Antigravity AB-10).
     words = line("|", "Nome:", "Idade:", "45", number=0) + line("Hemoglobina", "13,5", number=1)
     assert found(words) == {}
+
+
+def test_a_state_before_a_document_number_is_part_of_it():
+    # Codex CB-23: an RG written "MG-12.345.678".
+    assert found(line("RG:", "MG-12.345.678")) == {"label": {"MG-12.345.678"}}
+    assert found(line("RG", "MG", "-", "12.345.678", "x")) == {"label": {"MG", "12.345.678"}}
+
+
+def test_a_dash_between_a_bare_label_and_a_name_is_not_the_name():
+    # Codex CB-24: the dash failed the whole value as no name.
+    assert found(line("Paciente", "-", "Sicrano", "Inventado")) == {
+        "label": {"-", "Sicrano", "Inventado"}
+    }
+    dash = "\N{EN DASH}"
+    assert found(line("Mae", dash, "Beltrana", "de", "Tal")) == {
+        "label": {dash, "Beltrana", "de", "Tal"}
+    }
+    # A dash alone is no name, and prose after a dash is still prose.
+    assert found(line("Paciente", "-")) == {}
+    assert found(line("Paciente", "-", "refere", "dor")) == {}

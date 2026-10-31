@@ -122,3 +122,15 @@ The file holds Antigravity's drafts before its final list, which are its last th
 | AB-10 | medium | A border or bullet OCR reads before a bare label (`\| Nome`) hid the label | Leading non-word characters are skipped before the label; the colon check starts at the label | `test_a_border_before_a_bare_label_is_skipped`, `test_a_border_before_a_colon_label_leaves_it_a_colon_label`; 2 mutants killed | fixed |
 
 Validation: `uv run pytest` 191 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 7 mutants, all killed.
+
+## Codex round 4 (`codex-round4.md`, reviewed `0e5a152`)
+
+Codex reported 3 findings. All are valid; CB-23 and CB-24 were reproduced before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-23 | high | A state before a document number (`MG-12.345.678`) made the word no number part | A number part may start with a state, as it may end in one | `test_a_state_before_a_document_number_is_part_of_it`; mutant killed | fixed |
+| CB-24 | high | A dash between a bare `Paciente` or `Mãe` label and the name failed the whole value as no name | Separators are not words of a name: they neither fail it nor make one by themselves | `test_a_dash_between_a_bare_label_and_a_name_is_not_the_name` (also a dash alone, and prose after a dash, taken by nothing); mutant killed | fixed |
+| CB-25 | medium | `get_flattened_data` exists only in Pillow 11.3+, while the project allows 10.1: an `AttributeError` outside every handler | The 16-bit samples are read as bytes (`tobytes`, native 32-bit integers), which every supported Pillow gives | `test_a_transparent_16_bit_image_needs_no_pillow_newer_than_declared` (the newer pixel APIs made to fail); mutant killed | fixed |
+
+Validation: `uv run pytest` 194 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.
