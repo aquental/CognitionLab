@@ -30,7 +30,15 @@ fn fixture(nome: &str) -> PathBuf {
 }
 
 fn classify(args: &[&str], vars: &[(&str, &str)]) -> (Output, Value) {
+    classify_com_env(args, vars, "")
+}
+
+/// Like [`classify`], with `dotenv` as the `.env` of the working directory.
+fn classify_com_env(args: &[&str], vars: &[(&str, &str)], dotenv: &str) -> (Output, Value) {
     let dir = tempfile::tempdir().unwrap();
+    if !dotenv.is_empty() {
+        std::fs::write(dir.path().join(".env"), dotenv).unwrap();
+    }
     let mut comando = Command::new(env!("CARGO_BIN_EXE_embeddings-fundamentals"));
     comando.arg("classify").args(args).current_dir(dir.path());
     for v in VARIAVEIS {
@@ -145,6 +153,23 @@ fn synthetic_fixtures_are_prepared_without_sending() {
 }
 
 #[test]
+fn a_dotenv_never_authorizes_sending() {
+    if !integracao() {
+        return;
+    }
+    // The authorization is per run: a `.env` that sets it is ignored (spec §12).
+    let holter = fixture("holter_24h.pdf");
+    let (saida, json) = classify_com_env(
+        &["--json", "--enviar", holter.to_str().unwrap()],
+        &[],
+        "CLASSIFIER_REMOTE_ALLOWED=1\nTYPESAFE_API_KEY=sk-sintetica\n",
+    );
+    assert_eq!(saida.status.code(), Some(0));
+    assert_eq!(json["estado"], "preparado");
+    assert_eq!(json["motivo_codigo"], "envio_nao_autorizado");
+}
+
+#[test]
 fn a9_a_known_name_that_is_a_file_term_blocks_without_the_state() {
     if !integracao() {
         return;
@@ -208,14 +233,13 @@ fn with_the_local_server_the_binary_classifies() {
         );
         s.write_all(resposta.as_bytes()).unwrap();
     });
+    // The key and the URL come from the working directory's `.env`; the authorization
+    // from the process.
     let holter = fixture("holter_24h.pdf");
-    let (saida, json) = classify(
+    let (saida, json) = classify_com_env(
         &["--json", "--enviar", holter.to_str().unwrap()],
-        &[
-            ("CLASSIFIER_REMOTE_ALLOWED", "1"),
-            ("TYPESAFE_API_KEY", "sk-sintetica"),
-            ("RLCD_BASE_URL", base.as_str()),
-        ],
+        &[("CLASSIFIER_REMOTE_ALLOWED", "1")],
+        &format!("TYPESAFE_API_KEY=sk-sintetica\nRLCD_BASE_URL={base}\n"),
     );
     servidor.join().unwrap();
     assert_eq!(saida.status.code(), Some(0));

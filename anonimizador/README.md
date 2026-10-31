@@ -107,7 +107,7 @@ For each original, in order:
 - **Exam type (optional).** `--classifier <binary>` takes the `embeddings-fundamentals` binary. With it, every copy whose verification is `ok` is also classified by exam type (`classify`, `../embeddings-fundamentals/spec/CLASSIFIER.md` §11):
   - The index gains the columns *Exam type (classifier)* and *Weights*, and a header line with the classifier's identity. Each copy's JSON line is kept in `<outputs>/<YYYYMMDD-HHMMSS>/classifier/`.
   - A copy that fails verification is never classified.
-  - Nothing is sent by default: the cell says `not sent`. `--classify-remote` lets the classifier send each copy's masked text to TypeSafe's Jev, and only when `CLASSIFIER_REMOTE_ALLOWED=1` is also set. The key comes from `RLCD_API_KEY` or `TYPESAFE_API_KEY`.
+  - Nothing is sent by default: the cell says `not sent`. `--classify-remote` lets the classifier send each copy's masked text to TypeSafe's Jev, and only when `CLASSIFIER_REMOTE_ALLOWED=1` is also set. The key comes from `RLCD_API_KEY` or `TYPESAFE_API_KEY`, in the environment or in `../embeddings-fundamentals/.env` (see its `.env.example`). `CLASSIFIER_REMOTE_ALLOWED` must be set on the command itself: a `.env` never sets it.
   - **For `--classify-remote`, the binary must be built with the `classifier-jev` feature:**
 
     ```bash

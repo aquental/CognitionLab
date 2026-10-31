@@ -906,18 +906,46 @@ impl Fonte for FontePoppler {
     }
 }
 
-/// The environment: process variables first, then the `.env` found from the current
-/// directory up (as `dotenvy::dotenv` would load it, without changing the process
-/// environment).
-fn ambiente_do_processo() -> impl Fn(&str) -> Option<String> {
-    let arquivo: HashMap<String, String> = dotenvy::dotenv_iter()
-        .map(|itens| itens.filter_map(Result::ok).collect())
-        .unwrap_or_default();
+/// Variables only the process environment sets, never a `.env`: the per-run
+/// authorization to send (R-P1). With the key in a `.env`, sending stays an explicit act
+/// of each run.
+pub const SO_DO_PROCESSO: &[&str] = &["CLASSIFIER_REMOTE_ALLOWED"];
+
+/// A lookup over the process environment, then each `.env` file in order, except for
+/// [`SO_DO_PROCESSO`], which only the process sets.
+pub fn ambiente_em_camadas(
+    processo: impl Fn(&str) -> Option<String>,
+    arquivos: Vec<HashMap<String, String>>,
+) -> impl Fn(&str) -> Option<String> {
     move |nome| {
-        std::env::var(nome)
-            .ok()
-            .or_else(|| arquivo.get(nome).cloned())
+        processo(nome).or_else(|| {
+            if SO_DO_PROCESSO.contains(&nome) {
+                return None;
+            }
+            arquivos.iter().find_map(|a| a.get(nome).cloned())
+        })
     }
+}
+
+fn ler_env(itens: dotenvy::Result<dotenvy::Iter<std::fs::File>>) -> HashMap<String, String> {
+    itens
+        .map(|itens| itens.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// The environment of the binary: process variables, then the `.env` found from the
+/// current directory up, then the crate root's `.env` (spec/CLASSIFIER.md §12), so that
+/// `anonimizador batch --classifier`, run from another directory, finds the key too.
+/// Neither file changes the process environment.
+fn ambiente_do_processo() -> impl Fn(&str) -> Option<String> {
+    let raiz = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    ambiente_em_camadas(
+        |nome| std::env::var(nome).ok(),
+        vec![
+            ler_env(dotenvy::dotenv_iter()),
+            ler_env(dotenvy::from_path_iter(raiz)),
+        ],
+    )
 }
 
 /// Runs `classify` in the binary: prints the line, a fixed phrase for the reason on
@@ -947,6 +975,44 @@ mod tests {
 
     const CABECALHO: &str = "page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio\n\
         --------------------------------------------------------------------------------------------\n";
+
+    #[test]
+    fn the_process_wins_then_each_env_file_and_never_a_file_for_the_authorization() {
+        let processo = |nome: &str| (nome == "RLCD_MODEL").then(|| "jev-1.13.0".to_owned());
+        let cwd: HashMap<String, String> = [
+            ("RLCD_MODEL", "jev-0.0.1"),
+            ("TYPESAFE_API_KEY", "chave-do-diretorio"),
+            ("CLASSIFIER_REMOTE_ALLOWED", "1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let raiz: HashMap<String, String> = [
+            ("TYPESAFE_API_KEY", "chave-da-raiz"),
+            ("RLCD_TIMEOUT_S", "30"),
+            ("CLASSIFIER_REMOTE_ALLOWED", "1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let ambiente = ambiente_em_camadas(processo, vec![cwd, raiz]);
+        assert_eq!(ambiente("RLCD_MODEL").as_deref(), Some("jev-1.13.0"));
+        assert_eq!(
+            ambiente("TYPESAFE_API_KEY").as_deref(),
+            Some("chave-do-diretorio")
+        );
+        assert_eq!(ambiente("RLCD_TIMEOUT_S").as_deref(), Some("30"));
+        assert_eq!(ambiente("CLASSIFIER_REMOTE_ALLOWED"), None);
+        assert_eq!(ambiente("RLCD_BASE_URL"), None);
+        let autorizado = ambiente_em_camadas(
+            |nome: &str| (nome == "CLASSIFIER_REMOTE_ALLOWED").then(|| "1".to_owned()),
+            Vec::new(),
+        );
+        assert_eq!(
+            autorizado("CLASSIFIER_REMOTE_ALLOWED").as_deref(),
+            Some("1")
+        );
+    }
 
     #[test]
     fn image_area_counts_images_and_stencils_but_not_masks() {
