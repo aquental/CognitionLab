@@ -183,3 +183,7 @@ Codex reported 1 finding. It is valid.
 | CB-34 | high | The field boundary looked for an ASCII colon in the original text, though labels are matched in folded text, so a next field with a fullwidth colon (`Data：05/06`) was taken as a heading's value and the name under it survived | The boundary check folds the text, as label matching does | `test_a_fullwidth_colon_ends_a_value_like_an_ascii_one` (glued, detached, and after a colon label). The mutants for each of the two checks are killed | fixed |
 
 Validation: `uv run pytest` 202 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 2 mutants, both killed.
+
+## Codex round 9 (`codex-round9.md`, reviewed `c3f2539`)
+
+`NO FINDINGS`. Codex has no open finding on stages 1–2. Antigravity's last round (3) predates the fixes of CB-26 to CB-34, which changed detection, so it reviews again.
