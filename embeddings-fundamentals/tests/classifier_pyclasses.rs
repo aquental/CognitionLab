@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use embeddings_fundamentals::classifier::{pyclasses, texto};
+use embeddings_fundamentals::classifier::{canonico, pyclasses, texto};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -95,6 +95,7 @@ fn primitives_match_python_on_random_strings() {
         2 => proptest::sample::select(vec![
             '\u{301}', '\u{303}', '\u{331}', 'İ', 'ı', 'ß', 'ǅ', 'ǆ', 'ﬁ', 'ª', 'º', 'Ω', 'Å', '²', '½', 'Ⅻ',
             '\u{1c}', '\u{1f}', '\u{85}', '\u{a0}', '\u{2028}', '\u{2029}', '\r', '\n', '\u{b}', '\u{c}', '‿',
+            'Σ', 'Σ', 'σ', 'ς', 'Ο', 'Α', '\'', '.', ':', '\u{ad}', 'ʰ', '·',
         ]),
         1 => any::<char>(),
     ];
@@ -125,5 +126,74 @@ fn primitives_match_python_on_random_strings() {
     let esperado: Vec<Value> = serde_json::from_slice(&out.stdout).expect("parse python output");
     for (entrada, esperado) in entradas.iter().zip(&esperado) {
         assert_eq!(&rust(entrada), esperado, "input {entrada:?}");
+    }
+}
+
+const PROGRAMA_FLOATS: &str = r#"
+import json, struct, sys
+saida = []
+for bits in json.load(sys.stdin):
+    x = struct.unpack("<d", bytes.fromhex(bits))[0]
+    saida.append(json.dumps({"x": [x]}, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+json.dump(saida, sys.stdout)
+"#;
+
+#[test]
+#[ignore = "needs Python 3.14; RUN_PYTHON_DIFF=1"]
+fn canonical_floats_match_python() {
+    let Some(python) = python() else { return };
+    let mut runner = TestRunner::new(Config::default());
+    // Every magnitude: random bit patterns, then the boundaries of the notation switch and
+    // a value exactly between two shortest strings (Python takes the even digit).
+    let mut floats: Vec<f64> = (0..20_000)
+        .map(|_| {
+            any::<u64>()
+                .new_tree(&mut runner)
+                .expect("generate")
+                .current()
+        })
+        .map(f64::from_bits)
+        .filter(|x| x.is_finite())
+        .collect();
+    floats.extend([
+        0.0,
+        -0.0,
+        1.0,
+        0.5,
+        1e-4,
+        1e-5,
+        9.999e-5,
+        1e15,
+        1e16,
+        9_999_999_999_999_998.0,
+        1e17,
+        123_456_789_012_345.6,
+        5e-324,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        0.1,
+        0.2 + 0.1,
+        -2.5e-7,
+    ]);
+    let bits: Vec<String> = floats
+        .iter()
+        .map(|x| hex::encode(x.to_le_bytes()))
+        .collect();
+    let mut filho = Command::new(python)
+        .args(["-c", PROGRAMA_FLOATS])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("run python");
+    serde_json::to_writer(filho.stdin.take().expect("stdin"), &bits).expect("write inputs");
+    let out = filho.wait_with_output().expect("python output");
+    assert!(out.status.success());
+    let esperado: Vec<String> = serde_json::from_slice(&out.stdout).expect("parse python output");
+    for (x, esperado) in floats.iter().zip(&esperado) {
+        assert_eq!(
+            &canonico::json_canonico(&json!({"x": [x]})),
+            esperado,
+            "{x:e}"
+        );
     }
 }

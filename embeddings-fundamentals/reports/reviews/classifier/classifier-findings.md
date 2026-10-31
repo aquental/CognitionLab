@@ -7,6 +7,7 @@ Adversarial review findings for the classifier port (`spec/CLASSIFIER.md`), phas
 - **Handling:** every finding is checked against the code and the sources. A valid finding is fixed, with a regression test. A false one is refuted with evidence.
 - **Moving on:** after 3 cycles, the work may move to the next phase if only low-severity findings remain.
 - **Raw reports:** `reports/reviews/classifier/phase-N/{agy,codex}-roundK.md`.
+- **Owner decision, 2026-10-31 (Antigravity quota):** while Antigravity has no quota (until about 2026-11-05 07:00), each phase goes on with Codex only, for up to 3 cycles. When the quota returns, Antigravity reviews every phase it missed, and its findings are handled as usual. This is a temporary waiver of the Antigravity step, not an approval.
 
 Severity: high, medium, or low, as the reviewer gave it. A changed severity is noted in the solution column.
 
@@ -34,11 +35,15 @@ Round 2 (Antigravity, commit `76b5eba`): it confirmed that A0-1, A0-2 and A0-3 a
 
 Codex round 1 (commit `76b5eba`, `phase-0/codex-round1.md`): it agreed with the closures of A0-1, A0-2 and A0-3 and found C0-1 and C0-2, both low.
 
+Codex round 2 (commit `08c9cbf`, `phase-0/codex-round2.md`): C0-1 and C0-2 closed, NO FINDINGS. **Phase 0 is closed.** A0-4 still waits for the owner's push in TestoDoc.
+
 Note on round 1: the first answer was a bare `NO FINDINGS`, with no coverage. It was not accepted, and the review was run again with a required Coverage section and one verification line per criterion. That second run is `phase-0/agy-round1.md`.
 
 ## Phase 1 — primitives and Unicode
 
-**Antigravity did not review this phase.** Its run on 2026-10-31 at 02:56 ended with `RESOURCE_EXHAUSTED` (429, "Individual quota reached", reset in 124 h, about 2026-11-05 07:00) and no review. Nothing was simulated. The Antigravity step stays open until the quota resets or the owner waives it in writing (spec §20). Codex reviews the phase meanwhile.
+**Antigravity did not review this phase.** Its run on 2026-10-31 at 02:56 ended with `RESOURCE_EXHAUSTED` (429, "Individual quota reached", reset in 124 h, about 2026-11-05 07:00) and no review. Nothing was simulated. Under the owner's decision above, Codex reviews the phase now, and Antigravity reviews it after the quota resets.
 
 | ID | Reviewer | Round | Severity | Finding | Valid? | Solution (summary) | Status |
 |---|---|---|---|---|---|---|---|
+| C1-1 | Codex | 1 | medium | `lower()` and the lowercase branch of `title()` mapped each code point alone; CPython lowers a capital sigma by context (`"ΟΣ".lower() == "ος"`, `"ΟΣ".title() == "Ος"`). | Yes | The generator now writes a Case_Ignorable table, read from CPython's own `str.lower()` (unicodedata does not expose the property). `lower` and `title` apply CPython's `handle_capital_sigma`; `dobrar` keeps folding each code point alone, as TestoDoc does. Unit test with the reviewer's cases plus others. Sigma variants and Case_Ignorable characters were added to the Python differential. The mutant "sigma by table" is detected by both. Spec §6.3 updated. | Fixed |
+| C1-2 | Codex | 1 | medium | `json_canonico` refused floats, but spec §7.4 accepts any `Value`. | Yes, and the spec was also wrong: it said floats go out "com `serde_json`", whose format is not Python's (`1e-9` instead of `1e-09`, `1e16` instead of `1e+16`). | `json_canonico` and `digest` can no longer fail. A float is written as Python's `repr`: the shortest round-trip digits, ties to the even digit, and Python's notation switch. A new opt-in differential compares 20 000 random floats plus the boundary values with `json.dumps` on Python 3.14; it found the tie case (`1898340296299833.25`), which is now fixed and kept in the test. Spec §7.4 corrected. | Fixed |

@@ -321,13 +321,12 @@ fn check_termos_permitidos(section: &Value) {
     }
 }
 
-#[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_json_canonico(section: &Value) {
     for case in cases(section) {
-        let saida = canonico::json_canonico(&case["valor"]).expect("integers and strings only");
+        let saida = canonico::json_canonico(&case["valor"]);
         assert_eq!(saida, text(case, "saida"));
         assert_eq!(
-            hex::encode(canonico::digest(&case["valor"]).expect("digest")),
+            hex::encode(canonico::digest(&case["valor"])),
             text(case, "sha256_hex")
         );
     }

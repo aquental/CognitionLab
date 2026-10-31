@@ -428,7 +428,10 @@ See `reports/reviews/classifier/classifier-findings.md`.
 
 ### Reviews
 - **Antigravity:** not run. The run at 02:56 hit the individual quota (429, reset in about 124 h). The step stays open until the reset or a written waiver from the owner.
-- **Codex:** see `reports/reviews/classifier/classifier-findings.md`.
+- **Codex, round 1:** two medium findings, both fixed:
+  - C1-1: the final sigma in `lower` and `title`;
+  - C1-2: Python's float `repr` in `json_canonico`, with a new float differential against Python.
+- **Owner decision (10:30):** Codex only while Antigravity has no quota; Antigravity reviews this phase after its quota resets.
 
 ## Classifier — Phase 2: masking
 
