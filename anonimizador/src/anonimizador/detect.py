@@ -218,8 +218,9 @@ def pattern_spans(text: Text, remove_dates: bool) -> list[tuple[str, tuple[int, 
 def ends_field(words: list[Word], seq: list[int], k: int) -> bool:
     """Whether `seq[k]` starts the next field: it holds a colon ("Idade:", "Idade:45",
     ":"), or the word after it starts with one ("Idade" ":") (Antigravity AB-1)."""
-    return ":" in words[seq[k]].text or (
-        k + 1 < len(seq) and words[seq[k + 1]].text.startswith(":")
+    # Folded, as labels are matched: a fullwidth colon is a colon (Codex CB-34).
+    return ":" in fold(words[seq[k]].text) or (
+        k + 1 < len(seq) and fold(words[seq[k + 1]].text).startswith(":")
     )
 
 

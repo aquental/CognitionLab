@@ -173,3 +173,13 @@ Codex reported 2 findings. Both are valid and were reproduced before the fix.
 | CB-33 | high | A `nº` glued to a number (`Nº123456`) was rejected as a number part, though a standalone `nº` was accepted | A number part may start with `nº` as it may start with a state | `test_a_number_sign_glued_to_a_number_is_part_of_it` (also prose after the label, taken by nothing); mutant killed | fixed |
 
 Validation: `uv run pytest` 201 passed, 2 skipped (one earlier full run showed one failure that three later runs did not repeat, and its name was not captured); ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.
+
+## Codex round 8 (`codex-round8.md`, reviewed `7d73691`)
+
+Codex reported 1 finding. It is valid.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-34 | high | The field boundary looked for an ASCII colon in the original text, though labels are matched in folded text, so a next field with a fullwidth colon (`Data：05/06`) was taken as a heading's value and the name under it survived | The boundary check folds the text, as label matching does | `test_a_fullwidth_colon_ends_a_value_like_an_ascii_one` (glued, detached, and after a colon label). The mutants for each of the two checks are killed | fixed |
+
+Validation: `uv run pytest` 202 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 2 mutants, both killed.
