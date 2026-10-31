@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
-from anonimizador.detect import Detection, cns_valid, cpf_valid, detect, detect_reading
+from anonimizador.detect import (
+    BARE_LABELS,
+    COLON_LABELS,
+    Detection,
+    cns_valid,
+    cpf_valid,
+    detect,
+    detect_reading,
+)
 from anonimizador.locate import Page, Word
 from anonimizador.terms import Term
 
@@ -273,3 +281,60 @@ def test_a_state_glued_to_a_council_number_is_part_of_it():
     # Codex CB-19.
     assert found(line("CRM:", "123456-SP")) == {"label": {"123456-SP"}}
     assert found(line("CRM", "123456/SP", "Hemoglobina")) == {"label": {"123456/SP"}}
+
+
+def test_every_bare_label_is_a_colon_label_too():
+    # Antigravity AB-8: "Data Nasc:" mid-line, detached, or glued was missed.
+    assert set(BARE_LABELS) <= set(COLON_LABELS)
+    date = {"label": {"01/02/1980"}}
+    assert found(line("Sexo:", "F", "Data", "Nasc.:", "01/02/1980"), remove_dates=False) == date
+    assert found(line("Data", "Nasc", ":", "01/02/1980"), remove_dates=False) == date
+    assert found(line("Data", "Nasc:01/02/1980"), remove_dates=False) == {
+        "label": {"Nasc:01/02/1980"}
+    }
+
+
+def test_a_colon_heading_takes_the_value_under_it_past_a_far_heading():
+    # Antigravity AB-9: a far word on the row ("Sexo", another heading) hid the date.
+    words = [
+        Word("Dt.", (0, 0, 30, 15), ("ocr", 1, 1, 0)),
+        Word("Nasc.:", (35, 0, 80, 15), ("ocr", 1, 1, 0)),
+        Word("Sexo", (200, 0, 250, 15), ("ocr", 2, 1, 0)),
+        Word("01/02/1980", (0, 20, 80, 35), ("ocr", 3, 1, 0)),
+        Word("F", (200, 20, 220, 35), ("ocr", 4, 1, 0)),
+    ]
+    assert "01/02/1980" in found(words, remove_dates=False)["label"]
+
+
+def test_a_number_label_followed_by_a_state_or_colon_finds_its_number_elsewhere():
+    # Antigravity AB-9: "CRM SP" or "RG :" on the label's line stopped the search.
+    under = placed(("CRM", 0), ("SP", 50), number=0) + placed(("123456", 0), number=1)
+    assert found(under) == {"label": {"123456"}}
+    beside = [
+        Word("RG", (0, 0, 30, 15), ("ocr", 1, 1, 0)),
+        Word(":", (35, 0, 40, 15), ("ocr", 1, 1, 0)),
+        Word("12.345.671-X", (100, 0, 220, 15), ("ocr", 2, 1, 0)),
+    ]
+    assert found(beside) == {"label": {"12.345.671-X"}}
+
+
+def test_a_border_before_a_bare_label_is_skipped():
+    # Antigravity AB-10: OCR reads table borders as "|".
+    assert found(line("|", "Nome", "Sicrano", "Inventado")) == {"label": {"Sicrano", "Inventado"}}
+    assert found(line("|Nome", "Sicrano", "Inventado")) == {"label": {"Sicrano", "Inventado"}}
+
+
+def test_a_colon_label_ending_its_block_takes_a_far_value_on_its_row():
+    # Antigravity AB-9: under nothing, the far word on the row is the value.
+    words = [
+        Word("Paciente:", (0, 0, 80, 15), ("ocr", 1, 1, 0)),
+        Word("Sicrano", (300, 0, 380, 15), ("ocr", 2, 1, 0)),
+    ]
+    assert found(words) == {"label": {"Sicrano"}}
+
+
+def test_a_border_before_a_colon_label_leaves_it_a_colon_label():
+    # A blank "Nome:" field followed by another field takes nothing below (Codex CB-17),
+    # with a border before it too (Antigravity AB-10).
+    words = line("|", "Nome:", "Idade:", "45", number=0) + line("Hemoglobina", "13,5", number=1)
+    assert found(words) == {}
