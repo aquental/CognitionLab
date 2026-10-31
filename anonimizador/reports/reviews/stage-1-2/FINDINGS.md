@@ -45,3 +45,30 @@ Validation:
 ### Known limitation, not a finding
 
 `verify` reads a copy's raw bytes, which are now its pixel data. Gray levels such as `0x40` and `0x2E` read as `@` and `.`, so it can report e-mail or `crm` pattern hints on a clean copy. Hints fail a run only with `--strict-patterns`. The test checks what OCR reads on each copy instead: no pattern but the `CRM` label.
+
+## Owner's review of the copies (`ecc58ba`)
+
+Looking at the copies of the first real run, the owner found patient names left on two kinds of exam. Both forms print `Nome` with no colon: one has the name beside it, the other under it, as under a column heading. The label detector took colon labels only.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| OW-1 | high | A `Nome` label without a colon was no label, so the name beside it or under it survived | A `Nome` that starts its line (also `Nome do paciente`, `Nome da mãe`, `Nome do pai`, `Nome social`) takes, in order: the words beside it up to a gap wider than twice its height; else the words under it that start where it starts; else the next words of its line. A value of particles only (`Nome do exame:`) is dropped | 5 tests in `test_detect.py`, each part killed by a mutant. On the real exams, checked locally by counts and positions only: the two names the owner reported are found in the originals and absent from the copies, and the region under the column heading is fully black | fixed |
+
+## Codex round 2 (`codex-round2.md`, reviewed `ecc58ba`)
+
+Codex reported 6 findings. All are valid. The three on image and TSV reading were reproduced with synthetic inputs before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-12 | high | A bare label searched for its value only in its own extracted line, so a name the extractor put in another block on the same row survived | The value is searched in the label's row: the words of its page to its right whose middle lies within its height, whatever their line. The column value continues along its row the same way | `test_a_name_beside_its_label_on_another_extracted_line_is_taken`. The mutant limiting the row to the label's line is killed | fixed |
+| CB-13 | high | Malformed EXIF raised Pillow's `SyntaxError`, which quotes the header bytes, outside every handler: a traceback with document bytes | Decoding an image file catches Pillow's non-`OSError` errors and raises a `ToolError` that names no byte, with the context suppressed. The exam gets an `ERROR` row | `test_malformed_exif_is_a_tool_error_without_its_bytes`, `test_malformed_exif_in_a_batch_is_an_error_row` (a PNG with a valid `eXIf` chunk holding an invented sentinel). The mutant without the handler is killed | fixed |
+| CB-14 | medium | TSV without its columns was read as an empty page, so a broken OCR reading let redaction go on without OCR boxes | TSV without the columns of a word is a parse error: a `ToolError` and an `ERROR` row. A header with no word is still an empty page | `test_tsv_without_its_columns_is_no_reading`, `test_malformed_tsv_in_a_batch_is_an_error_row` (a stub `tesseract` whose TSV is garbage). The mutant without the check is killed | fixed |
+| CB-15 | medium | A transparent image lost its alpha channel instead of being composited, so a page could turn black | Transparency is composited onto white, as a viewer shows it | `test_a_transparent_background_is_read_as_white` (black under transparent pixels, opaque black text). The mutant without compositing is killed | fixed |
+| CB-16 | high | `committable` took any `git rev-parse` failure, such as an unsafe-ownership error or an inherited `GIT_DIR`, for "outside any repository" and failed open | Git runs without inherited `GIT_*` variables, so it finds the repository from the path. A failure under a directory holding `.git` raises a `TermsError` instead of answering "not committable" | `test_a_git_that_cannot_tell_refuses_instead_of_failing_open`. Both mutants, answering `False` on failure and passing the inherited environment, are killed | fixed |
+| CB-17 | medium | The next-line fallback ran when the label had no value, not when it ended its line, so a blank field followed by another field took the next line | The fallback runs only when no word follows the label on its line | `test_a_blank_field_followed_by_another_field_takes_nothing_below`. The mutant with the old condition is killed | fixed |
+
+Validation:
+- `uv run pytest`: 172 passed, 2 skipped (opt-in).
+- ruff: clean.
+- `RUN_SAMPLE_EXAMS=1`: 2 passed.
+- One mutant per fix, two for CB-16: all killed.
