@@ -60,9 +60,13 @@ cargo run -- classify --json <anonymized copy>
 # Sending to Jev NEEDS the `classifier-jev` feature, plus --enviar, CLASSIFIER_REMOTE_ALLOWED=1 and a key:
 cargo build --release --features classifier-jev
 CLASSIFIER_REMOTE_ALLOWED=1 target/release/embeddings-fundamentals classify --json --enviar <anonymized copy>
+# Live check against the real Jev, with three synthetic documents (spec §14.6; sends, so both switches):
+RUN_JEV_LIVE=1 CLASSIFIER_REMOTE_ALLOWED=1 cargo test --features classifier-jev --test classifier_live -- --ignored --nocapture
 ```
 
 **The `classify` command can send to Jev only from a binary built with `--features classifier-jev`.** The feature is off by default, like the engine features. A binary built without it refuses authorized sending: with `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`, the result is `erro`, exit 5 (`configuracao_invalida`), and nothing is sent. Without `--enviar` both builds behave the same (`preparado`). The same holds for the binary passed to `anonimizador batch --classifier`: build it with the feature before a `--classify-remote` run.
+
+The key goes in `.env` as `TYPESAFE_API_KEY` (see `.env.example`). The binary reads the process environment first, then the `.env` from the working directory up, then this crate's `.env`. `CLASSIFIER_REMOTE_ALLOWED` is read from the process only, never from a `.env`, so every sending run sets it explicitly.
 
 The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonimizador verify` tool, is the job of the sibling project `../anonimizador`.
 

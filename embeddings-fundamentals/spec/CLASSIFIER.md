@@ -699,7 +699,12 @@ Os nomes das colunas e o formato dos pesos são decisões de apresentação dest
 
 ## 12. Configuração
 
-Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. O `.env` é lido com `dotenvy::dotenv_iter`, a partir do diretório corrente para cima, sem alterar o ambiente do processo, e uma variável do processo tem precedência sobre a do `.env`. Nenhum valor de chave é impresso.
+Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. Os `.env` são lidos sem alterar o ambiente do processo, nesta ordem de precedência:
+1. o ambiente do processo;
+2. o `.env` achado do diretório corrente para cima (`dotenvy::dotenv_iter`);
+3. o `.env` da raiz do crate, para que o `anonimizador batch --classifier`, rodado de outro diretório, também ache a chave.
+
+**`CLASSIFIER_REMOTE_ALLOWED` só vale no ambiente do processo e nunca é lido de um `.env`.** Com a chave num arquivo, a autorização de envio continua sendo um ato explícito de cada execução (R-P1). O `.env.example` traz o lugar da chave (`TYPESAFE_API_KEY=`). Nenhum valor de chave é impresso.
 
 Um binário compilado **sem** a feature `classifier-jev` não tem como enviar: com o envio autorizado, sai com o código 5 (`configuracao_invalida`), sem ler nenhuma variável do passo 3.
 
@@ -781,7 +786,7 @@ Um servidor HTTP local de teste (um `tokio::net::TcpListener` em `127.0.0.1`, se
 
 ### 14.6 Jev real (opcional)
 
-`RUN_JEV_LIVE=1 TYPESAFE_API_KEY=… cargo test --features classifier-jev --test classifier_live -- --ignored`: três documentos **sintéticos** (eco com strain, Holter, exame de sangue), que conferem a forma da resposta e a validação. Não conferem o tipo exato: o modelo é externo.
+`RUN_JEV_LIVE=1 CLASSIFIER_REMOTE_ALLOWED=1 cargo test --features classifier-jev --test classifier_live -- --ignored --nocapture`, com a chave no ambiente ou no `.env` do crate: três documentos **sintéticos** (eco com strain, Holter, exame de sangue), que conferem a forma da resposta e a validação. Não conferem o tipo exato: o modelo é externo.
 
 ### 14.7 Exames reais (local)
 
