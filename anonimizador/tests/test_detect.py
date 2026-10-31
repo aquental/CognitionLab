@@ -420,3 +420,14 @@ def test_a_number_sign_glued_to_a_number_is_part_of_it():
     assert found(line("CRM", "N\u00ba123456")) == {"label": {"N\u00ba123456"}}
     assert found(line("CRM", "N\u00b0123456")) == {"label": {"N\u00b0123456"}}
     assert found(line("CRM", "no", "estado")) == {}
+
+
+def test_a_fullwidth_colon_ends_a_value_like_an_ascii_one():
+    # Codex CB-34: the field boundary looked for an ASCII colon only.
+    values = placed(("Sicrano", 0), number=1)
+    for heading in (
+        placed(("Nome", 0), ("Data\uff1a05/06", 50), number=0),
+        placed(("Nome", 0), ("Data", 50), ("\uff1a", 145), ("05/06", 200), number=0),
+    ):
+        assert found(heading + values, remove_dates=False) == {"label": {"Sicrano"}}
+    assert found(line("Paciente:", "Sicrano", "Idade\uff1a45")) == {"label": {"Sicrano"}}
