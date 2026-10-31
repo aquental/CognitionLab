@@ -598,6 +598,8 @@ embeddings-fundamentals classify <arquivo> [--paginas 1|2|todas] [--json] [--env
                                  [--titulo T] [--nome-paciente N]... [--mostrar-estado]
 ```
 
+**Dependência de compilação do envio:** só um binário compilado com a feature `classifier-jev` (`cargo build --release --features classifier-jev`, ou `cargo run --features classifier-jev -- classify …`) consegue enviar ao Jev. A feature vem desligada por padrão. Sem ela, o envio autorizado (`--enviar` com `CLASSIFIER_REMOTE_ALLOWED=1`) dá `erro`, código 5 (`configuracao_invalida`), sem ler nenhuma variável do passo 3 nem enviar nada (§12). Sem `--enviar`, os dois binários se comportam igual (`preparado`). Vale também para o binário que o `anonimizador batch --classifier` chama (§11.1).
+
 O padrão de `--paginas` é `CLASSIFIER_PAGINAS`, ou `"2"` (TD §16.1). Há uma linha JSON com `--json`; sem ele, um texto legível com os mesmos campos e nenhum texto do exame.
 
 `--mostrar-estado` acrescenta `estado_preparado` (o estado no formato de fio) **só** quando `estado ∈ {preparado, ok, incerto, erro}`, `prep.bloqueio` está vazio e `!prep.sem_conteudo()` (TP `classificar_documento.py:369`). Em `bloqueado_privacidade` o estado contém justamente o dado pessoal que a conferência achou, então a chave fica **ausente** do JSON e o modo legível não o imprime. A opção existe só para entradas sintéticas (R-P4).
