@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
 
 use super::categorias::{Categoria, TEXTO_UTIL_MIN};
 
@@ -331,6 +332,89 @@ pub struct Uso {
     pub output_tokens: u64,
 }
 
+/// The result of a classification (spec/CLASSIFIER.md §5.5; TD §9.1).
+///
+/// It is not serialized as a whole: the CLI's JSON line is a separate struct
+/// (spec/CLASSIFIER.md §10.3), which serializes `probabilidades` with
+/// [`serializar_probabilidades`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Classificacao {
+    /// The final state.
+    pub estado: EstadoClassificacao,
+    /// The pages mode.
+    pub paginas_modo: PaginasModo,
+    /// Copied from the input.
+    pub total_paginas: u32,
+    /// Pages that entered the state.
+    pub paginas_enviadas: u32,
+    /// Code points of text sent.
+    pub caracteres_enviados: u32,
+    /// Some page or the total was cut.
+    pub truncado: bool,
+    /// Removals per layer, plus `conferencia_<layer>` when the final check blocks.
+    pub mascaramentos: BTreeMap<String, u32>,
+    /// Text origins of the sent pages, sorted, without repeats.
+    pub origens_texto: Vec<OrigemTexto>,
+    /// Hex sha256 of the canonical JSON of the state (64 digits).
+    pub entrada_digest: String,
+    /// The chosen type, only with a valid answer.
+    pub tipo: Option<Categoria>,
+    /// Probability of the chosen type (TD §10).
+    pub confianca: Option<f64>,
+    /// Chosen probability minus the next highest.
+    pub margem: Option<f64>,
+    /// Probability of each type, in the order of [`Categoria::TODAS`]; `None` without a
+    /// valid answer.
+    pub probabilidades: Option<[f64; 9]>,
+    /// Jev's own `confidence`, informative only (extension DV7).
+    pub confianca_provedor: Option<f64>,
+    /// Why the call failed.
+    pub erro_categoria: Option<ErroCategoria>,
+    /// Stable reason of the state.
+    pub motivo_codigo: Option<MotivoCodigo>,
+    /// Always `"typesafe"`.
+    pub provider: &'static str,
+    /// The configured model; after a call, the one the answer echoes.
+    pub model: String,
+    /// Identity of the adapter (spec/CLASSIFIER.md §8.1).
+    pub adapter_version: &'static str,
+    /// [`super::PERGUNTAS_VERSAO`].
+    pub perguntas_versao: &'static str,
+    /// [`super::MASCARAMENTO_VERSAO`].
+    pub mascaramento_versao: &'static str,
+    /// The threshold the decision used.
+    pub limiar_aplicado: f64,
+    /// The provider's request id, when it sent one.
+    pub provider_request_id: Option<String>,
+    /// Duration of the provider call, 0 without a call.
+    pub latencia_ms: u64,
+    /// Token usage, when the provider reported it.
+    pub uso: Option<Uso>,
+}
+
+/// Serializes probabilities as an object keyed by [`Categoria::valor`] in the order of
+/// [`Categoria::TODAS`], and `None` as `{}` (TD §11.2). For `#[serde(serialize_with)]`.
+///
+/// The order is written explicitly, so it does not depend on `serde_json`'s
+/// `preserve_order` feature.
+///
+/// # Errors
+///
+/// Whatever the serializer returns.
+pub fn serializar_probabilidades<S: Serializer>(
+    probabilidades: &Option<[f64; 9]>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let Some(probabilidades) = probabilidades else {
+        return serializer.serialize_map(Some(0))?.end();
+    };
+    let mut mapa = serializer.serialize_map(Some(Categoria::TODAS.len()))?;
+    for (categoria, probabilidade) in Categoria::TODAS.into_iter().zip(probabilidades) {
+        mapa.serialize_entry(categoria.valor(), probabilidade)?;
+    }
+    mapa.end()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +470,159 @@ mod tests {
         }
         assert_eq!(PaginasModo::Duas.limite(), Some(2));
         assert_eq!(PaginasModo::Todas.limite(), None);
+    }
+
+    fn ida_e_volta<T>(valores: &[T], texto: impl Fn(T) -> &'static str)
+    where
+        T: Serialize + serde::de::DeserializeOwned + PartialEq + fmt::Debug + Copy,
+    {
+        for &valor in valores {
+            let serializado = json(&valor);
+            assert_eq!(serializado, format!("\"{}\"", texto(valor)));
+            assert_eq!(serde_json::from_str::<T>(&serializado).unwrap(), valor);
+        }
+        assert!(serde_json::from_str::<T>("\"desconhecido\"").is_err());
+    }
+
+    #[test]
+    fn enums_deserialize_what_they_serialize() {
+        ida_e_volta(
+            &[
+                OrigemTexto::Nativo,
+                OrigemTexto::OcrLocal,
+                OrigemTexto::Visao,
+            ],
+            OrigemTexto::as_str,
+        );
+        ida_e_volta(
+            &[
+                Camada::Rotulo,
+                Camada::NomeConhecido,
+                Camada::Tratamento,
+                Camada::Padrao,
+                Camada::Data,
+            ],
+            Camada::as_str,
+        );
+        ida_e_volta(
+            &[PaginasModo::Uma, PaginasModo::Duas, PaginasModo::Todas],
+            PaginasModo::as_str,
+        );
+        ida_e_volta(
+            &[
+                EstadoClassificacao::Preparado,
+                EstadoClassificacao::Ok,
+                EstadoClassificacao::Incerto,
+                EstadoClassificacao::SemConteudo,
+                EstadoClassificacao::BloqueadoPrivacidade,
+                EstadoClassificacao::Erro,
+            ],
+            |e| match e {
+                EstadoClassificacao::Preparado => "preparado",
+                EstadoClassificacao::Ok => "ok",
+                EstadoClassificacao::Incerto => "incerto",
+                EstadoClassificacao::SemConteudo => "sem_conteudo",
+                EstadoClassificacao::BloqueadoPrivacidade => "bloqueado_privacidade",
+                EstadoClassificacao::Erro => "erro",
+            },
+        );
+        ida_e_volta(
+            &[
+                ErroCategoria::Timeout,
+                ErroCategoria::Rede,
+                ErroCategoria::RespostaInvalida,
+                ErroCategoria::Autenticacao,
+                ErroCategoria::QuotaProvedor,
+                ErroCategoria::Outro,
+            ],
+            |e| match e {
+                ErroCategoria::Timeout => "timeout",
+                ErroCategoria::Rede => "rede",
+                ErroCategoria::RespostaInvalida => "resposta_invalida",
+                ErroCategoria::Autenticacao => "autenticacao",
+                ErroCategoria::QuotaProvedor => "quota_provedor",
+                ErroCategoria::Outro => "outro",
+            },
+        );
+        ida_e_volta(
+            &[
+                MotivoCodigo::SemConteudo,
+                MotivoCodigo::TextoInsuficiente,
+                MotivoCodigo::ConferenciaPrivacidade,
+                MotivoCodigo::ProvedorErro,
+                MotivoCodigo::EnvioNaoAutorizado,
+            ],
+            |m| match m {
+                MotivoCodigo::SemConteudo => "sem_conteudo",
+                MotivoCodigo::TextoInsuficiente => "texto_insuficiente",
+                MotivoCodigo::ConferenciaPrivacidade => "conferencia_privacidade",
+                MotivoCodigo::ProvedorErro => "provedor_erro",
+                MotivoCodigo::EnvioNaoAutorizado => "envio_nao_autorizado",
+            },
+        );
+        ida_e_volta(
+            &[
+                MotivoCli::ConfiguracaoInvalida,
+                MotivoCli::SemChave,
+                MotivoCli::ModeloInvalido,
+                MotivoCli::ArquivoInexistente,
+                MotivoCli::FormatoNaoSuportado,
+                MotivoCli::LimitePdf,
+                MotivoCli::ArquivoIlegivel,
+                MotivoCli::OcrIndisponivel,
+                MotivoCli::ErroInterno,
+            ],
+            |m| match m {
+                MotivoCli::ConfiguracaoInvalida => "configuracao_invalida",
+                MotivoCli::SemChave => "sem_chave",
+                MotivoCli::ModeloInvalido => "modelo_invalido",
+                MotivoCli::ArquivoInexistente => "arquivo_inexistente",
+                MotivoCli::FormatoNaoSuportado => "formato_nao_suportado",
+                MotivoCli::LimitePdf => "limite_pdf",
+                MotivoCli::ArquivoIlegivel => "arquivo_ilegivel",
+                MotivoCli::OcrIndisponivel => "ocr_indisponivel",
+                MotivoCli::ErroInterno => "erro_interno",
+            },
+        );
+    }
+
+    #[test]
+    fn pages_mode_displays_its_value() {
+        for modo in [PaginasModo::Uma, PaginasModo::Duas, PaginasModo::Todas] {
+            assert_eq!(modo.to_string(), modo.as_str());
+        }
+    }
+
+    #[derive(Serialize)]
+    struct ComProbabilidades {
+        #[serde(serialize_with = "serializar_probabilidades")]
+        probabilidades: Option<[f64; 9]>,
+    }
+
+    #[test]
+    fn no_probabilities_serialize_as_an_empty_object() {
+        let linha = ComProbabilidades {
+            probabilidades: None,
+        };
+        assert_eq!(json(&linha), r#"{"probabilidades":{}}"#);
+    }
+
+    #[test]
+    fn probabilities_serialize_in_the_order_of_the_categories() {
+        // Not alphabetical: `vop` comes first and `ecg` before `outro` (TD §11.2).
+        let linha = ComProbabilidades {
+            probabilidades: Some([
+                0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625, 0.00390625,
+            ]),
+        };
+        assert_eq!(
+            json(&linha),
+            concat!(
+                r#"{"probabilidades":{"vop":0.5,"eco_convencional":0.25,"eco_avancado":0.125,"#,
+                r#""calorimetria":0.0625,"ergoespirometria":0.03125,"holter":0.015625,"#,
+                r#""mapa":0.0078125,"ecg":0.00390625,"outro":0.00390625}}"#
+            )
+        );
     }
 
     #[test]

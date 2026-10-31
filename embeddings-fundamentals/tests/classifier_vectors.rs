@@ -15,8 +15,18 @@ use sha2::{Digest, Sha256};
 /// sha256 of the vectors this port is pinned to (spec/CLASSIFIER.md §0.1).
 const VECTORS_SHA256: &str = "f14676c78e9bf590e0cb1534c83ab456c82cb8bd67e696cc94bb239d891db22e";
 
-/// Sections a test below checks.
-const COVERED: &[&str] = &["meta", "constantes", "criterio"];
+/// What checks one section. It receives only that section's value, so it cannot read a
+/// section that is still pending or excluded.
+type Check = fn(&Value);
+
+/// Sections a check below covers, each with its check. A section is covered only by
+/// being listed here with a check, and `every_covered_section_passes_its_check` runs
+/// every entry, so no covered section is skipped.
+const COVERED: &[(&str, Check)] = &[
+    ("meta", check_meta),
+    ("constantes", check_constantes),
+    ("criterio", check_criterio),
+];
 
 /// Sections a later phase covers (spec/CLASSIFIER.md §20). This list only shrinks: a
 /// phase that covers a section moves it to `COVERED`.
@@ -57,25 +67,50 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("`{key}` is not a string"))
 }
 
-/// The vectors' `name` section, for a test that checks it. Fails unless the section is
-/// listed in `COVERED`: a test cannot start covering a section that is still `PENDING`
-/// or `EXCLUDED` without moving it (spec/CLASSIFIER.md §20, Phase 0, item 6).
+/// The keys of an object, to compare a section's key set with the expected one.
 #[expect(clippy::panic, reason = "test helper")]
-fn section<'a>(vectors: &'a Value, name: &str) -> &'a Value {
-    assert!(
-        COVERED.contains(&name),
-        "section `{name}` is tested but not listed in COVERED"
-    );
-    vectors
-        .get(name)
-        .unwrap_or_else(|| panic!("the vectors have no section `{name}`"))
+fn keys(value: &Value) -> BTreeSet<&str> {
+    value
+        .as_object()
+        .unwrap_or_else(|| panic!("not an object: {value}"))
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+/// Runs each check on its section and returns the sections that failed, or that the
+/// vectors lack.
+fn run_checks(vectors: &Value, checks: &[(&str, Check)]) -> Vec<String> {
+    checks
+        .iter()
+        .filter_map(|&(name, check)| {
+            let Some(section) = vectors.get(name) else {
+                return Some(format!("{name} (missing)"));
+            };
+            std::panic::catch_unwind(|| check(section))
+                .is_err()
+                .then(|| name.to_owned())
+        })
+        .collect()
 }
 
 #[test]
-#[should_panic(expected = "is tested but not listed in COVERED")]
-fn a_pending_section_cannot_be_tested_without_moving_it() {
-    let v = vectors();
-    let _ = section(&v, PENDING[0]);
+fn every_covered_section_passes_its_check() {
+    let failed = run_checks(&vectors(), COVERED);
+    assert!(failed.is_empty(), "sections that failed: {failed:?}");
+}
+
+#[test]
+fn the_runner_reports_failing_and_missing_sections() {
+    fn passes(_: &Value) {}
+    fn fails(_: &Value) {
+        assert_eq!(1, 2, "a check that fails on purpose");
+    }
+    let v = serde_json::json!({"a": 1, "b": 2});
+    assert_eq!(
+        run_checks(&v, &[("a", passes), ("b", fails), ("c", passes)]),
+        ["b", "c (missing)"]
+    );
 }
 
 #[test]
@@ -94,8 +129,12 @@ fn every_section_is_covered_pending_or_excluded_exactly_once() {
         .map(String::as_str)
         .collect();
     let mut seen = BTreeSet::new();
-    for section in COVERED.iter().chain(PENDING).chain(EXCLUDED) {
-        assert!(seen.insert(*section), "section `{section}` is listed twice");
+    let covered = COVERED.iter().map(|&(name, _)| name);
+    for section in covered
+        .chain(PENDING.iter().copied())
+        .chain(EXCLUDED.iter().copied())
+    {
+        assert!(seen.insert(section), "section `{section}` is listed twice");
     }
     assert_eq!(
         sections, seen,
@@ -103,10 +142,18 @@ fn every_section_is_covered_pending_or_excluded_exactly_once() {
     );
 }
 
-#[test]
-fn meta_matches_the_port_versions() {
-    let v = vectors();
-    let meta = section(&v, "meta");
+fn check_meta(meta: &Value) {
+    assert_eq!(
+        keys(meta),
+        BTreeSet::from([
+            "descricao",
+            "gerador",
+            "mascaramento_versao",
+            "perguntas_versao",
+            "python",
+            "unicode_versao",
+        ])
+    );
     assert_eq!(
         text(meta, "mascaramento_versao"),
         classifier::MASCARAMENTO_VERSAO
@@ -126,10 +173,22 @@ fn normalization_tables_are_the_vectors_unicode_version() {
     );
 }
 
-#[test]
-fn constants_match() {
-    let v = vectors();
-    let c = section(&v, "constantes");
+#[expect(clippy::panic, reason = "a check fails by panicking")]
+fn check_constantes(c: &Value) {
+    assert_eq!(
+        keys(c),
+        BTreeSet::from([
+            "CRITERIO_ID",
+            "DATA",
+            "ETAPA",
+            "LIMITE_PAGINA",
+            "LIMITE_TOTAL",
+            "REMOVIDO",
+            "TEXTO_UTIL_MIN",
+            "TOLERANCIA_LIMIAR",
+            "TOLERANCIA_SOMA_PROBABILIDADES",
+        ])
+    );
     let int = |k: &str| {
         c[k].as_u64()
             .unwrap_or_else(|| panic!("`{k}` is not an integer"))
@@ -156,15 +215,18 @@ fn constants_match() {
     assert_eq!(text(c, "CRITERIO_ID"), classifier::CRITERIO_ID);
 }
 
-#[test]
-fn criterion_matches_question_and_options_in_order() {
-    let v = vectors();
-    let criterio = section(&v, "criterio");
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_criterio(criterio: &Value) {
+    assert_eq!(keys(criterio), BTreeSet::from(["id", "opcoes", "pergunta"]));
     assert_eq!(text(criterio, "id"), classifier::CRITERIO_ID);
     assert_eq!(text(criterio, "pergunta"), classifier::PERGUNTA);
     let opcoes = criterio["opcoes"].as_array().expect("`opcoes` is a list");
     assert_eq!(opcoes.len(), Categoria::TODAS.len());
     for (opcao, categoria) in opcoes.iter().zip(Categoria::TODAS) {
+        assert_eq!(
+            keys(opcao),
+            BTreeSet::from(["descricao", "rotulo", "slug", "valor"])
+        );
         assert_eq!(text(opcao, "valor"), categoria.valor());
         assert_eq!(text(opcao, "rotulo"), categoria.rotulo());
         assert_eq!(text(opcao, "descricao"), categoria.descricao());

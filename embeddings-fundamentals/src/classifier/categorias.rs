@@ -203,11 +203,12 @@ mod tests {
     fn valor_round_trips_through_from_str_and_serde() {
         for c in Categoria::TODAS {
             assert_eq!(c.valor().parse::<Categoria>(), Ok(c));
-            assert_eq!(
-                serde_json::to_string(&c).unwrap(),
-                format!("\"{}\"", c.valor())
-            );
+            let serializado = serde_json::to_string(&c).unwrap();
+            assert_eq!(serializado, format!("\"{}\"", c.valor()));
+            assert_eq!(serde_json::from_str::<Categoria>(&serializado).unwrap(), c);
+            assert_eq!(c.to_string(), c.valor());
         }
+        assert!(serde_json::from_str::<Categoria>("\"eco-strain-avancado\"").is_err());
         assert_eq!(
             "eco-strain-avancado".parse::<Categoria>(),
             Err(CategoriaDesconhecida)
