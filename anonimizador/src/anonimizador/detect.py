@@ -75,13 +75,14 @@ NUMBER_VALUE_WORDS = 4
 # The states a council number is registered in ("CRM/SP").
 STATES = "ac al ap am ba ce df es go ma mt ms mg pa pb pr pe pi rj rn rs ro rr sc sp se to"
 # A word of a number's value: digits, which may start with a state ("MG-12.345.678",
-# Codex CB-23) and end in the check letter X of an RG (Codex CB-6) or in a state
-# ("123456-SP", Codex CB-19); a state; "nº"; or a separator.
+# Codex CB-23) or "nº" ("Nº123456", Codex CB-33) and end in the check letter X of an
+# RG (Codex CB-6) or in a state ("123456-SP", Codex CB-19); a state; "nº"; or a
+# separator.
 STATE = "(?:" + "|".join(STATES.split()) + ")"
 NUMBER_PART = re.compile(
-    r"^[\W_]*(?:(?:(?:"
+    r"^[\W_]*(?:(?:(?:(?:"
     + STATE
-    + r"[\W_]*)?\d[\d\W_]*(?:(?:x|"
+    + r"|n[o°º]?)[\W_]*)?\d[\d\W_]*(?:(?:x|"
     + STATE
     + r")[\W_]*)?|"
     + STATE
@@ -387,6 +388,14 @@ def after_label(word: str, folded_length: int) -> str:
     return re.sub(r"^[\W_]+", "", word[prefix:])
 
 
+def end_of(text: Text, start: int) -> int:
+    """Where the word that owns the character at `start - 1` ends in the folded text."""
+    word, end = text.owner[start - 1], start
+    while end < len(text.owner) and text.owner[end] == word:
+        end += 1
+    return end
+
+
 def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     """The words that are the value of a field label."""
     values = []
@@ -409,7 +418,8 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
             # glued to the colon ("Paciente:Fulano").
             label = text.words(m.start(), m.end())
             first, last = min(label), max(label)
-            glued = any(c.isalnum() for c in words[last].text.partition(":")[2])
+            # Read from the folded text, where a fullwidth colon is a colon (Codex CB-32).
+            glued = any(c.isalnum() for c in text.folded[m.end() : end_of(text, m.end())])
             value = colon_value(words, line, last)
             if glued:
                 values.append(last)
