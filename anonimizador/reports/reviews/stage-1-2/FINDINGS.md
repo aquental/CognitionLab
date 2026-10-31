@@ -162,3 +162,14 @@ Codex reported 2 findings. Both are valid and were reproduced before the fix.
 | CB-31 | medium | A state or `nº` before a number counted toward the four-word limit, so the last digits of a number split around punctuation survived | Only words with digits count toward the limit | `test_a_state_or_number_sign_before_a_number_does_not_shorten_it`; mutant killed | fixed |
 
 Validation: `uv run pytest` 199 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.
+
+## Codex round 7 (`codex-round7.md`, reviewed `c3fe264`)
+
+Codex reported 2 findings. Both are valid and were reproduced before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-32 | high | A colon label's glued value was looked for after an ASCII colon in the original word, though the label is matched in folded text, where a fullwidth colon is a colon | The glued value is read from the folded text after the match, up to the end of the word that owns it | `test_a_fullwidth_colon_glues_a_value_like_an_ascii_one` (glued, apart, and followed by another field); the mutant with the ASCII delimiter and the mutant that stops reading at the match are killed | fixed |
+| CB-33 | high | A `nº` glued to a number (`Nº123456`) was rejected as a number part, though a standalone `nº` was accepted | A number part may start with `nº` as it may start with a state | `test_a_number_sign_glued_to_a_number_is_part_of_it` (also prose after the label, taken by nothing); mutant killed | fixed |
+
+Validation: `uv run pytest` 201 passed, 2 skipped (one earlier full run showed one failure that three later runs did not repeat, and its name was not captured); ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.

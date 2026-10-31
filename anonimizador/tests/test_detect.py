@@ -406,3 +406,17 @@ def test_a_state_or_number_sign_before_a_number_does_not_shorten_it():
     assert found(line("CPF", "N\u00ba", "123", ".", "456", ".", "789", "-", "09")) == {
         "label": {"N\u00ba", "123", "456", "789", "09"}
     }
+
+
+def test_a_fullwidth_colon_glues_a_value_like_an_ascii_one():
+    # Codex CB-32: the glued value was looked for after an ASCII colon only.
+    assert found(line("Paciente\uff1aSicrano")) == {"label": {"Paciente\uff1aSicrano"}}
+    assert found(line("Paciente\uff1a", "Sicrano")) == {"label": {"Sicrano"}}
+    assert found(line("Paciente\uff1a", "Idade:", "45")) == {}
+
+
+def test_a_number_sign_glued_to_a_number_is_part_of_it():
+    # Codex CB-33.
+    assert found(line("CRM", "N\u00ba123456")) == {"label": {"N\u00ba123456"}}
+    assert found(line("CRM", "N\u00b0123456")) == {"label": {"N\u00b0123456"}}
+    assert found(line("CRM", "no", "estado")) == {}
