@@ -8,6 +8,7 @@ pub mod adapters;
 pub mod anonymization;
 pub mod assets;
 pub mod chunking;
+pub mod classifier;
 pub mod cli;
 pub mod config;
 pub mod corpus;

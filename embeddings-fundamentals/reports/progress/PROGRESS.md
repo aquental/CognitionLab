@@ -348,3 +348,33 @@ PLAN §2.3 deviations: none.
 - Live OpenAI run (key and `remote_allowed`).
 - Latency on an idle host.
 
+
+## Classifier (`spec/CLASSIFIER.md`) — Phase 0: preparation
+
+Branch `embeddings/classifier`, on top of the spec branch (PR #13). The owner asked, on 2026-10-31:
+- implement the phases in order, with TDD;
+- after each phase, run an adversarial review by Antigravity and then by Codex (Codex only after 03:30);
+- validate and fix every finding;
+- record each finding in `reports/reviews/classifier/classifier-findings.md`;
+- move on to the next phase after 3 cycles if only low-severity findings remain.
+
+### Implementation
+- **Dependencies:** `unicode-normalization` pinned to `=0.1.24`, which has the Unicode 16.0.0 tables of the vectors; 0.1.26 had Unicode 18. `pdf-extract` and `stringprep` accept any `0.1`. Also added: `fancy-regex = "0.19.2"` and the feature `classifier-jev = ["dep:reqwest"]`.
+- **Vectors:** `tests/fixtures/classifier/vetores.json` is TestoDoc's file (sha256 `f14676c7…db22e`), with its origin in the README next to it. A count-only check found no word used as a person's name that matches the exam file names.
+- **`src/classifier/`:** `categorias.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `tipos.rs` holds the types of §5.2–§5.5.
+- **`tests/classifier_vectors.rs`:**
+  - the sha256 pin;
+  - the partition of the vectors' sections into covered, pending (a list that only shrinks) and excluded;
+  - `meta`, `constantes` and `criterio` checked against the Rust constants;
+  - a guard that the normalization tables are Unicode 16.0.0.
+
+### Validation (local, 2026-10-31)
+- **Checks:** `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`, with and without `classifier-jev`; `cargo test` (172 lib tests, all test targets, BDD exit 0).
+- **Mutants:** four tried, all detected:
+  - option order in `TODAS`;
+  - `TOLERANCIA_LIMIAR`;
+  - slug of `Outro`;
+  - one character of a description.
+
+### Reviews
+See `reports/reviews/classifier/classifier-findings.md`.
