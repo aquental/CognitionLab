@@ -300,7 +300,8 @@ pub struct Classificacao {
     pub erro_categoria: Option<ErroCategoria>,
     pub motivo_codigo: Option<MotivoCodigo>,
     pub provider: &'static str,                    // "typesafe"
-    pub model: String,                             // o pedido; com chamada, o ecoado pela resposta (TD §9.1)
+    pub model: Option<String>,                     // o pedido; com chamada, o ecoado pela resposta (TD §9.1);
+                                                   // None sem envio autorizado, quando RLCD_MODEL nem é lido (§12)
     pub adapter_version: &'static str,             // §8.1
     pub perguntas_versao: &'static str, pub mascaramento_versao: &'static str,
     pub limiar_aplicado: f64,
@@ -337,6 +338,8 @@ pub trait RlcdProvider: Send + Sync {
 ```
 
 `evaluate` nunca devolve `Err`: toda falha vira `RespostaProvedor` com `ErroCategoria`, como no Python ("nenhuma sobe para a política", `typesafe.py`, docstring). O `request_id` uuid4 de TD §9.2 não é enviado ao Jev nem gravado, então não existe aqui.
+
+O prazo e o semáforo do §8.3 ficam num `Avaliador { semaforo, prazo }`, separado do provedor, e `Avaliador::avaliar(&P, &RequestNeutro)` é o `avaliar` de TP. Ele mede `latencia_ms` do início da espera pela vaga até o fim, em todos os casos, como o `evaluate` do Python mede antes do `async with self._semaforo`. A autorização chega a `classificar(prep, limiar, envio)` como `enum Envio { NaoPedido, NaoAutorizado, Autorizado { provedor, avaliador } }`: só a variante autorizada tem como chamar o provedor.
 
 ## 6. Núcleo N1: texto, Unicode e regex
 
@@ -549,7 +552,7 @@ Testado nesta ordem; a primeira verdadeira decide. É a mesma ordem do SDK, que 
 | # | Situação | Categoria |
 |---|---|---|
 | 1 | O `tokio::time::timeout` estourou, em qualquer fase (fila do semáforo, conexão, envio, leitura), ou um `reqwest::Error` tem `is_timeout()` | `timeout` |
-| 2 | Falha de DNS, conexão, TLS ou leitura do corpo (`reqwest::Error` com `is_connect()`, `is_request()` ou `is_body()`) | `rede` |
+| 2 | Falha de DNS, conexão, TLS ou leitura do corpo (`reqwest::Error` com `is_connect()`, `is_request()` ou `is_body()`; e qualquer erro de `bytes()` na leitura de um 200, que o `reqwest` marca como `is_decode()` quando o corpo vem cortado, embora ali nada seja decodificado) | `rede` |
 | 3 | Qualquer outro `reqwest::Error` | `outro` |
 
 ### 8.6 Status HTTP (TD §9.3, TS-ERR)
