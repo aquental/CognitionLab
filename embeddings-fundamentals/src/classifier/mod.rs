@@ -10,8 +10,11 @@ pub mod categorias;
 pub mod decisao;
 pub mod estado;
 pub mod indicios;
+#[cfg(feature = "classifier-jev")]
+pub mod jev;
 pub mod listas;
 pub mod mascaramento;
+pub mod provedor;
 pub mod pyclasses;
 pub mod pyre;
 pub mod texto;
@@ -21,6 +24,10 @@ pub use categorias::{
     CRITERIO_ID, Categoria, CategoriaDesconhecida, DATA, ETAPA, LIMITE_PAGINA, LIMITE_TOTAL,
     MASCARAMENTO_VERSAO, MASCARAMENTO_VERSAO_PORTE, PERGUNTA, PERGUNTAS_VERSAO, REMOVIDO,
     TEXTO_UTIL_MIN, TOLERANCIA_LIMIAR, TOLERANCIA_SOMA_PROBABILIDADES, UNICODE_VERSAO,
+};
+pub use provedor::{
+    ADAPTER_VERSION, Avaliador, CRITERIO_TIPO_DOCUMENTO, CriterioEscolha, Envio, MODELO_PADRAO,
+    PROVIDER, RequestNeutro, RespostaProvedor, RlcdProvider, classificar,
 };
 pub use tipos::{
     Arquivo, Camada, Classificacao, EntradaClassificacao, ErroCategoria, EstadoClassificacao,

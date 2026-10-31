@@ -424,8 +424,9 @@ pub struct Classificacao {
     pub motivo_codigo: Option<MotivoCodigo>,
     /// Always `"typesafe"`.
     pub provider: &'static str,
-    /// The configured model; after a call, the one the answer echoes.
-    pub model: String,
+    /// The configured model, after a call the one the answer echoes; `None` when sending
+    /// is not authorized, since the model is then never read (spec/CLASSIFIER.md §12).
+    pub model: Option<String>,
     /// Identity of the adapter (spec/CLASSIFIER.md §8.1).
     pub adapter_version: &'static str,
     /// [`super::PERGUNTAS_VERSAO`].

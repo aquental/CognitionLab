@@ -1,4 +1,5 @@
-//! Differential test of the masking and of `montar_estado` against TestoDoc's Python
+//! Differential test of the masking, of `montar_estado` and (with `classifier-jev`) of the
+//! Jev request body against TestoDoc's Python and the TypeSafe SDK it pins
 //! (spec/CLASSIFIER.md §14.3). Opt-in and local:
 //!
 //! ```text
@@ -21,6 +22,8 @@ use std::process::{Command, Stdio};
 use embeddings_fundamentals::classifier::{
     Camada, EntradaClassificacao, Pagina, PaginasModo, estado, indicios, listas, mascaramento,
 };
+#[cfg(feature = "classifier-jev")]
+use embeddings_fundamentals::classifier::{RequestNeutro, jev};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -43,6 +46,20 @@ def _padroes_conhecidos_dv9(conhecidos):
         saida.append(p)
     return saida
 m._padroes_conhecidos = _padroes_conhecidos_dv9
+import typesafe_sdk as sdk
+from typesafe_sdk._core.config import Config
+from typesafe_sdk._core.endpoints import prepare_system_one
+from typesafe_sdk._schemas.models import SystemOneResponse
+from app.services.rlcd_client import minimizar_estado
+# The request body exactly as the SDK 0.7.4 that TestoDoc's adapter uses builds it
+# (`typesafe.py`, `_perguntas` and `system_one`); nothing is sent.
+# Arguments: a dummy key (never used, nothing is sent), then the defaults.
+_cfg = Config.resolve("chave-ficticia", None, None, None, None)
+_c = cd.CRITERIO_TIPO_DOCUMENTO
+_perguntas = {_c.id: sdk.Choice(instructions=_c.pergunta, criteria=dict(_c.opcoes))}
+def corpo_jev(estado):
+    pedido = prepare_system_one(_cfg, minimizar_estado(estado), _perguntas, "jev-1.13.0", None, None, None, SystemOneResponse)
+    return pedido.content.decode("utf-8")
 def montar(doc, conhecidos):
     entrada = cd.EntradaClassificacao(
         nome_arquivo=doc["nome_arquivo"], titulo=doc["titulo"], extensao=doc["extensao"],
@@ -55,6 +72,7 @@ def montar(doc, conhecidos):
         "caracteres_enviados": r.caracteres_enviados, "truncado": r.truncado,
         "mascaramentos": r.mascaramentos, "origens_texto": r.origens_texto, "bloqueio": r.bloqueio,
         "caracteres_uteis": r.caracteres_uteis, "termo_do_tipo": r.termo_do_tipo,
+        "corpo_jev": corpo_jev(r.estado),
     }
 saida = []
 for caso in json.load(sys.stdin):
@@ -262,6 +280,11 @@ fn montar(doc: &Value, conhecidos: &[String]) -> Value {
     };
     let modo: PaginasModo = doc["modo"].as_str().expect("mode").parse().expect("mode");
     let r = estado::montar_estado(&entrada, modo).expect("state");
+    #[cfg(feature = "classifier-jev")]
+    let corpo = Value::from(jev::corpo_request(&RequestNeutro::new(&r), "jev-1.13.0"));
+    // Without the adapter there is no body to compare; see `masking_matches_testodoc`.
+    #[cfg(not(feature = "classifier-jev"))]
+    let corpo = Value::Null;
     json!({
         "estado": r.estado.para_value(),
         "digest": hex::encode(r.digest),
@@ -273,6 +296,7 @@ fn montar(doc: &Value, conhecidos: &[String]) -> Value {
         "bloqueio": contagens(&r.bloqueio),
         "caracteres_uteis": r.caracteres_uteis,
         "termo_do_tipo": r.termo_do_tipo,
+        "corpo_jev": corpo,
     })
 }
 
@@ -349,6 +373,12 @@ fn masking_matches_testodoc() {
     let esperado: Vec<Value> = serde_json::from_slice(&out.stdout).expect("parse");
     assert_eq!(esperado.len(), casos.len());
     for (caso, esperado) in casos.iter().zip(&esperado) {
+        #[cfg(not(feature = "classifier-jev"))]
+        let esperado = &{
+            let mut e = esperado.clone();
+            e["montar_estado"]["corpo_jev"] = Value::Null;
+            e
+        };
         assert_eq!(&rust(caso), esperado, "input {caso}");
     }
 }

@@ -529,3 +529,47 @@ See `reports/reviews/classifier/classifier-findings.md`.
 
 ### Reviews
 - Suspended by the owner (11:35). This phase joins the pending list: Codex and Antigravity, in phase order, when the owner resumes the review.
+
+## Classifier — Phase 4: Jev adapter and `classificar`
+
+### Implementation
+- **`provedor.rs`** (always compiled, no I/O):
+  - the neutral contract: `CriterioEscolha` and `CRITERIO_TIPO_DOCUMENTO`, `RequestNeutro` (`alvo_versao` = first 16 hex digits of the digest, `politica_versao` = `MASCARAMENTO_VERSAO_PORTE`), `RespostaProvedor`, and the `RlcdProvider` trait (native `async fn`, generics, no `dyn`);
+  - `Avaliador`: the deadline wraps the wait for a slot and the call, as in TestoDoc. There is no retry, and the latency is measured from the start of the wait;
+  - `classificar(prep, limiar, envio)` in TD §9.1 order: no content, then privacy block (with the `conferencia_<camada>` counts), then authorization, then the call and the decision. `Envio` has three variants (`NaoPedido`, `NaoAutorizado`, `Autorizado`), and only the authorized one can reach the provider.
+- **`jev.rs`** (feature `classifier-jev`):
+  - The request is `POST {base}/v1/systemone`. Its body is written by hand in the SDK's key order, with `criteria` in the order of `Categoria::TODAS`. The headers are `Authorization: Bearer`, `Content-Type`, `Accept` and `User-Agent`.
+  - The model must match TestoDoc's `MODELO_JEV_RE` after `strip()`, with Python's `\d`.
+  - The base URL must be `https`, or `http` on `127.0.0.1` or `localhost`, without credentials, query or fragment.
+  - Status and transport map to categories as §8.5–§8.6 say. An error body is never read.
+  - A 200 is decoded in two steps: the envelope (`answers` as a map, `usage` required), then the conversion to the neutral format and `validar_respostas`. Each case keeps the metadata §8.4 lists, and `confianca_provedor` is kept only with a valid answer.
+  - The key is redacted in `Debug`, and it is never in errors or logs.
+- **Types:** `Classificacao.model` is now `Option<String>`. It is `None` when sending is not authorized, since `RLCD_MODEL` is then never read (spec §5.5 updated).
+- **Spec:**
+  - §5.6 now describes `Avaliador` and `Envio`.
+  - §8.5: a cut 200 body is marked `is_decode()` by `reqwest`, not `is_body()`. Any `bytes()` error other than a timeout is therefore `rede`, as the SDK's `httpx` read errors are.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, `cargo test` (286 tests) and `cargo test --features classifier-jev` (304 tests): all pass.
+- **Unit tests:**
+  - `classificar` and `Avaliador` against a test double: no call without content or with a block; `preparado` with and without the not-authorized reason; the decision; the error path; the deadline including the wait for the slot; the minimal state keys against `CHAVES_PROIBIDAS_NO_ESTADO`.
+  - `jev`:
+    - the model, with expected values from TestoDoc's `modelo_rlcd_fixo`;
+    - the endpoint and the status table;
+    - the redacted key;
+    - the body's order and escapes;
+    - every invalid answer and envelope listed in §14.5.
+- **Local server** (`tests/classifier_jev.rs`: a `TcpListener` on `127.0.0.1`, no network):
+  - the exact body and headers, a missing request id (DV2), and an invalid 200 that keeps its request id (DV8);
+  - the 11 statuses, a server past the deadline, the wait for a slot inside the deadline, a closed port, a cut body, and a `reqwest` timeout mapped to `timeout`;
+  - logs: a global subscriber captures every log line of the test binary, and none has the key, the error body or the exam text.
+- **SDK differential** (`classifier_differential.rs` with `--features classifier-jev`): for each of the 3 000 synthetic documents, the request body is compared byte for byte with the one that typesafe-sdk 0.7.4 builds through TestoDoc's own path (`minimizar_estado`, `sdk.Choice`, `prepare_system_one`). All match. Nothing is sent.
+- **Mutants:** 30 tried on `provedor.rs` and `jev.rs`.
+  - 28 are detected by the unit tests or the local server, among them: the order of `criteria`, `state`/`model`, `instructions`/`criteria`; every check of `classificar`; the deadline; one more slot; the latency; each metadata field; each status and transport class; each header; the model `strip()`; the local-only `http`.
+  - 2 survived the first run:
+    - a `type` other than `choice` with an otherwise valid shape is now detected, by a new case;
+    - a non-number `confidence` was an equivalent mutant: `as_f64()` already refuses a string. The redundant filter was removed, and a case pins the behaviour.
+
+### Reviews
+- Suspended by the owner. Phase 4 joins the pending list.
+- Not run: the live Jev test (§14.6) is optional and is for the owner to run.
