@@ -344,3 +344,71 @@ async fn real_exam_images_are_filtered_and_stored_without_metadata() {
     );
     assert!(prepared_total > 0, "no real image was prepared");
 }
+
+/// The classifier's `classify` over a temporary copy of each real exam, **never** with
+/// sending (spec/CLASSIFIER.md §14.7, R-P4): no `--enviar`, and an environment that
+/// answers nothing, so no key, model or authorization can be read. Only properties
+/// are asserted, and a document is named by its index.
+#[tokio::test]
+#[ignore = "local only: requires RUN_SAMPLE_EXAMS=1 and the owner's tests/sample-exams"]
+async fn real_exams_are_classified_locally_without_sending_and_without_text() {
+    use embeddings_fundamentals::classifier::{EstadoClassificacao, LIMITE_TOTAL};
+    use embeddings_fundamentals::classify::{ClassifyArgs, FontePoppler, executar, texto_de_saida};
+
+    let files = exams();
+    let fonte = FontePoppler::detect().await;
+    let nada = |_: &str| None;
+    let mut por_estado = std::collections::BTreeMap::<String, usize>::new();
+    for (i, path) in files.iter().enumerate() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let copia = dir.path().join(path.file_name().expect("name"));
+        std::fs::copy(path, &copia).expect("copy");
+        let args = ClassifyArgs {
+            arquivo: copia.clone(),
+            paginas: None,
+            json: true,
+            enviar: false,
+            limiar: None,
+            titulo: None,
+            nomes_paciente: Vec::new(),
+            mostrar_estado: false,
+        };
+        let linha = executar(&args, &fonte, &nada).await;
+        assert!(
+            matches!(
+                linha.estado,
+                EstadoClassificacao::Preparado
+                    | EstadoClassificacao::SemConteudo
+                    | EstadoClassificacao::BloqueadoPrivacidade
+            ),
+            "exam #{i}: unexpected state {:?} (motivo {:?})",
+            linha.estado,
+            linha.motivo_codigo
+        );
+        assert!(!linha.envio_realizado, "exam #{i}");
+        assert!(linha.model.is_none(), "exam #{i}");
+        assert!(linha.paginas_enviadas.unwrap_or(0) <= 2, "exam #{i}");
+        assert!(
+            linha.caracteres_enviados.unwrap_or(0) <= LIMITE_TOTAL,
+            "exam #{i}"
+        );
+        assert!(linha.estado_preparado.is_none(), "exam #{i}");
+        let stem = copia
+            .file_stem()
+            .expect("stem")
+            .to_string_lossy()
+            .into_owned();
+        for json in [true, false] {
+            let saida = texto_de_saida(&linha, json).expect("serialize");
+            assert!(
+                !saida.contains(&stem),
+                "exam #{i}: the output names the file"
+            );
+        }
+        *por_estado.entry(format!("{:?}", linha.estado)).or_default() += 1;
+    }
+    eprintln!(
+        "classified {} exams locally, without sending: {por_estado:?}",
+        files.len()
+    );
+}

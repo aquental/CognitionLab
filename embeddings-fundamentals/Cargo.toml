@@ -16,11 +16,15 @@ default = []
 engine-embed-anything = ["dep:embed_anything", "dep:tokenizers", "dep:hf-hub", "dep:candle-core"]
 engine-fastembed = ["dep:fastembed", "dep:hf-hub", "dep:tokenizers"]
 engine-openai = ["dep:reqwest", "dep:tiktoken-rs"]
+# HTTP adapter of the exam-type classifier for TypeSafe's Jev (spec/CLASSIFIER.md §8).
+classifier-jev = ["dep:reqwest"]
 
 [dependencies]
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 embed_anything = { version = "0.7.1", optional = true }
+# Lookaround for the classifier's masking regexes (spec/CLASSIFIER.md §4.2).
+fancy-regex = "0.19.2"
 # Same version as EmbedAnything 0.7.1 uses, for the tensors of the vision adapter.
 candle-core = { version = "0.11.0", optional = true }
 fastembed = { version = "7.5.0", optional = true, default-features = false, features = ["onnx", "ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
@@ -45,7 +49,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process"
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-unicode-normalization = "0.1.26"
+unicode-normalization = "=0.1.24"
 
 [dev-dependencies]
 approx = "0.5.1"

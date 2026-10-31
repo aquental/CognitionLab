@@ -55,7 +55,14 @@ cargo run --release --features engine-embed-anything,engine-fastembed -- combine
     --text-experiment <text id> --image-experiment <image id> --experiment <id> --report <out>.json
 cargo run --release --features engine-embed-anything,engine-fastembed -- search --mode combined \
     --config config/experiments/combined-e5-base-siglip.toml --store store --experiment <combined id> --query "..."
+# Exam-type classifier (spec/CLASSIFIER.md §10). Without --enviar nothing is sent (`preparado`):
+cargo run -- classify --json <anonymized copy>
+# Sending to Jev NEEDS the `classifier-jev` feature, plus --enviar, CLASSIFIER_REMOTE_ALLOWED=1 and a key:
+cargo build --release --features classifier-jev
+CLASSIFIER_REMOTE_ALLOWED=1 target/release/embeddings-fundamentals classify --json --enviar <anonymized copy>
 ```
+
+**The `classify` command can send to Jev only from a binary built with `--features classifier-jev`.** The feature is off by default, like the engine features. A binary built without it refuses authorized sending: with `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`, the result is `erro`, exit 5 (`configuracao_invalida`), and nothing is sent. Without `--enviar` both builds behave the same (`preparado`). The same holds for the binary passed to `anonimizador batch --classifier`: build it with the feature before a `--classify-remote` run.
 
 The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonimizador verify` tool, is the job of the sibling project `../anonimizador`.
 
@@ -63,7 +70,7 @@ Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config
 
 The harness-less targets (`bdd`, `bdd_selftest`) **never parse argv**, so `cargo test <filter>` cannot break them. Cucumber filters go through `BDD_ARGS`. The required inventory is derived from the Gherkin blocks in `spec/PRD.md`, filtered by the `@mN` tags up to `milestone` in `config/acceptance.toml`. A scenario counts as executed only if a scenario with the same feature name, scenario name and expanded step text ran and all of its steps passed (`tests/support/inventory.rs`).
 
-The engine adapters sit behind Cargo features (`engine-embed-anything`, `engine-fastembed`, `engine-openai`), all off by default. As a result, the BDD suite never compiles candle/ONNX or downloads models. Clippy must be run per feature set to compile the `#[cfg]` adapters.
+The engine adapters sit behind Cargo features (`engine-embed-anything`, `engine-fastembed`, `engine-openai`), all off by default, and so does the classifier's Jev adapter (`classifier-jev`). As a result, the BDD suite never compiles candle/ONNX or downloads models. Clippy must be run per feature set to compile the `#[cfg]` adapters.
 
 External tools: poppler (`pdftotext`, `pdftoppm`, `pdfimages`, `pdfinfo`) and `tesseract` with `por` data (`brew install tesseract tesseract-lang`), both installed here.
 
