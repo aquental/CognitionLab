@@ -381,7 +381,7 @@ pub struct Classificacao {
     pub adapter_version: &'static str,
     /// [`super::PERGUNTAS_VERSAO`].
     pub perguntas_versao: &'static str,
-    /// [`super::MASCARAMENTO_VERSAO`].
+    /// [`super::MASCARAMENTO_VERSAO_PORTE`] (DV10).
     pub mascaramento_versao: &'static str,
     /// The threshold the decision used.
     pub limiar_aplicado: f64,
