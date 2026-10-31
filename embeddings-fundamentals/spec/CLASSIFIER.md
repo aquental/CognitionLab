@@ -135,8 +135,9 @@ Copiar TV para `tests/fixtures/classifier/` o publica no GitHub, e a regra "dado
 
 ```
 src/classifier/
-├── mod.rs            # API pública: tipos (§5), montar_estado, classificar
-├── categorias.rs     # Categoria (9), pergunta, PERGUNTAS_VERSAO, listas (VOCABULARIO_TIPO etc.)
+├── mod.rs            # API pública: reexporta os tipos, montar_estado, classificar
+├── categorias.rs     # Categoria (9), pergunta, PERGUNTAS_VERSAO e as constantes de TV `constantes`
+├── tipos.rs          # tipos do §5: entrada, estado preparado, resposta, estados e motivos
 ├── pyclasses.rs      # GERADO: classes de caracteres do `re`/`str` do Python 3.14 (UCD 16.0.0), §6.3
 ├── texto.rs          # compor, dobrar, isupper/lower à Python, mapa de offsets, fatiamento em code points
 ├── pyre.rs           # Envoltório de regex com a semântica do `re` do Python (pos/endpos, `$`, IGNORECASE), §6.4
