@@ -229,6 +229,35 @@ mod tests {
             .prop_map(|v| v.into_iter().map(|(p, sep)| format!("{p}{sep}")).collect())
     }
 
+    /// `pdftotext -layout` pads columns with long runs of spaces. Some layer-1 patterns
+    /// cost a quadratic number of steps on them (TestoDoc takes 1.8 s on 3 000 spaces;
+    /// these halves still pass `fancy-regex`'s default limit of 1 000 000 steps);
+    /// Python's `re` has no step limit, so the port must not have one either. Expected
+    /// values from TestoDoc (Python 3.14): every text unchanged, nothing counted.
+    #[test]
+    fn long_whitespace_runs_do_not_hit_a_backtracking_limit() {
+        let vocabulario: Vec<String> = crate::classifier::listas::VOCABULARIO_TIPO
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        for texto in [
+            " ".repeat(1500),
+            format!("{}\n", " ".repeat(100)).repeat(15),
+            format!(
+                "Ritmo sinusal{}FC media 71 bpm{}Pausas: nenhuma\n",
+                " ".repeat(40),
+                " ".repeat(40)
+            )
+            .repeat(20),
+        ] {
+            let r = remover_dados_pessoais(&texto, &[], &vocabulario).unwrap();
+            assert_eq!(r.texto, texto);
+            assert!(r.contagens.is_empty());
+            assert!(nomes_dos_rotulos(&texto, &vocabulario).unwrap().is_empty());
+            assert!(conferir(&texto, &[]).unwrap().is_empty());
+        }
+    }
+
     #[test]
     fn masking_is_not_idempotent_as_in_testodoc() {
         // TestoDoc's `mascaramento.py` gives these same outputs (spec §0.4, F9).

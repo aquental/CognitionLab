@@ -101,8 +101,13 @@ impl PyRegex {
     }
 
     fn compilar(padrao: String) -> Result<Self, ErroPyre> {
+        // Python's `re` has no step limit, and some TestoDoc patterns cost a quadratic
+        // number of steps on long whitespace runs (`pdftotext -layout` pads columns with
+        // them): with `fancy-regex`'s default of 1 000 000, a 3 000-space page already
+        // failed. A search here takes as long as Python's would.
         let regex = RegexBuilder::new(&padrao)
             .delegate_size_limit(LIMITE_TAMANHO)
+            .backtrack_limit(usize::MAX)
             .build()?;
         Ok(Self { regex })
     }

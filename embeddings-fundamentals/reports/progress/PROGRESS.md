@@ -573,3 +573,54 @@ See `reports/reviews/classifier/classifier-findings.md`.
 ### Reviews
 - Suspended by the owner. Phase 4 joins the pending list.
 - Not run: the live Jev test (§14.6) is optional and is for the owner to run.
+
+## Classifier — Phase 5: `classify` CLI
+
+### Implementation
+- **`src/classify.rs`**, with the `classify` subcommand wired in `cli.rs`:
+  - `executar(args, fonte, ambiente)` is the whole command except printing. It follows §10.1 in order:
+    1. mode and threshold, with Python's `float()`;
+    2. the file and its format;
+    3. the R-P1 double opt-in. Only then are `RLCD_MODEL`, the key (`RLCD_API_KEY`, else `TYPESAFE_API_KEY`), `RLCD_BASE_URL` and `RLCD_TIMEOUT_S` read and validated;
+    4. the tools;
+    5. the extraction, with the §10.2 OCR rule and the §10.4 visual page;
+    6. `montar_estado` and `classificar`.
+  - The extraction is a `Fonte` trait: `FontePoppler` (poppler + tesseract with `por`) in the binary, a double in the tests. The environment is a lookup function. In the binary it reads process variables first, then a `.env` read by `dotenvy::dotenv_iter` without changing the environment.
+  - `LinhaCli` holds the §10.3 keys in order, and the error envelope fills only what the stop established. `--mostrar-estado` prints the state in wire order, only when it is safe. The readable mode prints the same fields. Every stderr message is a fixed phrase per reason, with no path and no error text (DV9).
+  - A binary built without `classifier-jev` refuses authorized sending with code 5 and reads no sending variable (spec §12).
+- **`TesseractOcr::ocr_image`:** OCR of a standalone image, outside the `OcrEngine` trait (§10.2).
+- **Fixtures** (`tests/fixtures/classifier/cli/`, from `examples/gen_classifier_fixtures.rs`; invented text and names): a Holter PDF with native text, the A9 echocardiogram `eco_mapa.pdf`, a scanned PDF and a PNG.
+
+### Finding while running the real exams locally (§14.7): the backtracking limit
+- **Symptom.** The local, no-send run over the owner's sample exams failed with `erro_interno` on 10 of the 12 PDFs. The diagnosis printed only exam indices and error categories, never content.
+- **Cause.** `fancy-regex` stops a search after 1 000 000 backtracking steps. Some layer-1 patterns cost a quadratic number of steps on long whitespace runs, which `pdftotext -layout` puts between columns. 3 000 spaces were enough. Python's `re` has no step limit: TestoDoc takes 1.8 s on those 3 000 spaces and leaves the text unchanged.
+- **Fix.** Every regex is now compiled with `backtrack_limit(usize::MAX)`, so a search takes as long as Python's would. A regression test written first (red, then green) runs three whitespace-heavy texts and checks them against TestoDoc's outputs: unchanged text, no counts, no names, empty `conferir`. Removing the fix makes it fail again. The synthetic vectors and the differential never had such runs. Spec §6.4 now records this.
+- **After the fix,** all 12 exams classify locally without sending. The states are `preparado`, `sem_conteudo` or `bloqueado_privacidade`, and every limit holds. The output has no file name and no `estado_preparado`. The run takes 12.9 s in release.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, `cargo test` (304 tests) and `cargo test --features classifier-jev` (324 tests): all pass.
+- **In process** (`tests/classifier_cli.rs`, with the extraction double):
+  - every exit code: 0, 2, 3, 4, 5 and 6, plus 1 in the unit tests;
+  - the double opt-in: with `CLASSIFIER_REMOTE_ALLOWED` missing, `0`, `true`, ` 1` or `1 `, nothing `RLCD_*` and no key is even looked up;
+  - the step-3 validations and the binary without the adapter;
+  - the tools check: tesseract is checked lazily, at the first PDF page that needs OCR;
+  - the OCR and visual-page rules on selected pages only, an OCR failure that keeps the page, and the join of native and OCR text;
+  - A9 without `estado_preparado`, and no state in `sem_conteudo` or before the classification;
+  - the key order and the complete envelope;
+  - no path or text in either output mode;
+  - with the local server: `ok` (0) and a provider error (4, `envio_realizado`).
+- **Binary** (`tests/classifier_cli_bin.rs`):
+  - Always: the stops before the extraction print exactly one JSON line, with the right code. Neither stdout nor stderr has the path, in JSON or readable mode.
+  - With `RUN_INTEGRATION=1` and real poppler and tesseract:
+    - the four fixtures give `preparado` (`nativo` or `ocr_local`);
+    - `--enviar` with `CLASSIFIER_REMOTE_ALLOWED=0` and an invalid model gives `preparado`, code 0;
+    - `--mostrar-estado` on the Holter shows the labelled name masked;
+    - A9 gives code 6 without the state;
+    - with the feature and a local server, the binary gives `ok` with `tipo = holter`.
+- **Unit tests:** the `pdfimages -list` area (images and stencils, not masks; a zero resolution is unreadable), the `pdfinfo` page size, and the exit codes.
+- **Mutants:** 18 tried on `classify.rs`.
+  - 17 are detected; 2 of those 17 needed a stronger test, written as the mutants showed it: OCR outside the selected pages, and a blank image text (`total_paginas` 0, as in TestoDoc).
+  - 1 is equivalent: showing the state despite a block. `classificar` already returns `bloqueado_privacidade`, which is not among the states that show it. The check stays as defense, mirroring TP.
+
+### Reviews
+- Suspended by the owner. Phase 5 joins the pending list.

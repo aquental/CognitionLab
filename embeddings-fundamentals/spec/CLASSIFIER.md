@@ -408,6 +408,7 @@ As classes do motor de regex do Rust **não** servem. Verificado em 31/10/2026 c
 | Dinâmicas | `_padroes_conhecidos`: `\b(?:p1\|p2\|…)\b` e um `re.escape(literal)` por literal (`:342,344`); `_nomes_dos_indicios`: `\s+`.join(`re.escape(p)`) com `IGNORECASE` (`classificador_documento.py:239`) | `IGNORECASE` só na de `_nomes_dos_indicios` | testes de TV `remover_dados_pessoais` e `nomes_dos_indicios` |
 
 - **Escape das dinâmicas:** `re.escape` do Python vira um escape equivalente no `fancy-regex`, e `\s` vira a classe `isspace` gerada.
+- **Sem limite de passos.** O `re` do Python não limita o backtracking, e alguns padrões da camada 1 custam um número quadrático de passos em sequências longas de espaços, que o `pdftotext -layout` gera entre colunas. O TestoDoc leva 1,8 s em 3 000 espaços. Com o limite padrão do `fancy-regex` (1 000 000 de passos), a busca falhava, e `montar_estado` dava erro em 10 dos 12 exames reais da Fase 5 (§14.7). O porte compila toda regex com `backtrack_limit(usize::MAX)`: uma busca leva o tempo que levaria no Python. Um teste fixa o caso com as saídas do TestoDoc.
 - **Texto das traduções:** um teste confere cada constante de texto Python com TV `regexes`. As que não estão em TV são conferidas com o arquivo TP fixado, por um teste opcional que lê o checkout do TestoDoc (`TESTODOC_DIR`). Quando os vetores mudarem, o teste aponta a regex que precisa de nova tradução.
 - **Flags:** TV guarda só o texto das regexes. As flags acima são conferidas pelos casos de TV e pelos testes do §14.4.
 
@@ -696,7 +697,9 @@ Os nomes das colunas e o formato dos pesos são decisões de apresentação dest
 
 ## 12. Configuração
 
-Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. Nenhum valor de chave é impresso.
+Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já dependência. O `.env` é lido com `dotenvy::dotenv_iter`, a partir do diretório corrente para cima, sem alterar o ambiente do processo, e uma variável do processo tem precedência sobre a do `.env`. Nenhum valor de chave é impresso.
+
+Um binário compilado **sem** a feature `classifier-jev` não tem como enviar: com o envio autorizado, sai com o código 5 (`configuracao_invalida`), sem ler nenhuma variável do passo 3.
 
 | Variável | Padrão | Quando é lida | Validação (código 5, com o motivo indicado, se inválida) |
 |---|---|---|---|

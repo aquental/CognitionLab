@@ -44,7 +44,7 @@ fn valor_decimal(ch: char) -> Option<u32> {
 /// Python's `float(s)` of a string: surrounding whitespace dropped, Unicode decimal digits
 /// read as ASCII ones, an underscore only between two digits; then the usual decimal,
 /// exponent, `inf` and `nan` forms.
-fn float_de_texto(s: &str) -> Option<f64> {
+pub(crate) fn float_de_texto(s: &str) -> Option<f64> {
     let mut ascii = String::with_capacity(s.len());
     let chars: Vec<char> = strip(s).chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
