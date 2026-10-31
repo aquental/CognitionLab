@@ -8,9 +8,11 @@
 pub mod canonico;
 pub mod categorias;
 pub mod estado;
+pub mod indicios;
 pub mod listas;
 pub mod mascaramento;
 pub mod pyclasses;
+pub mod pyre;
 pub mod texto;
 pub mod tipos;
 

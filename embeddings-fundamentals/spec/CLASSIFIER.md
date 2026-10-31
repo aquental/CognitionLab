@@ -52,6 +52,8 @@ Se qualquer hash do §0.1 ou do §0.3 mudar, a implementação para e este docum
 | F5 | TS-MOD × TP | `typesafe.py` diz que `jev-latest` resolve para `jev-1.13.0` (14/10/2026). Hoje resolve para `jev-1.14.0` (lançado em 14/10/2026). | O modelo fixo continua `jev-1.13.0` (§12). Trocar exige recalibrar (Q-C3). |
 | F6 | TP `_finito` | `float(valor)` aceita string numérica e `bool`. No caminho real, quem decodifica é o pydantic do SDK. | Divergência deliberada DV3 (§13). |
 | F7 | TS-JAG #8 | "jev-1.13 leans toward the option that comes first." A ordem das opções faz parte do request. | §8.2 fixa a ordem do fio. A conferência por reordenação fica na Fase 7 (opcional). |
+| F9 | TD §7.3 × TP | TD diz que a remoção é idempotente. TP não é: o diferencial da Fase 2 achou 65 textos não idempotentes em 5 000, todos com peças separadas por espaço ou pontuação. Exemplo: `"Paciente:: Médico responsável:\t123.456.789-09: "` dá `"Paciente:[REMOVIDO]: "` na primeira passada e `"Paciente:[REMOVIDO] "` na segunda. | O porte reproduz TP. A propriedade do §14.2 virou a comparação da segunda passada com TP no diferencial (§14.3), mais um teste com o exemplo. |
+| F10 | TP, camadas 2 e 4 | Um texto colado a dígitos escapa: em `"CRM/SP 123456Zanoni Prado"`, o nome conhecido não sai, porque não há `\b` entre `6` e `Z`, e a `conferir` usa o mesmo padrão e também não acha. O número de registro colado ao texto seguinte só sai numa segunda passada. | O porte reproduz TP (teste com o exemplo). É uma lacuna de privacidade do TestoDoc, comunicada ao dono; mudar exige nova `MASCARAMENTO_VERSAO` no TestoDoc. |
 | F8 | TV | Duas palavras usadas como **nome sintético** nos vetores (uma de 6 letras, 6 ocorrências depois de rótulo de nome; uma de 4 letras, numa lista de nomes conhecidos) coincidiam com palavras dos nomes de arquivo dos exames reais em `tests/sample-exams/`. A verificação foi feita só por contagem: nenhuma palavra foi lida nem impressa. | **Resolvido em 31/10/2026 (Q-P2, opção a):** trocadas por nomes inventados (§3.4) e vetores regenerados. |
 
 ## 1. Objetivo e contexto
@@ -741,8 +743,8 @@ Um teste confere o sha256 de TV com o §0.1.
 ### 14.2 Propriedades (proptest, já dev-dependency)
 
 - `dobrar` preserva a contagem de code points.
-- A remoção é idempotente: `remover(remover(x)) == remover(x)` (TD §7.3).
-- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto.
+- A remoção **não** é idempotente em TP (F9, §0.4): o diferencial (§14.3) compara a segunda passada com a de TP, e um teste fixa o exemplo de F9.
+- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto. Vale com as peças separadas por espaço ou pontuação; colado a dígitos, o nome escapa também em TP (F10).
 - Determinismo: a mesma entrada dá o mesmo estado e o mesmo digest.
 - Limites: `caracteres_enviados ≤ 60 000`, cada página ≤ 6 000, e `truncado` coerente.
 - `json_canonico` independe da ordem de inserção, com `preserve_order` ligada.

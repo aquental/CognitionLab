@@ -29,9 +29,16 @@ The full table is in `spec/CLASSIFIER.md` §21.2, and the raw reports are in `sp
 
 Round 2 (Antigravity, commit `76b5eba`): it confirmed that A0-1, A0-2 and A0-3 are closed, and gave NO FINDINGS on the whole phase (`phase-0/agy-round2.md`). Codex reviews Phase 0 after 03:30.
 
+| C0-1 | Codex | 1 | low | The doc of `Classificacao::margem` said "chosen probability minus the next highest"; spec §7.2 defines it as `max(0, highest − second highest)`, whichever type was chosen (TV has a case where the chosen type is not the highest). | Yes | Fixed the doc comment (commit `08c9cbf`). The calculation itself is Phase 3, and the TV case keeps it honest. | Fixed |
+| C0-2 | Codex | 1 | low | The evidence lacked `cargo test --features classifier-jev`, one of the §14.8 acceptance commands. | Yes | Ran the five §14.8 commands in clean worktrees. At `76b5eba` (Phase 0): all exit 0, 222 tests with and without the feature. At `08c9cbf` (Phase 0 + 1 + C0-1): all exit 0, 246 tests both ways. The review packages now include the feature test. A first try at `08c9cbf` failed only because two worktrees shared one `CARGO_TARGET_DIR`; it passed with its own. | Fixed |
+
+Codex round 1 (commit `76b5eba`, `phase-0/codex-round1.md`): it agreed with the closures of A0-1, A0-2 and A0-3 and found C0-1 and C0-2, both low.
+
 Note on round 1: the first answer was a bare `NO FINDINGS`, with no coverage. It was not accepted, and the review was run again with a required Coverage section and one verification line per criterion. That second run is `phase-0/agy-round1.md`.
 
 ## Phase 1 — primitives and Unicode
+
+**Antigravity did not review this phase.** Its run on 2026-10-31 at 02:56 ended with `RESOURCE_EXHAUSTED` (429, "Individual quota reached", reset in 124 h, about 2026-11-05 07:00) and no review. Nothing was simulated. The Antigravity step stays open until the quota resets or the owner waives it in writing (spec §20). Codex reviews the phase meanwhile.
 
 | ID | Reviewer | Round | Severity | Finding | Valid? | Solution (summary) | Status |
 |---|---|---|---|---|---|---|---|

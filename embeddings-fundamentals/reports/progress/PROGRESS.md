@@ -386,7 +386,9 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - A0-4 (low): open; it waits for the owner to push the TestoDoc rename commit.
 - **Validation of the fixes:** `cargo fmt --check`; clippy with and without `classifier-jev`; 10 mutants tried, all detected.
 - **Antigravity, round 2:** it confirmed that A0-1, A0-2 and A0-3 are closed, and gave NO FINDINGS.
-- **Codex:** after 03:30.
+- **Codex, round 1** (03:35 to 10:03): it agreed with those closures and found two low findings, both fixed:
+  - C0-1: the doc of `margem` was wrong;
+  - C0-2: the evidence lacked `cargo test --features classifier-jev`. The five §14.8 commands now pass at `76b5eba` and at `08c9cbf`.
 
 ## Classifier — Phase 1: primitives and Unicode
 
@@ -423,3 +425,43 @@ See `reports/reviews/classifier/classifier-findings.md`.
 - **§14.4 tests in this phase:** `ª` and `ǆ` in `title`, `ß` in `upper`, `İ` in `lower`, initial versus string `isupper`, marks and `‿` outside `\w`, `²`/`½`/`Ⅻ` in `[^\W\d_]`, U+001C–U+001F in `\s`, `\x1f` outside `compor`, and U+A7CE, a letter only from Unicode 17 on, seen as unassigned.
   - The regex items (`İ`/`ı` under IGNORECASE) belong to Phase 2 (`pyre.rs`), and so does `extract_patient_hints`.
   - Mutant: `is_upper` through Rust's `char::is_uppercase`, which has Unicode 17 tables; it is detected.
+
+### Reviews
+- **Antigravity:** not run. The run at 02:56 hit the individual quota (429, reset in about 124 h). The step stays open until the reset or a written waiver from the owner.
+- **Codex:** see `reports/reviews/classifier/classifier-findings.md`.
+
+## Classifier — Phase 2: masking
+
+### Implementation
+- **`pyre.rs`: Python `re` patterns translated to `fancy-regex`.** Each pattern is kept as its Python text. A translator covers the subset TestoDoc uses and refuses the rest:
+  - `\w`, `\d`, `\s` and their negations become classes generated from Python 3.14, inside and outside brackets;
+  - `\b` becomes lookarounds over Python's `\w`;
+  - without MULTILINE, `$` becomes `(?=\n?\z)`;
+  - under IGNORECASE, `İ`/`ı` are added to every literal `i`/`I` and to every class that holds `i` or `I`, ranges included; `(?i:…)` and `(?-i:…)` are tracked per group.
+  - `search(s, pos, endpos)` cuts at `endpos` but not at `pos`, so lookbehind and `\b` see before it. `match` is an anchored search, and `fullmatch` compiles `\A(?:…)\z`.
+- **`mascaramento/`:** the five layers, `_substituir`, the marker collapse, `conferir` and `nomes_dos_rotulos`. Positions are code points: a search on the folded text is mapped back through two `MapaOffsets`. The Python texts of the regexes are built as `mascaramento.py` builds them. A regex failure is an error (`ErroMascaramento`), never a silent pass.
+- **`indicios.rs`:** the `nome` field of `extract_patient_hints`, and `_nomes_dos_indicios`.
+- **Vectors:** `regexes`, `remover_dados_pessoais` (126), `conferir` (12), `nomes_dos_rotulos` and `nomes_dos_indicios` moved to the check registry. Only `montar_estado`, `decidir_classificacao` and `validar_respostas` are still pending.
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, and `cargo test` with and without the feature: 267 tests, all pass.
+- **Regex differential** (`tests/classifier_pyre.rs`, opt-in): the 22 vector regexes against Python 3.14's `re`, on 1 510 texts. It compares `finditer`, `search(s, pos, endpos)` and, as TestoDoc uses them, the 40-code-point windows and `match` at every position. Mutants detected: `İ`/`ı` dropped (in literals, in classes, or both); Rust's `\b`; Rust's `$`.
+- **Masking differential** (`tests/classifier_differential.rs`, opt-in, `RUN_DIFFERENTIAL=1 TESTODOC_DIR=…`): 3 000 synthetic texts through TestoDoc's own Python, through `uv` with Python 3.14, as TestoDoc's vector generator does.
+  - It compares `remover_dados_pessoais` (text, counts and a second pass), `conferir`, `nomes_dos_rotulos` and `_nomes_dos_indicios`. All match.
+  - A second test checks the sha256 of the three TestoDoc files and finds each helper regex in them.
+- **Mutants:** 17 tried on the layers.
+  - 9 were detected by the vectors and 1 by the masking differential (the 40-code-point window).
+  - 6 were detected by unit tests whose expected values come from running TestoDoc on the same input:
+    - name of 2 to 6 words;
+    - two words that are not particles;
+    - literals of 3 code points or more;
+    - the order `(−length, text)` of the literals;
+    - marker merge inside a value;
+    - `title()` of an all-caps hint name.
+  - Two of those six cannot be seen through the public functions, only by a unit test:
+    - the marker merge, because the final collapse gives the same text;
+    - `title()` in `_nomes_dos_indicios`, because `dobrar` undoes the case.
+  - 1 was not detected and is equivalent: the column loop's advance after a lone label skips a line that is never a label. The order of name parts inside the `\b(?:…)\b` regex is also equivalent: two parts never match at the same start.
+- **Properties (§14.2):**
+  - Idempotence does **not** hold in TestoDoc. The differential found 65 non-idempotent texts in 5 000 (spec §0.4, F9). The port follows TestoDoc: the differential compares the second pass, and a test pins the example.
+  - The marker property holds on separated pieces (256 cases). A known name glued to a digit escapes, in TestoDoc too (F10, a privacy gap reported to the owner).
