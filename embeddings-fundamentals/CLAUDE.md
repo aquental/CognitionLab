@@ -73,6 +73,10 @@ The owner keeps **real medical exams, with patient names in file names and conte
 
 - **No commits.** Never commit, push, or upload these files, or anything derived from them: extracted text, OCR output, images, renders, records, vectors, file names, or per-document numbers that identify a file. Stage only explicit paths (`git add <path>`), never `git add -A` or `git add .`, and check `git diff --cached --name-only` before every commit.
 - **No external services.** Never send these files or their content to reviewers (Grok, Codex, Antigravity) or to any remote engine (`remote_allowed` stays false for them). Run reviewers from a clean worktree of the committed branch (`git worktree add --detach <dir> <commit>`), which does not contain the directory.
+  - **One exception (owner decision, 2026-10-31; `spec/CLASSIFIER.md` §3.1):**
+    - **What may be sent:** the exam-type classifier may send to TypeSafe's Jev the *masked* text of an **anonymized copy** that passed the `anonimizador` re-verification (`verify` ok).
+    - **When:** only with both `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`.
+    - **Still forbidden:** sending text of the originals, sending to reviewers, and committing any classifier output for these files.
 - **Local tests only.**
   - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
   - They work on temporary copies only and never persist outputs in the repository.
