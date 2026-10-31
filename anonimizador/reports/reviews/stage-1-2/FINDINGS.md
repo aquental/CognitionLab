@@ -72,3 +72,23 @@ Validation:
 - ruff: clean.
 - `RUN_SAMPLE_EXAMS=1`: 2 passed.
 - One mutant per fix, two for CB-16: all killed.
+
+## Antigravity round 1 (`agy-round1.md`, reviewed `45a6e3d`)
+
+Antigravity reported 7 findings. AB-1, AB-2, AB-3, and AB-6 are valid. AB-4 and AB-5 are valid in part. AB-7 is refuted.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| AB-1 | high | A value ended only at a word ending in `:`, so a next field with a glued (`Idade:45`) or detached (`Idade :`) colon was taken into it. A heading `Nome` with such a field beside it took that field instead of the name under it | A value ends at a word holding a colon, or before a word that starts with one | `test_a_field_with_a_glued_or_detached_colon_ends_a_value`. Both mutants (no detached colon; `endswith` again) are killed | fixed |
+| AB-2 | high | A colon label that ended its extracted line took the next line in block order, not the value beside it in another block | A colon label that ends its line takes the value on its row (as CB-12 for bare labels), else the value under it | `test_a_colon_label_ending_its_block_takes_the_value_on_its_row`. The mutant without the row search is killed | fixed |
+| AB-3 | high | (1) `Paciente`, `Mãe`, and date-of-birth labels without a colon were no labels. (2) A date of birth under its colon label was missed when another block came next in block order | (1) They are bare labels, each with a test of its value: `Paciente` and `Mãe` take only capitalized words and particles, so running text ("Paciente refere…") is left alone; a date-of-birth label takes only a value with digits. (2) The value under a label is found by position (`column_below`), not by block order | `test_a_date_of_birth_under_its_label_in_another_block_is_taken`, `test_patient_mother_and_date_of_birth_labels_need_no_colon` (also running text and a word without digits taken by nothing). Mutants removing each label, each value test, and the position search are killed | fixed |
+| AB-4 | medium | (1) A 16-bit grayscale PNG converted to 8 bits clipped every value above 255, so the page turned white. (2) `zlib.error` would escape the handlers | (1) Valid, reproduced: a 16-bit image is scaled to 8 bits (`/ 256`) first. (2) Not reproduced: a PNG whose `zTXt` chunk holds bytes that are not zlib data loads without an error in Pillow 13.0.0, and corrupt image data raises `OSError`, which is handled. No change | `test_a_16_bit_image_keeps_its_contrast`. The mutant without scaling is killed | (1) fixed, (2) refuted |
+| AB-5 | medium | (1) Directory-only ignore rules on paths not yet created; (2) `realpath` through components not yet created; (3) `--out` inside `.git` passes, since `git rev-parse` prints `false` there; and the copies are never checked | The copies' place is checked too (a copy and a detections file), so ignore rules that cover only the index and the logs refuse the run. Refuted: (1) a wrong answer there says "committable", which refuses the run (fails closed); (2) a component that does not exist is no link, and `mkdir` creates real directories; (3) git never tracks a path inside `.git`, so nothing written there can be committed | `test_copies_git_could_commit_are_refused_before_anything_is_written`. The mutant without the copies is killed | fixed in part, rest refuted |
+| AB-6 | medium | (1) A link among the originals that leads nowhere was skipped, and the run reported every exam done. (2) An unreadable original stops the run before it starts | (1) Valid: such a link is an error that stops the run, as in `verify`. (2) Refuted: the run stops with exit 2 and the error's reason only (`OSError.strerror`), so nothing passes unread; a run that stops is not a hidden failure | `test_a_link_among_the_originals_that_leads_nowhere_stops_the_run`. The mutant without the check is killed | (1) fixed, (2) refuted |
+| AB-7 | low | `aligned` checks the aspect ratio only, so a page turned 180° would get its text-layer boxes at inverted places | Refuted: poppler gives `pdftotext -bbox-layout` coordinates in the page's displayed orientation, as `pdftoppm` renders it. On a synthetic page with `/Rotate 180`, a word's box starts at (386.6, 695.0) points, and its ink rendered at 72 dpi starts at (386, 694). No change | Synthetic PDF, checked locally | refuted |
+
+Validation:
+- `uv run pytest`: 179 passed, 2 skipped (opt-in).
+- ruff: clean.
+- `RUN_SAMPLE_EXAMS=1`: 2 passed.
+- 12 mutants, at least one per fixed part: all killed.

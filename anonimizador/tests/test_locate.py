@@ -96,3 +96,17 @@ def test_a_transparent_background_is_read_as_white(tmp_path):
         gray = im.convert("L")
         assert gray.getpixel((0, 0)) == 255
         assert gray.getpixel((15, 10)) == 0
+
+
+def test_a_16_bit_image_keeps_its_contrast(tmp_path):
+    # Antigravity AB-4: converting to 8 bits clipped every value above 255 to white.
+    image = Image.new("I;16", (40, 20), 60000)
+    for x in range(10, 30):
+        image.putpixel((x, 10), 2000)
+    image.save(tmp_path / "a.png")
+    (tmp_path / "pages").mkdir()
+    [page] = read(tmp_path / "a.png", tmp_path / "pages")
+    with Image.open(page.image) as im:
+        gray = im.convert("L")
+        assert gray.getpixel((0, 0)) > 200
+        assert gray.getpixel((15, 10)) < 20

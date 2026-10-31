@@ -4,8 +4,9 @@ Three detectors run over each reading of a page (the text layer and the OCR):
 - `terms`: the owner's terms, matched as `verify` counts them (case, accents, spacing,
   and digits);
 - `patterns`: CPF and CNS with valid check digits, phone, e-mail, CEP, and dates;
-- `labels`: the value after a field label such as `Paciente:` or `CRM`, and the name
-  beside or under a `Nome` that starts its line, colon or not.
+- `labels`: the value after a field label such as `Paciente:` or `CRM`, beside it or
+  under it; a `Nome`, `Paciente`, or date-of-birth label that starts its line needs no
+  colon.
 
 A detection holds its page, box, kind, detector, and reading, never its text.
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from anonimizador.locate import Box, Page, Word
@@ -77,10 +79,7 @@ NUMBER_PART = re.compile(
     r"^[\W_]*(?:(?:\d[\d\W_]*(?:x[\W_]*)?|(?:" + "|".join(STATES.split()) + r")|n[o°º]?)[\W_]*)?$"
 )
 SEPARATOR = re.compile(r"^[\W_]+$")
-# Name labels taken without a colon, but only as the first words of their line: a form
-# can print "Nome" with the name beside it, or above the name as a column heading.
-BARE_LABELS = ("nome do paciente", "nome da mae", "nome do pai", "nome social", "nome")
-# The words a bare label alone is no value of ("Nome do exame:").
+# The words a label alone is no value of ("Nome do exame:").
 PARTICLES = ("de", "do", "da", "dos", "das")
 # The widest gap between the words of a value, in heights of the label: a wider one
 # separates the value from the next field.
@@ -91,11 +90,6 @@ COLON_LABEL = re.compile(
     + r"(?:"
     + "|".join(r"[\W_]*".join(map(re.escape, label.split())) for label in COLON_LABELS)
     + r")[\s.]*:"
-)
-BARE_LABEL = re.compile(
-    r"(?:"
-    + "|".join(r"[\W_]+".join(map(re.escape, label.split())) for label in BARE_LABELS)
-    + r")(?![^\W_])"
 )
 NUMBER_LABEL = re.compile(
     LABEL_PREFIX + r"(?:" + "|".join(map(re.escape, NUMBER_LABELS)) + r")(?![^\W_\d])"
@@ -209,11 +203,20 @@ def pattern_spans(text: Text, remove_dates: bool) -> list[tuple[str, tuple[int, 
     return found
 
 
+def ends_field(words: list[Word], seq: list[int], k: int) -> bool:
+    """Whether `seq[k]` starts the next field: it holds a colon ("Idade:", "Idade:45",
+    ":"), or the word after it starts with one ("Idade" ":") (Antigravity AB-1)."""
+    return ":" in words[seq[k]].text or (
+        k + 1 < len(seq) and words[seq[k + 1]].text.startswith(":")
+    )
+
+
 def colon_value(words: list[Word], line: list[int], last: int) -> list[int]:
-    """The words after the label word `last` in `line`, up to the next label."""
+    """The words after the label word `last` in `line`, up to the next field."""
+    after = [i for i in line if i > last]
     value = []
-    for index in (i for i in line if i > last):
-        if words[index].text.endswith(":"):
+    for k, index in enumerate(after):
+        if ends_field(words, after, k):
             break
         value.append(index)
     return value
@@ -237,9 +240,9 @@ def run_from(words: list[Word], row: list[int], edge: int, reach: float, gap: fl
     """The words of `row` up to a label or a gap wider than `gap`; the first one must
     start within `reach` of `edge`."""
     value: list[int] = []
-    for index in row:
+    for k, index in enumerate(row):
         box = words[index].box
-        if box[0] - edge > (gap if value else reach) or words[index].text.endswith(":"):
+        if box[0] - edge > (gap if value else reach) or ends_field(words, row, k):
             break
         value.append(index)
         edge = box[2]
@@ -264,42 +267,100 @@ def column_below(words: list[Word], label: int, gap: float) -> list[int]:
     return [first, *run_from(words, row_after(words, first), words[first].box[2], gap, gap)]
 
 
-def bare_value(words: list[Word], label: set[int]) -> list[int]:
-    """The value of a name label without a colon: beside it, else under it as under a
-    column heading, else the next words of its row, however far."""
-    first, last = min(label), max(label)
-    gap = GAP_IN_LABEL_HEIGHTS * (words[first].box[3] - words[first].box[1])
-    row, edge = row_after(words, last), words[last].box[2]
-    value = (
-        run_from(words, row, edge, gap, gap)
-        or column_below(words, first, gap)
-        or run_from(words, row, edge, float("inf"), gap)
+def label_gap(words: list[Word], label: int) -> float:
+    return GAP_IN_LABEL_HEIGHTS * (words[label].box[3] - words[label].box[1])
+
+
+def beside(words: list[Word], last: int, reach: float) -> list[int]:
+    """The value to the right of the label word `last`, on its row."""
+    row = row_after(words, last)
+    return run_from(words, row, words[last].box[2], reach, label_gap(words, last))
+
+
+def not_particles(words: list[Word], value: list[int]) -> bool:
+    return not all(fold(words[i].text) in PARTICLES for i in value)
+
+
+def name_shaped(words: list[Word], value: list[int]) -> bool:
+    """Capitalized words and particles, as a name is written; running text is not."""
+    return not_particles(words, value) and all(
+        words[i].text[:1].isupper() or fold(words[i].text) in PARTICLES for i in value
     )
-    return [] if all(fold(words[i].text) in PARTICLES for i in value) else value
+
+
+def has_digit(words: list[Word], value: list[int]) -> bool:
+    return any(c.isdigit() for i in value for c in words[i].text)
+
+
+# A test of a value, by its words.
+Accepts = Callable[[list[Word], list[int]], bool]
+# Labels taken without a colon, but only as the first words of their line: a form can
+# print "Nome" with the name beside it, or above it as a column heading. Each takes only
+# a value its test accepts: "Paciente" starts running text too, a name does not.
+BARE_LABELS: dict[str, Accepts] = {
+    "nome do paciente": not_particles,
+    "nome da mae": not_particles,
+    "nome do pai": not_particles,
+    "nome social": not_particles,
+    "nome": not_particles,
+    "paciente": name_shaped,
+    "mae": name_shaped,
+    "data de nascimento": has_digit,
+    "data nasc": has_digit,
+    "dt nasc": has_digit,
+    "nascimento": has_digit,
+}
+BARE_LABEL = re.compile(
+    r"(?:"
+    + "|".join(
+        r"[\W_]+".join(map(re.escape, label.split()))
+        for label in sorted(BARE_LABELS, key=len, reverse=True)
+    )
+    + r")(?![^\W_])"
+)
+
+
+def bare_value(words: list[Word], label: set[int], accepts: Accepts) -> list[int]:
+    """The value of a label without a colon: beside it, else under it as under a column
+    heading, else the next words of its row, however far; the first that `accepts`."""
+    first, last = min(label), max(label)
+    gap = label_gap(words, first)
+    for value in (
+        beside(words, last, gap),
+        column_below(words, first, gap),
+        beside(words, last, float("inf")),
+    ):
+        if value and accepts(words, value):
+            return value
+    return []
 
 
 def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     """The words that are the value of a field label."""
     values = []
-    for k, line in enumerate(lines):
+    for line in lines:
         text = join(words, [line])
-        if m := BARE_LABEL.match(text.folded):
-            values += bare_value(words, text.words(m.start(), m.end()))
+        # A label with a colon is a colon label, whose value is searched the same way.
+        if (m := BARE_LABEL.match(text.folded)) and not COLON_LABEL.match(text.folded):
+            accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group()))]
+            values += bare_value(words, text.words(m.start(), m.end()), accepts)
         for m in COLON_LABEL.finditer(text.folded):
             # The value starts after the word holding the colon, or in it when it is
             # glued to the colon ("Paciente:Fulano").
-            last = max(text.words(m.start(), m.end()))
+            label = text.words(m.start(), m.end())
+            first, last = min(label), max(label)
             glued = any(c.isalnum() for c in words[last].text.partition(":")[2])
             value = colon_value(words, line, last)
             if glued:
                 values.append(last)
-            elif not any(i > last for i in line) and k + 1 < len(lines):
-                # A label that ends its line has its value on the next line of the same
-                # page (a date-of-birth label above the date, Codex CB-7); a blank field
-                # followed by another field on its line has none (Codex CB-17).
-                below = lines[k + 1]
-                if words[below[0]].line[0] == words[last].line[0]:
-                    value = colon_value(words, below, below[0] - 1)
+            elif not any(i > last for i in line):
+                # A label that ends its extracted line has its value on its row, in
+                # another block (Antigravity AB-2), else under it, as a date of birth
+                # under its label (Codex CB-7, Antigravity AB-3). A blank field followed
+                # by another field on its line has none (Codex CB-17).
+                value = beside(words, last, float("inf")) or column_below(
+                    words, first, label_gap(words, first)
+                )
             values += value
         for m in NUMBER_LABEL.finditer(text.folded):
             label_words = text.words(m.start(), m.end())

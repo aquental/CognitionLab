@@ -50,6 +50,8 @@ STAMP_FORMAT = "%Y%m%d-%H%M%S"
 # Hex digits of the content digest in a neutral name: enough to tell a few hundred
 # exams apart, short enough to read.
 DIGEST_LENGTH = 12
+# A neutral name to ask git about, before any copy exists.
+NEUTRAL_PROBE = "exam-" + "0" * DIGEST_LENGTH
 NOT_WRITTEN = "not written"
 NO_TERMS = (
     "no terms file: only identifier patterns were counted, so `ok` does not mean that "
@@ -138,11 +140,16 @@ def originals(source: Path) -> list[Exam]:
     """The PDF, PNG, and JPEG files directly in `source`, in name order. Directories
     are not walked: the outputs usually live in one under `source`."""
     try:
-        paths = sorted(
+        candidates = [
             p
             for p in source.iterdir()
-            if p.is_file() and not p.name.startswith(APPLEDOUBLE) and p.suffix.lower() in SUFFIXES
-        )
+            if not p.name.startswith(APPLEDOUBLE) and p.suffix.lower() in SUFFIXES
+        ]
+        # A link that leads nowhere is an original never read: an error, as in
+        # `verify`, not a skipped file (Antigravity AB-6).
+        if any(p.is_symlink() and not p.exists() for p in candidates):
+            raise VerifyError("a link among the originals leads nowhere")
+        paths = sorted(p for p in candidates if p.is_file())
     except OSError as e:
         # The message of an OSError holds the path: report its reason only.
         raise VerifyError(f"cannot list the originals ({e.strerror or type(e).__name__})") from None
@@ -166,7 +173,14 @@ def start(out: Path, now: datetime) -> Run:
     path or where its links lead: the index and the logs name the originals (Codex
     CB-2)."""
     run = Run(now.strftime(STAMP_FORMAT), out)
-    places = [run.report, run.logs / "console.txt"]
+    # The copies too: a rule that ignores the index and logs by name can leave them
+    # committable, and a copy is unreviewed (Antigravity AB-5).
+    places = [
+        run.report,
+        run.logs / "console.txt",
+        run.logs / f"01-{NEUTRAL_PROBE}-detections.json",
+        *(run.copies / f"{NEUTRAL_PROBE}{suffix}" for suffix in (".pdf", ".png")),
+    ]
     if any(committable(str(p)) or committable(os.path.realpath(p)) for p in places):
         raise VerifyError(
             "the output directory is inside a git work tree and not ignored; "

@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import re
+import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -395,3 +396,23 @@ def test_the_same_original_gives_the_same_copy(source):
     run_batch(source, source / "out", [], Options(), NOW.replace(second=10))
     first, second = (sorted(d.glob("exam-*")) for d in sorted((source / "out").glob("2026*/")))
     assert [p.read_bytes() for p in first] == [p.read_bytes() for p in second]
+
+
+def test_copies_git_could_commit_are_refused_before_anything_is_written(source, tmp_path):
+    # Antigravity AB-5: rules ignoring only the index and the logs left the copies,
+    # which are unreviewed, committable.
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("*-anonimizer.md\nlogs/\n", encoding="utf-8")
+    with pytest.raises(VerifyError, match="git cannot commit"):
+        run_batch(source, repo / "out", [], Options(), NOW)
+    assert not (repo / "out").exists()
+
+
+def test_a_link_among_the_originals_that_leads_nowhere_stops_the_run(source, capsys):
+    # Antigravity AB-6: it was skipped, and the run reported every exam done.
+    (source / "gone.pdf").symlink_to(source / "nowhere.pdf")
+    code = main(["batch", "--out", str(source / "out"), str(source)])
+    assert code == EXIT_USAGE
+    assert "a link among the originals leads nowhere" in capsys.readouterr().err
+    assert not (source / "out").exists()
