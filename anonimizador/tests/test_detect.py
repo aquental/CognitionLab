@@ -208,3 +208,50 @@ def test_a_blank_field_followed_by_another_field_takes_nothing_below():
     # Codex CB-17: "Paciente:" does not end its line, so the next line is no value.
     words = line("Paciente:", "Idade:", "45", number=0) + line("Hemoglobina", "13,5", number=1)
     assert found(words) == {}
+
+
+def test_a_field_with_a_glued_or_detached_colon_ends_a_value():
+    # Antigravity AB-1: only a word ending in ":" ended a value.
+    assert found(line("Paciente:", "Sicrano", "Idade:45")) == {"label": {"Sicrano"}}
+    assert found(line("Paciente:", "Sicrano", "Idade", ":", "45")) == {"label": {"Sicrano"}}
+    # A heading row with another field beside "Nome": the name under it is still taken.
+    values = placed(("Sicrano", 0), ("Inventado", 100), number=1)
+    for heading in (
+        placed(("Nome", 0), ("Data", 50), (":", 145), ("05/06", 200), number=0),
+        placed(("Nome", 0), ("Data:05/06", 50), number=0),
+    ):
+        assert found(heading + values, remove_dates=False) == {"label": {"Sicrano", "Inventado"}}
+
+
+def test_a_colon_label_ending_its_block_takes_the_value_on_its_row():
+    # Antigravity AB-2: the next line in block order was taken instead.
+    words = [
+        Word("Paciente:", (0, 0, 80, 15), ("ocr", 1, 1, 0)),
+        Word("Hemoglobina", (0, 30, 90, 45), ("ocr", 1, 1, 1)),
+        Word("Sicrano", (100, 0, 180, 15), ("ocr", 2, 1, 0)),
+    ]
+    assert found(words) == {"label": {"Sicrano"}}
+
+
+def test_a_date_of_birth_under_its_label_in_another_block_is_taken():
+    # Antigravity AB-3: with "Sexo:" next in block order, the date was missed.
+    words = [
+        Word("Dt.", (0, 0, 30, 15), ("ocr", 1, 1, 0)),
+        Word("Nasc.:", (35, 0, 80, 15), ("ocr", 1, 1, 0)),
+        Word("Sexo:", (200, 0, 250, 15), ("ocr", 2, 1, 0)),
+        Word("01/02/1980", (0, 20, 80, 35), ("ocr", 3, 1, 0)),
+        Word("F", (200, 20, 220, 35), ("ocr", 4, 1, 0)),
+    ]
+    assert found(words, remove_dates=False) == {"label": {"01/02/1980"}}
+
+
+def test_patient_mother_and_date_of_birth_labels_need_no_colon():
+    # Antigravity AB-3: only "Nome" was a label without a colon.
+    assert found(line("Paciente", "Sicrano", "Inventado")) == {"label": {"Sicrano", "Inventado"}}
+    assert found(line("Mae", "Beltrana", "de", "Tal")) == {"label": {"Beltrana", "de", "Tal"}}
+    heading = placed(("Data", 0), ("Nasc", 100), number=0)
+    date = placed(("01/02/1980", 0), number=1)
+    assert found(heading + date, remove_dates=False) == {"label": {"01/02/1980"}}
+    # Each takes only a value of its kind: running text is no name, a word no date.
+    assert found(line("Paciente", "refere", "dor", "toracica")) == {}
+    assert found(line("Data", "Nasc", "ignorada")) == {}

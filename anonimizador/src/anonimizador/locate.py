@@ -28,6 +28,8 @@ Box = tuple[int, int, int, int]
 # A text layer whose page shape differs from the image by more than this (a rotated
 # page) is not mapped onto it: its boxes would land in the wrong place.
 MAX_ASPECT_DIFFERENCE = 0.02
+# The modes of a 16-bit grayscale image (a PNG); "I" is how older Pillows open it.
+SIXTEEN_BIT = ("I;16", "I;16B", "I;16L", "I;16N", "I")
 # The TSV level of a word, and the columns a word needs.
 TSV_WORD_LEVEL = "5"
 TSV_COLUMNS = frozenset(
@@ -185,7 +187,7 @@ def read_image_page(path: Path, tmp: Path, lang: str, timeout: int, use_ocr: boo
         with Image.open(path) as im:
             # Turned as a viewer shows it, then copied as bare pixels: nothing of the
             # file's chunks or segments (EXIF, XMP, ICC, text) is carried over (R7).
-            shown = flattened(ImageOps.exif_transpose(im))
+            shown = eight_bit(flattened(ImageOps.exif_transpose(im)))
             mode = pixel_mode(shown)
             pixels = Image.frombytes(mode, shown.size, shown.convert(mode).tobytes())
     except IMAGE_ERRORS:
@@ -204,6 +206,14 @@ def flattened(im: Image.Image) -> Image.Image:
         return im
     white = Image.new("RGBA", im.size, (255, 255, 255, 255))
     return Image.alpha_composite(white, im.convert("RGBA"))
+
+
+def eight_bit(im: Image.Image) -> Image.Image:
+    """A 16-bit grayscale image scaled to 8 bits. Converting it directly clips every
+    value above 255, which turns a page white (Antigravity AB-4)."""
+    if im.mode not in SIXTEEN_BIT:
+        return im
+    return im.convert("I").point(lambda v: v / 256).convert("L")
 
 
 def pixel_mode(im: Image.Image) -> str:
