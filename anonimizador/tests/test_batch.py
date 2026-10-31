@@ -416,3 +416,27 @@ def test_a_link_among_the_originals_that_leads_nowhere_stops_the_run(source, cap
     assert code == EXIT_USAGE
     assert "a link among the originals leads nowhere" in capsys.readouterr().err
     assert not (source / "out").exists()
+
+
+@requires_tools
+def test_a_copy_git_could_commit_is_refused_even_when_the_probes_are_ignored(source, tmp_path):
+    # Codex CB-20: rules naming the probe files let a real copy be committable.
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    rules = "*-anonimizer.md\n*.txt\n*.json\nexam-000000000000.pdf\nexam-000000000000.png\n"
+    (repo / ".gitignore").write_text(rules, encoding="utf-8")
+    with pytest.raises(VerifyError, match="git cannot commit"):
+        run_batch(source, repo / "out", [], Options(), NOW)
+    assert not list((repo / "out").rglob("exam-*"))
+
+
+@requires_tools
+def test_a_log_git_could_commit_is_refused_even_when_the_probes_are_ignored(source, tmp_path):
+    # Codex CB-20: the same for the logs, which the index links by name.
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    rules = "*-anonimizer.md\nconsole.txt\n*-detections.json\nexam-*\n"
+    (repo / ".gitignore").write_text(rules, encoding="utf-8")
+    with pytest.raises(VerifyError, match="git cannot commit"):
+        run_batch(source, repo / "out", [], Options(), NOW)
+    assert not list((repo / "out").rglob("*-verify-*"))

@@ -110,3 +110,33 @@ def test_a_16_bit_image_keeps_its_contrast(tmp_path):
         gray = im.convert("L")
         assert gray.getpixel((0, 0)) > 200
         assert gray.getpixel((15, 10)) < 20
+
+
+def test_a_16_bit_image_with_a_transparent_value_keeps_its_contrast(tmp_path):
+    # Codex CB-22: transparency was flattened first, to 8 bits, before scaling.
+    image = Image.new("I;16", (40, 20), 60000)
+    for x in range(10, 30):
+        image.putpixel((x, 10), 2000)
+    for x in range(5):
+        image.putpixel((x, 0), 0)
+    image.save(tmp_path / "a.png", transparency=0)
+    (tmp_path / "pages").mkdir()
+    [page] = read(tmp_path / "a.png", tmp_path / "pages")
+    with Image.open(page.image) as im:
+        gray = im.convert("L")
+        assert gray.getpixel((20, 5)) > 200
+        assert gray.getpixel((15, 10)) < 20
+        assert gray.getpixel((1, 0)) == 255
+
+
+@requires_tools
+def test_a_rendered_page_past_the_pixel_limit_is_a_tool_error(tmp_path, monkeypatch):
+    # Codex CB-21: Pillow's DecompressionBombError escaped every handler.
+    from make_covered_name_pdf import covered_name_pdf
+
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(covered_name_pdf())
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    (tmp_path / "pages").mkdir()
+    with pytest.raises(ToolError, match="too many pixels; lower --dpi"):
+        read(pdf, tmp_path / "pages")

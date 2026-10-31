@@ -255,3 +255,21 @@ def test_patient_mother_and_date_of_birth_labels_need_no_colon():
     # Each takes only a value of its kind: running text is no name, a word no date.
     assert found(line("Paciente", "refere", "dor", "toracica")) == {}
     assert found(line("Data", "Nasc", "ignorada")) == {}
+
+
+def test_a_number_label_ending_its_block_takes_the_number_beside_or_under_it():
+    # Codex CB-18: number labels searched only their extracted line.
+    beside = [
+        Word("RG:", (0, 0, 40, 15), ("ocr", 1, 1, 0)),
+        Word("12.345.671-X", (100, 0, 220, 15), ("ocr", 2, 1, 0)),
+    ]
+    assert found(beside) == {"label": {"12.345.671-X"}}
+    under = placed(("CRM", 0), number=0) + placed(("123456", 0), number=1)
+    assert found(under) == {"label": {"123456"}}
+    assert found(placed(("CRM", 0), number=0) + placed(("Hemoglobina", 0), number=1)) == {}
+
+
+def test_a_state_glued_to_a_council_number_is_part_of_it():
+    # Codex CB-19.
+    assert found(line("CRM:", "123456-SP")) == {"label": {"123456-SP"}}
+    assert found(line("CRM", "123456/SP", "Hemoglobina")) == {"label": {"123456/SP"}}
