@@ -88,6 +88,7 @@ The owner keeps **real medical exams, with patient names in file names and conte
     - **What may be sent:** the exam-type classifier may send to TypeSafe's Jev the *masked* text of an **anonymized copy** that passed the `anonimizador` re-verification (`verify` ok).
     - **When:** only with both `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`.
     - **Still forbidden:** sending text of the originals, sending to reviewers, and committing any classifier output for these files.
+  - **A second exception (owner decision, 2026-10-31):** the owner stores the originals in a private Cloudflare R2 bucket (`sample-exams`). `../anonimizador/scripts/anonymize-r2.py` uploads the anonymized copies whose re-verification is `ok` to the private bucket `anonymized`. Indexes, logs and the ledger stay local.
 - **Local tests only.**
   - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
   - They work on temporary copies only and never persist outputs in the repository.
