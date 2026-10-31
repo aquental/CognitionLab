@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use embeddings_fundamentals::classifier::{
-    self, Categoria, canonico, estado, listas, mascaramento, texto,
+    self, Camada, Categoria, canonico, estado, indicios, listas, mascaramento, texto,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -34,16 +34,16 @@ const COVERED: &[(&str, Check)] = &[
     ("partes_de_nome", check_partes_de_nome),
     ("termos_permitidos", check_termos_permitidos),
     ("json_canonico", check_json_canonico),
+    ("regexes", check_regexes),
+    ("remover_dados_pessoais", check_remover_dados_pessoais),
+    ("conferir", check_conferir),
+    ("nomes_dos_rotulos", check_nomes_dos_rotulos),
+    ("nomes_dos_indicios", check_nomes_dos_indicios),
 ];
 
 /// Sections a later phase covers (spec/CLASSIFIER.md §20). This list only shrinks: a
 /// phase that covers a section moves it to `COVERED`.
 const PENDING: &[&str] = &[
-    "regexes",
-    "nomes_dos_indicios",
-    "nomes_dos_rotulos",
-    "remover_dados_pessoais",
-    "conferir",
     "montar_estado",
     "decidir_classificacao",
     "validar_respostas",
@@ -330,5 +330,90 @@ fn check_json_canonico(section: &Value) {
             hex::encode(canonico::digest(&case["valor"]).expect("digest")),
             text(case, "sha256_hex")
         );
+    }
+}
+
+/// A list of strings, owned.
+fn owned(value: &Value) -> Vec<String> {
+    strings(value).into_iter().map(str::to_owned).collect()
+}
+
+/// Per-layer counts as the vectors write them: an object with only the layers above
+/// zero, in layer order.
+fn contagens(mapa: &std::collections::BTreeMap<Camada, u32>) -> Value {
+    Value::Object(
+        mapa.iter()
+            .map(|(camada, n)| (camada.as_str().to_owned(), Value::from(*n)))
+            .collect(),
+    )
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_regexes(section: &Value) {
+    let textos = mascaramento::textos_python();
+    let nomes: Vec<&str> = textos.iter().map(|(nome, _)| *nome).collect();
+    assert_eq!(
+        nomes,
+        section
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+    for (nome, texto) in &textos {
+        match texto {
+            mascaramento::TextoPython::Um(texto) => {
+                assert_eq!(text(section, nome), texto, "{nome}");
+            }
+            mascaramento::TextoPython::Lista(lista) => {
+                assert_eq!(strings(&section[*nome]), *lista, "{nome}");
+            }
+        }
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_remover_dados_pessoais(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let saida = mascaramento::remover_dados_pessoais(
+            text(case, "texto"),
+            &owned(&case["conhecidos"]),
+            &owned(&case["preservar"]),
+        )
+        .expect("masking runs");
+        assert_eq!(saida.texto, text(&case["saida"], "texto"), "case {i}");
+        assert_eq!(
+            contagens(&saida.contagens),
+            case["saida"]["contagens"],
+            "case {i}"
+        );
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_conferir(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let achados = mascaramento::conferir(text(case, "texto"), &owned(&case["conhecidos"]))
+            .expect("the check runs");
+        assert_eq!(contagens(&achados), case["saida"], "case {i}");
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_nomes_dos_rotulos(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let nomes =
+            mascaramento::nomes_dos_rotulos(text(case, "texto"), &owned(&case["preservar"]))
+                .expect("runs");
+        assert_eq!(nomes, strings(&case["saida"]), "case {i}");
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_nomes_dos_indicios(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let nomes = indicios::nomes_dos_indicios(text(case, "entrada")).expect("runs");
+        assert_eq!(nomes, strings(&case["saida"]), "case {i}");
     }
 }

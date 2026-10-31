@@ -162,6 +162,48 @@ pub fn split(s: &str) -> impl Iterator<Item = &str> {
     s.split(is_space).filter(|parte| !parte.is_empty())
 }
 
+/// `str.strip(chars)`: drops the code points of `chars` at both ends.
+#[must_use]
+pub fn strip_chars<'a>(s: &'a str, chars: &str) -> &'a str {
+    s.trim_matches(|ch| chars.contains(ch))
+}
+
+/// `str.lstrip()`.
+#[must_use]
+pub fn lstrip(s: &str) -> &str {
+    s.trim_start_matches(is_space)
+}
+
+/// `str.rstrip()`.
+#[must_use]
+pub fn rstrip(s: &str) -> &str {
+    s.trim_end_matches(is_space)
+}
+
+/// `s.splitlines()[0]` of a non-empty string: the text before the first line break that
+/// `str.splitlines()` knows (`\n`, `\r`, `\x0b`, `\x0c`, `\x1c`–`\x1e`, `\x85`,
+/// U+2028, U+2029).
+#[must_use]
+pub fn primeira_linha(s: &str) -> &str {
+    let fim = s
+        .find(|ch| {
+            matches!(
+                ch,
+                '\n' | '\r'
+                    | '\u{b}'
+                    | '\u{c}'
+                    | '\u{1c}'
+                    | '\u{1d}'
+                    | '\u{1e}'
+                    | '\u{85}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+            )
+        })
+        .unwrap_or(s.len());
+    s.get(..fim).unwrap_or(s)
+}
+
 /// Number of code points: Python's `len` of a `str`.
 #[must_use]
 pub fn len(s: &str) -> usize {
@@ -249,6 +291,41 @@ impl MapaOffsets {
     #[must_use]
     pub fn byte_de_char(&self, ch: usize) -> Option<usize> {
         self.inicios.get(ch).copied()
+    }
+
+    /// Number of code points of the mapped string.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inicios.len().saturating_sub(1)
+    }
+
+    /// Whether the mapped string is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Byte offset of a code-point offset, clamped to the end as Python's slices are.
+    #[must_use]
+    pub fn byte(&self, ch: usize) -> usize {
+        let ultimo = self.inicios.len().saturating_sub(1);
+        self.inicios
+            .get(ch.min(ultimo))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// `s[inicio:fim]` in code points, with Python's clamping: an end past the string
+    /// stops at its end, and a start at or after the end gives `""`. `s` must be the
+    /// mapped string.
+    #[must_use]
+    pub fn fatia<'a>(&self, s: &'a str, inicio: usize, fim: usize) -> &'a str {
+        let (a, b) = (self.byte(inicio), self.byte(fim));
+        if a >= b {
+            ""
+        } else {
+            s.get(a..b).unwrap_or_default()
+        }
     }
 }
 
@@ -358,6 +435,32 @@ mod tests {
         assert_eq!(prefixo("açúcar", 3), "açú");
         assert_eq!(prefixo("ab", 5), "ab");
         assert_eq!(len("Joa\u{303}o"), 5);
+    }
+
+    #[test]
+    fn slices_clamp_like_python() {
+        let s = "aÉbç";
+        let mapa = MapaOffsets::new(s);
+        assert_eq!(mapa.len(), 4);
+        assert_eq!(mapa.fatia(s, 1, 3), "Éb");
+        assert_eq!(mapa.fatia(s, 2, 99), "bç");
+        assert_eq!(mapa.fatia(s, 3, 1), "");
+        assert_eq!(mapa.fatia(s, 9, 12), "");
+        assert!(MapaOffsets::new("").is_empty());
+    }
+
+    #[test]
+    fn python_strip_variants_and_first_line() {
+        assert_eq!(strip_chars("(.Holter,)", ".,;:()"), "Holter");
+        assert_eq!(lstrip("\u{1f} a "), "a ");
+        assert_eq!(rstrip(" a\u{85}"), " a");
+        assert_eq!(primeira_linha("Ana Lima\u{2028}Idade"), "Ana Lima");
+        assert_eq!(primeira_linha("Ana\r\nLima"), "Ana");
+        assert_eq!(
+            primeira_linha("Ana\u{1f}Lima"),
+            "Ana\u{1f}Lima",
+            "\\x1f is no line break"
+        );
     }
 
     #[test]
