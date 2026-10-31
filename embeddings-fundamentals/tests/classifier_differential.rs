@@ -1,5 +1,5 @@
-//! Differential test of the masking against TestoDoc's Python (spec/CLASSIFIER.md
-//! §14.3). Opt-in and local:
+//! Differential test of the masking and of `montar_estado` against TestoDoc's Python
+//! (spec/CLASSIFIER.md §14.3). Opt-in and local:
 //!
 //! ```text
 //! RUN_DIFFERENTIAL=1 TESTODOC_DIR=/path/to/testo-doc \
@@ -18,7 +18,9 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use embeddings_fundamentals::classifier::{Camada, indicios, listas, mascaramento};
+use embeddings_fundamentals::classifier::{
+    Camada, EntradaClassificacao, Pagina, PaginasModo, estado, indicios, listas, mascaramento,
+};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -41,6 +43,19 @@ def _padroes_conhecidos_dv9(conhecidos):
         saida.append(p)
     return saida
 m._padroes_conhecidos = _padroes_conhecidos_dv9
+def montar(doc, conhecidos):
+    entrada = cd.EntradaClassificacao(
+        nome_arquivo=doc["nome_arquivo"], titulo=doc["titulo"], extensao=doc["extensao"],
+        total_paginas=len(doc["paginas"]), nomes_conhecidos=conhecidos,
+        paginas=[cd.Pagina(n=i + 1, texto=t, origem=o) for i, (t, o) in enumerate(doc["paginas"])],
+    )
+    r = cd.montar_estado(entrada, doc["modo"])
+    return {
+        "estado": r.estado, "digest": r.digest.hex(), "paginas_enviadas": r.paginas_enviadas,
+        "caracteres_enviados": r.caracteres_enviados, "truncado": r.truncado,
+        "mascaramentos": r.mascaramentos, "origens_texto": r.origens_texto, "bloqueio": r.bloqueio,
+        "caracteres_uteis": r.caracteres_uteis, "termo_do_tipo": r.termo_do_tipo,
+    }
 saida = []
 for caso in json.load(sys.stdin):
     r = m.remover_dados_pessoais(caso["texto"], caso["conhecidos"], caso["preservar"])
@@ -51,6 +66,7 @@ for caso in json.load(sys.stdin):
         "conferir": m.conferir(caso["texto"], caso["conhecidos"]),
         "nomes_dos_rotulos": m.nomes_dos_rotulos(caso["texto"], caso["preservar"]),
         "nomes_dos_indicios": cd._nomes_dos_indicios(caso["texto"]),
+        "montar_estado": montar(caso["documento"], caso["conhecidos"]),
     })
 json.dump(saida, sys.stdout)
 "#;
@@ -219,6 +235,44 @@ fn rust(caso: &Value) -> Value {
         "conferir": contagens(&mascaramento::conferir(texto, &conhecidos).expect("check")),
         "nomes_dos_rotulos": mascaramento::nomes_dos_rotulos(texto, &preservar).expect("names"),
         "nomes_dos_indicios": indicios::nomes_dos_indicios(texto).expect("hints"),
+        "montar_estado": montar(&caso["documento"], &conhecidos),
+    })
+}
+
+#[expect(clippy::expect_used, reason = "test helper")]
+fn montar(doc: &Value, conhecidos: &[String]) -> Value {
+    let paginas: Vec<Pagina> = doc["paginas"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .zip(1..)
+        .map(|(p, n)| Pagina {
+            n,
+            texto: p[0].as_str().expect("text").to_owned(),
+            origem: serde_json::from_value(p[1].clone()).expect("origin"),
+        })
+        .collect();
+    let entrada = EntradaClassificacao {
+        nome_arquivo: doc["nome_arquivo"].as_str().expect("name").to_owned(),
+        titulo: doc["titulo"].as_str().expect("title").to_owned(),
+        extensao: doc["extensao"].as_str().expect("extension").to_owned(),
+        total_paginas: u32::try_from(paginas.len()).expect("few pages"),
+        paginas,
+        nomes_conhecidos: conhecidos.to_vec(),
+    };
+    let modo: PaginasModo = doc["modo"].as_str().expect("mode").parse().expect("mode");
+    let r = estado::montar_estado(&entrada, modo).expect("state");
+    json!({
+        "estado": r.estado.para_value(),
+        "digest": hex::encode(r.digest),
+        "paginas_enviadas": r.paginas_enviadas,
+        "caracteres_enviados": r.caracteres_enviados,
+        "truncado": r.truncado,
+        "mascaramentos": contagens(&r.mascaramentos),
+        "origens_texto": r.origens_texto.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
+        "bloqueio": contagens(&r.bloqueio),
+        "caracteres_uteis": r.caracteres_uteis,
+        "termo_do_tipo": r.termo_do_tipo,
     })
 }
 
@@ -228,16 +282,38 @@ fn masking_matches_testodoc() {
     let Some(backend) = testodoc_backend() else {
         return;
     };
+    let pagina = (
+        proptest::collection::vec(proptest::sample::select(TOKENS.to_vec()), 0..20),
+        proptest::sample::select(vec!["nativo", "ocr_local", "visao"]),
+    )
+        .prop_map(|(tokens, origem)| json!([tokens.concat(), origem]));
+    let documento = (
+        proptest::collection::vec(pagina, 1..5),
+        proptest::sample::select(vec!["1", "2", "todas"]),
+        proptest::sample::select(vec![
+            "Zanoni_Prado_holter_24h.pdf",
+            "eco strain 3D.pdf",
+            "digitalizado_0042.PDF",
+            "laudo.pdf",
+        ]),
+        proptest::sample::select(vec!["", "Holter 24 h", "ECO COM STRAIN", "Exame"]),
+        proptest::sample::select(vec!["pdf", ".PDF", "Pdf.", "AB123", "jpeg2000x", ""]),
+    )
+        .prop_map(|(paginas, modo, nome_arquivo, titulo, extensao)| {
+            json!({"paginas": paginas, "modo": modo, "nome_arquivo": nome_arquivo,
+                   "titulo": titulo, "extensao": extensao})
+        });
     let estrategia = (
         proptest::collection::vec(proptest::sample::select(TOKENS.to_vec()), 0..28),
         proptest::sample::subsequence(CONHECIDOS.to_vec(), 0..=3),
         any::<bool>(),
+        documento,
     );
     let mut runner = TestRunner::new(Config::default());
     let vocabulario: Vec<&str> = listas::VOCABULARIO_TIPO.to_vec();
     let casos: Vec<Value> = (0..3000)
         .map(|_| {
-            let (tokens, conhecidos, preservar) = estrategia
+            let (tokens, conhecidos, preservar, documento) = estrategia
                 .new_tree(&mut runner)
                 .expect("generate")
                 .current();
@@ -245,6 +321,7 @@ fn masking_matches_testodoc() {
                 "texto": tokens.concat(),
                 "conhecidos": conhecidos,
                 "preservar": if preservar { vocabulario.clone() } else { Vec::new() },
+                "documento": documento,
             })
         })
         .collect();

@@ -492,3 +492,40 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - Codex: Phase 1 round 2 (closure of C1-1, C1-2), then Phase 2 and each later phase;
   - Antigravity: Phases 1 and 2 and each later phase.
 - The acceptance at `c99abcc` passed in a clean worktree: the five §14.8 commands (268 tests each run) and the three differentials.
+
+## Classifier — Phase 3: state and decision
+
+### Implementation
+- **`estado.rs`: `montar_estado`, following TD §6.**
+  - Pages are composed (NFC) and selected by mode before empty pages are dropped.
+  - The known names are `nomes_conhecidos`, then the hint names and the label names of the whole text.
+  - Each page is masked, then `conferir` runs on the whole masked page, then the page is cut at the page and total limits, dropping a broken marker. A page left empty by the cut ends the loop.
+  - The other strings of the state (file terms, title terms, extension, mode) are checked one by one. Origins are sorted.
+- **`decisao.rs`:**
+  - `validar_respostas` takes the single `tipo_documento` key. Missing or null probabilities become one-hot on the choice. Keys must be options, values finite and in [0, 1], and the sum within 1e-3 of 1. The values are read as Python's `float()` reads them, and the sum is Python's compensated `sum()`.
+  - `decidir_classificacao` sorts with `total_cmp`. The margin is the top-two difference, never below 0. A confidence equal to the threshold is `ok`.
+- **`tipos.rs`:** `EstadoEnviado::para_value()` (canonical form, for the digest) and `json_fio()` (wire JSON in TestoDoc's key order).
+- **Vectors:** `montar_estado` (21), `validar_respostas` (12) and `decidir_classificacao` (7) moved to the check registry. `PENDING` is now empty. Only the two documented exclusions remain (`referencia_pseudonima`, `bloco_tipo_detectado`).
+
+### Validation (local, 2026-10-31)
+- **§14.8:** fmt, clippy with and without `classifier-jev`, and `cargo test` with and without the feature: 279 tests, all pass.
+- **TestoDoc differential** (`tests/classifier_differential.rs`): each of the 3 000 cases now also carries a synthetic document. It has 1 to 4 pages with random origins, a random mode, file name, title and extension. The test compares `montar_estado` with TestoDoc's: state, digest, counts, block, origins, useful characters and type term. All match, with DV10 applied on both sides.
+- **Mutants on `montar_estado`:**
+  - Detected by the vectors:
+    - the cut not setting `truncado`;
+    - the broken marker kept;
+    - extension dots kept;
+    - label words counted as useful characters;
+    - generic terms counted as type terms;
+    - the other strings not checked;
+    - the mode ignored.
+  - Two survived the vectors and are now detected by unit tests whose expected values come from running TestoDoc on the same input:
+    - `continue` instead of `break` after a page left empty by the cut. TestoDoc sends 10 pages and 59 991 code points, with `truncado`.
+    - Unsorted origins.
+  - In `decidir_classificacao`, replacing `max(0.0, d)` by `d` is equivalent: `d` is never negative after the descending sort.
+- **Timing (§15, `tests/classifier_medicao.rs`, opt-in, release).** Recorded, not gated:
+  - The 21 vector cases take 401 ms, including the one-time regex compile.
+  - A synthetic document of 200 pages (627 504 code points) takes 90 ms in mode `1`, 100 ms in mode `2` and 300 ms in mode `todas`. Mode `todas` sends 21 pages and 60 000 code points, cut.
+
+### Reviews
+- Suspended by the owner (11:35). This phase joins the pending list: Codex and Antigravity, in phase order, when the owner resumes the review.

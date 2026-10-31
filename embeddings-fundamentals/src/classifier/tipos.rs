@@ -195,6 +195,55 @@ pub struct EstadoEnviado {
     pub paginas: Vec<PaginaEnviada>,
 }
 
+impl EstadoEnviado {
+    /// The state as a JSON value, for the digest: [`super::canonico::json_canonico`]
+    /// sorts the keys itself, so the order here does not matter.
+    #[must_use]
+    pub fn para_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "arquivo": {
+                "termos_nome_arquivo": self.arquivo.termos_nome_arquivo,
+                "termos_titulo": self.arquivo.termos_titulo,
+                "extensao": self.arquivo.extensao,
+                "total_paginas": self.arquivo.total_paginas,
+            },
+            "paginas_modo": self.paginas_modo.as_str(),
+            "paginas": self.paginas.iter()
+                .map(|p| serde_json::json!({"n": p.n, "texto": p.texto}))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// The wire JSON (`state` of the request, spec/CLASSIFIER.md §5.4): compact, keys in
+    /// the order TestoDoc builds them (`arquivo{termos_nome_arquivo, termos_titulo,
+    /// extensao, total_paginas}`, `paginas_modo`, `paginas[{n, texto}]`). Written by
+    /// hand, so it does not depend on `serde_json`'s `preserve_order`.
+    #[must_use]
+    pub fn json_fio(&self) -> String {
+        fn texto(s: &str) -> String {
+            serde_json::Value::from(s).to_string()
+        }
+        fn lista(itens: &[String]) -> String {
+            let itens: Vec<String> = itens.iter().map(|s| texto(s)).collect();
+            format!("[{}]", itens.join(","))
+        }
+        let paginas: Vec<String> = self
+            .paginas
+            .iter()
+            .map(|p| format!(r#"{{"n":{},"texto":{}}}"#, p.n, texto(&p.texto)))
+            .collect();
+        format!(
+            r#"{{"arquivo":{{"termos_nome_arquivo":{},"termos_titulo":{},"extensao":{},"total_paginas":{}}},"paginas_modo":{},"paginas":[{}]}}"#,
+            lista(&self.arquivo.termos_nome_arquivo),
+            lista(&self.arquivo.termos_titulo),
+            texto(&self.arquivo.extensao),
+            self.arquivo.total_paginas,
+            texto(self.paginas_modo.as_str()),
+            paginas.join(",")
+        )
+    }
+}
+
 /// The result of preparing the state (TestoDoc `EstadoPreparado`).
 ///
 /// It keeps counts, never removed values (invariant 8, spec/CLASSIFIER.md §16).
@@ -624,6 +673,34 @@ mod tests {
                 r#""mapa":0.0078125,"ecg":0.00390625,"outro":0.00390625}}"#
             )
         );
+    }
+
+    #[test]
+    fn the_wire_json_keeps_testodocs_key_order() {
+        let estado = EstadoEnviado {
+            arquivo: Arquivo {
+                termos_nome_arquivo: vec!["eco".to_owned(), "strain".to_owned()],
+                termos_titulo: vec![],
+                extensao: "pdf".to_owned(),
+                total_paginas: 2,
+            },
+            paginas_modo: PaginasModo::Duas,
+            paginas: vec![PaginaEnviada {
+                n: 1,
+                texto: "Holter \"24 h\"\n\u{1f}ç".to_owned(),
+            }],
+        };
+        assert_eq!(
+            estado.json_fio(),
+            concat!(
+                r#"{"arquivo":{"termos_nome_arquivo":["eco","strain"],"termos_titulo":[],"#,
+                r#""extensao":"pdf","total_paginas":2},"paginas_modo":"2","#,
+                r#""paginas":[{"n":1,"texto":"Holter \"24 h\"\n\u001fç"}]}"#
+            )
+        );
+        // Same content as the canonical value, whatever the key order.
+        let fio: serde_json::Value = serde_json::from_str(&estado.json_fio()).unwrap();
+        assert_eq!(fio, estado.para_value());
     }
 
     #[test]
