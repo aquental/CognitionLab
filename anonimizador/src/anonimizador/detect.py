@@ -73,10 +73,11 @@ NUMBER_LABELS = ("crm", "cpf", "rg", "cns", "cnes", "crbm", "crf", "coren")
 NUMBER_VALUE_WORDS = 4
 # The states a council number is registered in ("CRM/SP").
 STATES = "ac al ap am ba ce df es go ma mt ms mg pa pb pr pe pi rj rn rs ro rr sc sp se to"
-# A word of a number's value: digits (an RG may end in the check letter X, Codex CB-6),
-# a state, "nº", or a separator.
+# A word of a number's value: digits, which may end in the check letter X of an RG
+# (Codex CB-6) or in a state ("123456-SP", Codex CB-19); a state; "nº"; or a separator.
+STATE = "(?:" + "|".join(STATES.split()) + ")"
 NUMBER_PART = re.compile(
-    r"^[\W_]*(?:(?:\d[\d\W_]*(?:x[\W_]*)?|(?:" + "|".join(STATES.split()) + r")|n[o°º]?)[\W_]*)?$"
+    r"^[\W_]*(?:(?:\d[\d\W_]*(?:(?:x|" + STATE + r")[\W_]*)?|" + STATE + r"|n[o°º]?)[\W_]*)?$"
 )
 SEPARATOR = re.compile(r"^[\W_]+$")
 # The words a label alone is no value of ("Nome do exame:").
@@ -335,6 +336,19 @@ def bare_value(words: list[Word], label: set[int], accepts: Accepts) -> list[int
     return []
 
 
+def number_value(words: list[Word], seq: list[int]) -> list[int]:
+    """The words that start `seq` and make a number, without its separators. A value
+    holds a digit: "CRM SP" alone, or a label in prose, is none."""
+    taken = []
+    for index in seq[:NUMBER_VALUE_WORDS]:
+        if not NUMBER_PART.match(fold(words[index].text)):
+            break
+        taken.append(index)
+    if not has_digit(words, taken):
+        return []
+    return [i for i in taken if not SEPARATOR.match(words[i].text)]
+
+
 def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     """The words that are the value of a field label."""
     values = []
@@ -364,15 +378,14 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
             values += value
         for m in NUMBER_LABEL.finditer(text.folded):
             label_words = text.words(m.start(), m.end())
-            after = [i for i in line if i > max(label_words)][:NUMBER_VALUE_WORDS]
-            taken = []
-            for index in after:
-                if not NUMBER_PART.match(fold(words[index].text)):
-                    break
-                taken.append(index)
-            # A value holds a digit: "CRM SP" alone, or a label in prose, is none.
-            if any(any(c.isdigit() for c in words[i].text) for i in taken):
-                values += [i for i in taken if not SEPARATOR.match(words[i].text)]
+            first, last = min(label_words), max(label_words)
+            values += number_value(words, [i for i in line if i > last])
+            if not any(i > last for i in line):
+                # A label that ends its extracted line: its number is on its row, in
+                # another block, else under it (Codex CB-18, as CB-12 and AB-2).
+                values += number_value(words, row_after(words, last)) or number_value(
+                    words, column_below(words, first, label_gap(words, first))
+                )
             # A number glued to its label ("CRM:123") is in the label's word, however
             # short (Codex CB-11).
             values += [i for i in label_words if any(c.isdigit() for c in words[i].text)]

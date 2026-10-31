@@ -167,8 +167,12 @@ def read_pdf_pages(
         raise ToolError(f"pdftotext read {len(layer)} pages, pdftoppm rendered {len(images)}")
     pages = []
     for number, (image, (width, height, words)) in enumerate(zip(images, layer, strict=True), 1):
-        with Image.open(image) as im:
-            size = im.size
+        try:
+            with Image.open(image) as im:
+                size = im.size
+        except Image.DecompressionBombError:
+            # A page rendered at a high --dpi can pass Pillow's pixel limit (Codex CB-21).
+            raise ToolError("a rendered page has too many pixels; lower --dpi") from None
         page = Page(number, image, size)
         if words and not aligned(width, height, size):
             page.unaligned = True
@@ -187,7 +191,7 @@ def read_image_page(path: Path, tmp: Path, lang: str, timeout: int, use_ocr: boo
         with Image.open(path) as im:
             # Turned as a viewer shows it, then copied as bare pixels: nothing of the
             # file's chunks or segments (EXIF, XMP, ICC, text) is carried over (R7).
-            shown = eight_bit(flattened(ImageOps.exif_transpose(im)))
+            shown = flattened(eight_bit(ImageOps.exif_transpose(im)))
             mode = pixel_mode(shown)
             pixels = Image.frombytes(mode, shown.size, shown.convert(mode).tobytes())
     except IMAGE_ERRORS:
@@ -210,10 +214,20 @@ def flattened(im: Image.Image) -> Image.Image:
 
 def eight_bit(im: Image.Image) -> Image.Image:
     """A 16-bit grayscale image scaled to 8 bits. Converting it directly clips every
-    value above 255, which turns a page white (Antigravity AB-4)."""
+    value above 255, which turns a page white (Antigravity AB-4). Its transparent value
+    becomes an alpha channel, before scaling merges it with other values (Codex CB-22)."""
     if im.mode not in SIXTEEN_BIT:
         return im
-    return im.convert("I").point(lambda v: v / 256).convert("L")
+    samples = im.convert("I")
+    scaled = samples.point(lambda v: v / 256).convert("L")
+    # Bare pixels: the 16-bit transparent value means nothing to an 8-bit image.
+    scaled = Image.frombytes("L", im.size, scaled.tobytes())
+    key = im.info.get("transparency")
+    if isinstance(key, int):
+        alpha = Image.new("L", im.size)
+        alpha.putdata([0 if v == key else 255 for v in samples.get_flattened_data()])
+        scaled.putalpha(alpha)
+    return scaled
 
 
 def pixel_mode(im: Image.Image) -> str:

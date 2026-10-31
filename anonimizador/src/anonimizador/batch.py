@@ -181,11 +181,8 @@ def start(out: Path, now: datetime) -> Run:
         run.logs / f"01-{NEUTRAL_PROBE}-detections.json",
         *(run.copies / f"{NEUTRAL_PROBE}{suffix}" for suffix in (".pdf", ".png")),
     ]
-    if any(committable(str(p)) or committable(os.path.realpath(p)) for p in places):
-        raise VerifyError(
-            "the output directory is inside a git work tree and not ignored; "
-            "the index names the originals, so keep it where git cannot commit it"
-        )
+    for place in places:
+        uncommittable(place)
     if run.report.exists() or run.report.is_symlink():
         raise VerifyError("an index of this second already exists; run again")
     out.mkdir(parents=True, exist_ok=True)
@@ -194,9 +191,20 @@ def start(out: Path, now: datetime) -> Run:
     return run
 
 
+def uncommittable(path: Path) -> None:
+    """Refuses `path` when git could commit it, by its path or where its links lead."""
+    if committable(str(path)) or committable(os.path.realpath(path)):
+        raise VerifyError(
+            "the output directory is inside a git work tree and not ignored; "
+            "the index names the originals, so keep it where git cannot commit it"
+        )
+
+
 def write_new(path: Path, text: str) -> None:
     """Writes a file that must not exist yet, so no existing file or link is written
-    through."""
+    through, and only where git cannot commit it: ignore rules can name single files
+    (Codex CB-20)."""
+    uncommittable(path)
     with path.open("x", encoding="utf-8") as f:
         f.write(text)
 
@@ -264,6 +272,7 @@ def anonymize(
             write_new(detections, json.dumps(as_json(found, pages), indent=1))
             outcome.detections, outcome.detection_counts = detections, summary(found)
             copy = run.copies / exam.neutral
+            uncommittable(copy)
             redact(pages, boxes_by_page(found), copy, options.dpi)
             outcome.anonymized = copy
     except (ToolError, OSError) as e:

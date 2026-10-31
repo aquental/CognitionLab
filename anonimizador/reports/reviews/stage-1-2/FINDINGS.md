@@ -92,3 +92,21 @@ Validation:
 - ruff: clean.
 - `RUN_SAMPLE_EXAMS=1`: 2 passed.
 - 12 mutants, at least one per fixed part: all killed.
+
+## Codex round 3 (`codex-round3.md`, reviewed `1792e6d`)
+
+Codex reported 5 findings. All are valid. CB-22 was reproduced with a synthetic 16-bit PNG before the fix (its text read 255, as white as the background).
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-18 | high | Number labels searched only their extracted line, so a number in another block beside the label, or under it, survived | A number label that ends its extracted line takes the number on its row, else under it, by position (as CB-12 and AB-2) | `test_a_number_label_ending_its_block_takes_the_number_beside_or_under_it` (also a word that is no number, under `CRM`, taken by nothing). The mutants without the row and without the column are killed | fixed |
+| CB-19 | high | A state glued to a council number (`123456-SP`, `123456/SP`) made the word no number part, so the number survived | A number part may end in a state as it may end in the check letter X | `test_a_state_glued_to_a_council_number_is_part_of_it`. The mutant with the old pattern is killed | fixed |
+| CB-20 | medium | The AB-5 check asked git about probe file names, not the real ones, so rules naming files could leave a real copy or log committable | Every file is checked by its own path before it is written: each log and detections file (`write_new`) and each copy. The probes stay, to refuse a run before it starts | `test_a_copy_git_could_commit_is_refused_even_when_the_probes_are_ignored`, `test_a_log_git_could_commit_is_refused_even_when_the_probes_are_ignored`. Both mutants are killed | fixed |
+| CB-21 | medium | A page rendered at a high `--dpi` raised Pillow's `DecompressionBombError` outside every handler | It becomes a `ToolError` ("a rendered page has too many pixels; lower --dpi") and an `ERROR` row | `test_a_rendered_page_past_the_pixel_limit_is_a_tool_error` (the pixel limit lowered). The mutant without the handler is killed | fixed |
+| CB-22 | medium | A 16-bit PNG with a transparent value was flattened to 8-bit RGBA before it was scaled, so its content turned white | The 16-bit samples are scaled first; the transparent value becomes an alpha channel, which is then composited onto white | `test_a_16_bit_image_with_a_transparent_value_keeps_its_contrast`. The mutants with the old order and without the alpha channel are killed | fixed |
+
+Validation:
+- `uv run pytest`: 185 passed, 2 skipped (opt-in).
+- ruff: clean.
+- `RUN_SAMPLE_EXAMS=1`: 2 passed.
+- 8 mutants, at least one per fix: all killed.
