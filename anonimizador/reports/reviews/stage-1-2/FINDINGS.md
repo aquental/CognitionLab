@@ -134,3 +134,7 @@ Codex reported 3 findings. All are valid; CB-23 and CB-24 were reproduced before
 | CB-25 | medium | `get_flattened_data` exists only in Pillow 11.3+, while the project allows 10.1: an `AttributeError` outside every handler | The 16-bit samples are read as bytes (`tobytes`, native 32-bit integers), which every supported Pillow gives | `test_a_transparent_16_bit_image_needs_no_pillow_newer_than_declared` (the newer pixel APIs made to fail); mutant killed | fixed |
 
 Validation: `uv run pytest` 194 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.
+
+## Antigravity round 3 (`agy-round3.md`, reviewed `111487c`)
+
+`NO FINDINGS`. Antigravity has no open finding on stages 1–2.
