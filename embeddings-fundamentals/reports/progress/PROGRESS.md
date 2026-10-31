@@ -469,6 +469,22 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - Idempotence does **not** hold in TestoDoc. The differential found 65 non-idempotent texts in 5 000 (spec §0.4, F9). The port follows TestoDoc: the differential compares the second pass, and a test pins the example.
   - The marker property holds on separated pieces (256 cases). A known name glued to a digit escapes, in TestoDoc too (F10, a privacy gap reported to the owner).
 
+### DV10: a known name glued to digits or `_` (owner decision, 2026-10-31)
+- **Owner:** "não seja compatível com o Python, corrija no Rust".
+- **The leak, confirmed with TestoDoc's own code.** These texts kept the whole name, and `conferir` found nothing:
+  - `"Ref 12345Zanoni Prado"`, glued to a number that is not a pattern;
+  - `"arquivo_Zanoni_Prado_eco"`, between underscores;
+  - `"Zanoni2 Prado3"`, followed by a digit.
+- **Fix.** Each known-name part is now bounded by non-letters (`(?<![^\W\d_])…(?![^\W\d_])`) instead of `\b`. Layer 2 and `conferir` share the pattern, so the fix covers both.
+  - The vectors are unchanged: they have no such case.
+  - The port carries its own masking version, `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"`.
+  - The spec records it as DV10 (§13), in F10 (§0.4), in §2.2, in §5.1, in §14.2 and in invariant 3.
+- **Tests.**
+  - A unit test written first (red, then green) covers the three cases, and `ana` inside `Banana` stays.
+  - The marker proptest now also glues the pieces, with `""` and `"_"` separators.
+  - The masking differential applies the same change on the Python side, so every other behaviour is still compared with TestoDoc. Without that change it fails, which shows that glued cases come up.
+
+
 ### Reviews
 - **Pending.** Codex hit its usage limit at 11:22, before this phase's round 1 and before Phase 1's round 2; nothing was sent. Grok has no balance (402), and Antigravity is out until about 2026-11-05.
 - **Owner decision (11:30):** go on with the next phases and run the pending reviews in phase order when Codex returns (2026-11-04 03:38), then Antigravity's.

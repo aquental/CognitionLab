@@ -53,7 +53,7 @@ Se qualquer hash do §0.1 ou do §0.3 mudar, a implementação para e este docum
 | F6 | TP `_finito` | `float(valor)` aceita string numérica e `bool`. No caminho real, quem decodifica é o pydantic do SDK. | Divergência deliberada DV3 (§13). |
 | F7 | TS-JAG #8 | "jev-1.13 leans toward the option that comes first." A ordem das opções faz parte do request. | §8.2 fixa a ordem do fio. A conferência por reordenação fica na Fase 7 (opcional). |
 | F9 | TD §7.3 × TP | TD diz que a remoção é idempotente. TP não é: o diferencial da Fase 2 achou 65 textos não idempotentes em 5 000, todos com peças separadas por espaço ou pontuação. Exemplo: `"Paciente:: Médico responsável:\t123.456.789-09: "` dá `"Paciente:[REMOVIDO]: "` na primeira passada e `"Paciente:[REMOVIDO] "` na segunda. | O porte reproduz TP. A propriedade do §14.2 virou a comparação da segunda passada com TP no diferencial (§14.3), mais um teste com o exemplo. |
-| F10 | TP, camadas 2 e 4 | Um texto colado a dígitos escapa: em `"CRM/SP 123456Zanoni Prado"`, o nome conhecido não sai, porque não há `\b` entre `6` e `Z`, e a `conferir` usa o mesmo padrão e também não acha. O número de registro colado ao texto seguinte só sai numa segunda passada. | O porte reproduz TP (teste com o exemplo). É uma lacuna de privacidade do TestoDoc, comunicada ao dono; mudar exige nova `MASCARAMENTO_VERSAO` no TestoDoc. |
+| F10 | TP, camadas 2 e 4 | Um texto colado a dígitos escapa: em `"CRM/SP 123456Zanoni Prado"`, o nome conhecido não sai, porque não há `\b` entre `6` e `Z`, e a `conferir` usa o mesmo padrão e também não acha. O número de registro colado ao texto seguinte só sai numa segunda passada. | **Corrigido no porte por decisão do dono (31/10/2026: "não seja compatível com o Python, corrija no Rust"), DV10.** O mesmo vazamento vale para `"Ref 12345Zanoni Prado"` (número que não é padrão), `"arquivo_Zanoni_Prado_eco"` e `"Zanoni2 Prado3"`: em TP o nome sai inteiro e a `conferir` não acha. O número de registro colado continua como em TP: não sai na primeira passada, mas a `conferir` o acha e bloqueia o envio. A correção no TestoDoc é do dono. |
 | F8 | TV | Duas palavras usadas como **nome sintético** nos vetores (uma de 6 letras, 6 ocorrências depois de rótulo de nome; uma de 4 letras, numa lista de nomes conhecidos) coincidiam com palavras dos nomes de arquivo dos exames reais em `tests/sample-exams/`. A verificação foi feita só por contagem: nenhuma palavra foi lida nem impressa. | **Resolvido em 31/10/2026 (Q-P2, opção a):** trocadas por nomes inventados (§3.4) e vetores regenerados. |
 
 ## 1. Objetivo e contexto
@@ -95,7 +95,7 @@ O classificador em produção é Python, no TestoDoc. Este documento especifica 
 
 - Gravar classificações, reutilizar respostas anteriores ou fazer cache. Cada execução com envio chama o Jev uma vez por documento.
 - Os modos `observe`/`ativo` e qualquer efeito sobre um laudo. Aqui o resultado só é mostrado e escrito no relatório.
-- Mudar categorias, pergunta, descrições, limites ou o mascaramento. Qualquer mudança nessas partes exige nova `PERGUNTAS_VERSAO` ou `MASCARAMENTO_VERSAO` **no TestoDoc** e vetores regenerados lá (TD §17.1, invariante 8).
+- Mudar categorias, pergunta, descrições, limites ou o mascaramento. Qualquer mudança nessas partes exige nova `PERGUNTAS_VERSAO` ou `MASCARAMENTO_VERSAO` **no TestoDoc** e vetores regenerados lá (TD §17.1, invariante 8). Exceção decidida pelo dono: a DV10 (§13).
 
 ## 3. Privacidade: regras que bloqueiam
 
@@ -209,7 +209,7 @@ impl Categoria {
 ```
 
 - `PERGUNTA` é o literal de TD §3.3(a) (= TV `criterio.pergunta`).
-- `CRITERIO_ID = "tipo_documento"`, `PERGUNTAS_VERSAO = "classificador-documento-1"`, `MASCARAMENTO_VERSAO = "mascaramento-5"`.
+- `CRITERIO_ID = "tipo_documento"`, `PERGUNTAS_VERSAO = "classificador-documento-1"`, `MASCARAMENTO_VERSAO = "mascaramento-5"` (a de TV) e `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"` (a do mascaramento do porte, com a DV10; é a que sai em `mascaramento_versao` e em `politica_versao`).
 - Um teste compara cada constante com TV (`criterio`, `constantes`, `meta`). Os textos **não** são redigitados: são copiados do TV e conferidos.
 
 ### 5.2 Entrada (TD §5.1)
@@ -320,7 +320,7 @@ pub struct RequestNeutro<'a> {
     pub estado: &'a EstadoEnviado,
     pub criterio: &'static CriterioEscolha,  // id, pergunta, opções em ordem
     pub perguntas_versao: &'static str,
-    pub politica_versao: &'static str,       // MASCARAMENTO_VERSAO (TD §9.2)
+    pub politica_versao: &'static str,       // MASCARAMENTO_VERSAO_PORTE (TD §9.2; DV10)
     pub alvo_versao: String,                 // digest.hex()[..16] (TD §9.2)
 }
 pub struct RespostaProvedor {
@@ -719,6 +719,7 @@ Lida de variáveis de ambiente, com `.env` da raiz do crate via `dotenvy`, já d
 | DV7 | `confianca_provedor` (o `confidence` do Jev) guardado | É informação que o Jev já devolve e o Python descarta | Só aparece na saída; não muda a decisão |
 | DV8 | Numa resposta 200 cujo envelope não decodifica, `provider_request_id` vem do header | No Python, a exceção do SDK descarta o id (`typesafe.py`, `resposta_erro` sem `provider_request_id`) | Só metadado; ajuda a rastrear o erro com a TypeSafe |
 | DV9 | Mensagens do CLI sem caminho do arquivo nem texto de exceção (§10.3) | TP põe `{caminho}` e `{exc}` no stderr; aqui viola R-P2 | Só a mensagem humana muda |
+| DV10 | Na camada 2 (e na `conferir`, que a usa), cada parte de nome conhecido é delimitada por "não letra", `(?<![^\W\d_])(?:…)(?![^\W\d_])`, e não por `\b` | F10 (§0.4): para o `\b`, dígitos e `_` são letras de palavra, e um nome colado a um número ou entre sublinhados saía inteiro e passava pela conferência. Decisão do dono, 31/10/2026 | O texto mascarado difere de TP só quando uma parte de nome conhecido encosta num dígito ou `_`. TV não tem esse caso e continua idêntico. A saída e o request usam `MASCARAMENTO_VERSAO_PORTE = "mascaramento-5+cognitionlab-1"`; `MASCARAMENTO_VERSAO` continua a de TV, conferida pelos vetores. O diferencial (§14.3) aplica a mesma troca ao lado Python e compara todo o resto |
 
 ## 14. Testes e conformidade
 
@@ -745,7 +746,7 @@ Um teste confere o sha256 de TV com o §0.1.
 
 - `dobrar` preserva a contagem de code points.
 - A remoção **não** é idempotente em TP (F9, §0.4): o diferencial (§14.3) compara a segunda passada com a de TP, e um teste fixa o exemplo de F9.
-- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto. Vale com as peças separadas por espaço ou pontuação; colado a dígitos, o nome escapa também em TP (F10).
+- O marcador nunca carrega parte do valor: depois de remover um nome conhecido sintético, nenhuma parte dele com 3 ou mais letras sobra no texto, também com as peças coladas umas às outras, a dígitos ou a `_` (DV10; em TP o nome colado escapa, F10).
 - Determinismo: a mesma entrada dá o mesmo estado e o mesmo digest.
 - Limites: `caracteres_enviados ≤ 60 000`, cada página ≤ 6 000, e `truncado` coerente.
 - `json_canonico` independe da ordem de inserção, com `preserve_order` ligada.
@@ -799,7 +800,7 @@ cargo test --features classifier-jev
 
 1. O Jev nunca é chamado com `sem_conteudo`, com bloqueio ou sem a autorização R-P1.
 2. O estado enviado só tem as chaves do §9.2. Os termos de nome de arquivo e título vêm só de `VOCABULARIO_TIPO`.
-3. N1 reproduz TV byte a byte. Qualquer mudança no mascaramento exige outra `MASCARAMENTO_VERSAO`, feita no TestoDoc.
+3. N1 reproduz TV byte a byte. Qualquer mudança no mascaramento exige outra `MASCARAMENTO_VERSAO`, feita no TestoDoc. A única exceção é a DV10 (§13), decidida pelo dono, que tem versão própria (`MASCARAMENTO_VERSAO_PORTE`) e não muda nenhum caso de TV.
 4. `criteria` vai na ordem de `Categoria::TODAS`, e o `state` na ordem de construção, sejam quais forem as features do `serde_json`.
 5. Logs, saída e relatório nunca têm texto do exame, nome de pessoa, nome do arquivo de entrada, chave nem corpo de erro do provedor.
 6. Uma falha do classificador nunca falha a anonimização.

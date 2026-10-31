@@ -10,8 +10,10 @@
 //! clinical terms, separators and the Unicode traps, runs them (and the masked text a
 //! second time, since TestoDoc's masking is not idempotent, spec §0.4 F9) through TestoDoc's
 //! `mascaramento.py` and `classificador_documento.py` (Python 3.14 through `uv`, as
-//! TestoDoc's vector generator does) and through the port, and compares. Nothing here
-//! comes from a real exam.
+//! TestoDoc's vector generator does) and through the port, and compares. The port's one
+//! deliberate masking change (spec §13, DV10) is applied to the Python side too, so
+//! everything else is still compared with TestoDoc's own code. Nothing here comes from a
+//! real exam.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -26,6 +28,19 @@ const PROGRAMA: &str = r#"
 import json, sys, unicodedata
 assert unicodedata.unidata_version == "16.0.0", unicodedata.unidata_version
 from app.services import classificador_documento as cd, mascaramento as m
+# DV10 (spec §13): the port bounds known-name parts by non-letters instead of `\b`. Apply the
+# same change here, so every other behaviour is still compared with TestoDoc's own code.
+import re
+_original = m._padroes_conhecidos
+def _padroes_conhecidos_dv9(conhecidos):
+    saida = []
+    for p in _original(conhecidos):
+        t = p.pattern
+        if t.startswith(r"\b(?:") and t.endswith(r")\b"):
+            p = re.compile(r"(?<![^\W\d_])" + t[2:-2] + r"(?![^\W\d_])")
+        saida.append(p)
+    return saida
+m._padroes_conhecidos = _padroes_conhecidos_dv9
 saida = []
 for caso in json.load(sys.stdin):
     r = m.remover_dados_pessoais(caso["texto"], caso["conhecidos"], caso["preservar"])
@@ -148,6 +163,10 @@ const TOKENS: &[&str] = &[
     "\n\n",
     ": ",
     "\u{2028}",
+    "_",
+    "Ref 12345",
+    "arquivo_",
+    "2",
     "\r\n",
     "\u{301}",
     "İ",

@@ -17,8 +17,13 @@ pub const CRITERIO_ID: &str = "tipo_documento";
 pub const PERGUNTA: &str = "Que tipo de exame é este documento? Considere os termos do nome do arquivo, os termos do título e o conteúdo das páginas. Dados pessoais foram removidos e aparecem como [REMOVIDO] ou [DATA].";
 /// Version of the question and option texts; part of a classification's identity.
 pub const PERGUNTAS_VERSAO: &str = "classificador-documento-1";
-/// Version of the masking rules; any change in masking output needs a new one.
+/// Version of TestoDoc's masking rules that the vectors were made with; any change in
+/// masking output needs a new one there.
 pub const MASCARAMENTO_VERSAO: &str = "mascaramento-5";
+/// Version of the port's masking: TestoDoc's [`MASCARAMENTO_VERSAO`] plus the owner's
+/// deliberate change DV10 (known names glued to digits or `_`; spec/CLASSIFIER.md §13).
+/// It is what a classification and a request carry.
+pub const MASCARAMENTO_VERSAO_PORTE: &str = "mascaramento-5+cognitionlab-1";
 /// Unicode version every character table and normalization must follow.
 pub const UNICODE_VERSAO: &str = "16.0.0";
 /// Stage name of the neutral request.
@@ -191,6 +196,13 @@ impl FromStr for Categoria {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_port_masking_version_extends_the_vectors_one() {
+        // DV10 changes the masking output, so the port carries its own version.
+        assert_ne!(MASCARAMENTO_VERSAO_PORTE, MASCARAMENTO_VERSAO);
+        assert!(MASCARAMENTO_VERSAO_PORTE.starts_with(&format!("{MASCARAMENTO_VERSAO}+")));
+    }
 
     #[test]
     fn indice_is_the_position_in_todas() {

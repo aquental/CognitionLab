@@ -36,7 +36,7 @@ fn ordenados(itens: impl IntoIterator<Item = String>) -> Vec<String> {
     v
 }
 
-/// `_padroes_conhecidos`: one regex with every name part between `\b`, then one per
+/// `_padroes_conhecidos`: one regex with every name part between non-letters, then one per
 /// literal identifier (a known value with a digit and 3 code points or more), longest
 /// first. Both run on the folded text.
 fn padroes_conhecidos(conhecidos: &[String]) -> Result<Vec<PyRegex>, ErroMascaramento> {
@@ -60,8 +60,13 @@ fn padroes_conhecidos(conhecidos: &[String]) -> Result<Vec<PyRegex>, ErroMascara
     let partes = ordenados(partes);
     if !partes.is_empty() {
         let alternativas: Vec<String> = partes.iter().map(|p| re_escape(p)).collect();
+        // TestoDoc bounds the parts with `\b`, for which digits and `_` are word
+        // characters: "12345Zanoni" and "arquivo_Zanoni_Prado" kept the name, and the
+        // final check missed it (spec §0.4 F10). Here a part is bounded by anything that
+        // is not a letter (`[^\W\d_]`, the class the parts are made of): a deliberate
+        // divergence (spec §13, DV10).
         padroes.push(PyRegex::new(
-            &format!(r"\b(?:{})\b", alternativas.join("|")),
+            &format!(r"(?<![^\W\d_])(?:{})(?![^\W\d_])", alternativas.join("|")),
             Flags::NENHUMA,
         )?);
     }

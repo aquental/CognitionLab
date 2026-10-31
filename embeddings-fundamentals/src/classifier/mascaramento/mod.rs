@@ -221,17 +221,17 @@ mod tests {
         "[DATA]",
     ];
 
-    /// Pieces always separated: TestoDoc itself lets a known name glued to a digit
-    /// through (spec §0.4, F10).
+    /// Pieces separated or glued: a known name glued to a digit or `_` must go too
+    /// (DV10; TestoDoc lets it through, spec §0.4 F10).
     fn texto() -> impl Strategy<Value = String> {
-        let separador = proptest::sample::select(vec![" ", "  ", "\t", "\n", " | ", ": "]);
+        let separador = proptest::sample::select(vec!["", "_", " ", "  ", "\t", "\n", " | ", ": "]);
         proptest::collection::vec((proptest::sample::select(PECAS.to_vec()), separador), 0..24)
             .prop_map(|v| v.into_iter().map(|(p, sep)| format!("{p}{sep}")).collect())
     }
 
     #[test]
-    fn masking_is_not_idempotent_and_glued_text_escapes_as_in_testodoc() {
-        // TestoDoc's `mascaramento.py` gives these same outputs (spec §0.4, F9 and F10).
+    fn masking_is_not_idempotent_as_in_testodoc() {
+        // TestoDoc's `mascaramento.py` gives these same outputs (spec §0.4, F9).
         let s = "Paciente:: Médico responsável:\t123.456.789-09: ";
         let uma = remover_dados_pessoais(s, &[], &[]).unwrap().texto;
         assert_eq!(uma, "Paciente:[REMOVIDO]: ");
@@ -245,6 +245,8 @@ mod tests {
             remover_dados_pessoais(&uma, &[], &[]).unwrap().texto,
             "CRM [REMOVIDO]CRM [REMOVIDO]Paciente:"
         );
+        // A known name glued to a registry number: TestoDoc kept "Zanoni"; here it goes
+        // (DV10).
         let conhecidos = vec!["Zanoni Prado".to_owned()];
         let colado = remover_dados_pessoais(
             "CRM/SP 123456Zanoni Prado Zanoni Prado CRM/SP 123456Zanoni Prado",
@@ -254,7 +256,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             colado.texto,
-            "CRM [REMOVIDO]Zanoni [REMOVIDO] CRM [REMOVIDO]Zanoni [REMOVIDO]"
+            "CRM [REMOVIDO][REMOVIDO] CRM [REMOVIDO][REMOVIDO]"
         );
     }
 
@@ -269,11 +271,11 @@ mod tests {
             nome in proptest::sample::select(vec!["Zanoni Prado", "Nilo Teixeira", "Carla dos Anjos"]),
         ) {
             let conhecidos = vec![nome.to_owned()];
-            let saida = remover_dados_pessoais(&format!("{s} {nome} {s}"), &conhecidos, &[]).unwrap();
+            let saida = remover_dados_pessoais(&format!("{s}{nome}_{s}{nome} {s}"), &conhecidos, &[]).unwrap();
             let dobrado = dobrar(&saida.texto);
             for parte in partes_de_nome(nome) {
                 prop_assert!(
-                    !dobrado.split(|c: char| !c.is_alphanumeric()).any(|w| w == parte),
+                    !dobrado.split(|c: char| !crate::classifier::texto::re_letra(c)).any(|w| w == parte),
                     "{parte} left in {:?}", saida.texto
                 );
             }
@@ -282,6 +284,44 @@ mod tests {
 
     fn t(inicio: usize, fim: usize, novo: &str) -> Trecho {
         (inicio, fim, novo.to_owned())
+    }
+
+    #[test]
+    fn a_known_name_glued_to_digits_or_underscores_is_removed() {
+        // Deliberate divergence from TestoDoc (spec §13, DV10; §0.4 F10): its `\b` treats
+        // digits and `_` as word characters, so these names went out untouched and the
+        // final check missed them too.
+        let conhecidos = vec!["Zanoni Prado".to_owned()];
+        for (texto, esperado) in [
+            ("Ref 12345Zanoni Prado", "Ref 12345[REMOVIDO]"),
+            (
+                "arquivo_Zanoni_Prado_eco",
+                "arquivo_[REMOVIDO]_[REMOVIDO]_eco",
+            ),
+            ("Zanoni2 Prado3", "[REMOVIDO]2 [REMOVIDO]3"),
+        ] {
+            assert_eq!(
+                conferir(texto, &conhecidos)
+                    .unwrap()
+                    .get(&Camada::NomeConhecido),
+                Some(&2),
+                "the check finds both parts in {texto:?}"
+            );
+            let saida = remover_dados_pessoais(texto, &conhecidos, &[]).unwrap();
+            assert_eq!(saida.texto, esperado);
+            assert_eq!(
+                conferir(&saida.texto, &conhecidos).unwrap(),
+                BTreeMap::new()
+            );
+        }
+        // A part inside a longer word is not a name: letters still bound it.
+        let ana = vec!["Ana Lima".to_owned()];
+        assert_eq!(
+            remover_dados_pessoais("Banana limao", &ana, &[])
+                .unwrap()
+                .texto,
+            "Banana limao"
+        );
     }
 
     #[test]
