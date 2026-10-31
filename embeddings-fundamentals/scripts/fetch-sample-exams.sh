@@ -8,16 +8,21 @@
 #   scripts/fetch-sample-exams.sh           # sync the bucket into tests/sample-exams/r2/
 #   scripts/fetch-sample-exams.sh --count   # objects and size in the bucket, nothing downloaded
 #
-# Setup (once): an R2 API token with "Object Read only" on the bucket, then
-#   aws configure --profile r2      # region: auto
-# and in ~/.aws/config, under [profile r2]:
-#   endpoint_url = https://<account id>.r2.cloudflarestorage.com
-#   request_checksum_calculation = when_required
-#   response_checksum_validation = when_required
+# Credentials, either of:
+# - R2_API_KEY, a Cloudflare account API token with R2 read access, in the environment or
+#   in this crate's .env (git-ignored). The S3 pair is derived at each run, as Cloudflare
+#   documents it: the access key id is the token's id (from the token-verify API) and the
+#   secret is the SHA-256 of the token. It goes to `aws` through that command's
+#   environment only; nothing is saved, and no profile is used.
+# - an `aws` profile (R2_PROFILE, default r2) with the S3 pair, set up once with
+#   `aws configure --profile r2` (region: auto).
+# The endpoint is https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com, with R2_ACCOUNT_ID
+# from the environment or .env; without it, the profile's endpoint_url. Under the profile,
+# also set request_checksum_calculation and response_checksum_validation to when_required.
 #
 # Settings (environment): R2_PROFILE (default r2), R2_BUCKET (default sample-exams),
-# R2_PREFIX (default empty: the whole bucket), R2_ENDPOINT (overrides the profile's
-# endpoint_url), R2_DEST (default tests/sample-exams/r2). The default destination is a
+# R2_PREFIX (default empty: the whole bucket), R2_ENDPOINT (overrides the endpoint),
+# R2_DEST (default tests/sample-exams/r2). The default destination is a
 # subdirectory on purpose: the local sample-exam tests and anonymize-sample-exams.sh read
 # only the files directly in tests/sample-exams/, and a full bucket there would make them
 # run for hours.
@@ -36,8 +41,47 @@ die() {
 }
 
 command -v aws >/dev/null || die "the aws CLI is not installed (brew install awscli)"
-aws_args=(--profile "$profile")
-[[ -n ${R2_ENDPOINT:-} ]] && aws_args+=(--endpoint-url "$R2_ENDPOINT")
+
+# A setting from the environment, else from this crate's .env (never sourced: read only).
+setting() {
+    if [[ -n ${!1:-} ]]; then
+        printf '%s' "${!1}"
+    elif [[ -f .env ]]; then
+        sed -n "s/^$1=//p" .env | tail -1 | sed -e "s/^[\"']//" -e "s/[\"']\$//"
+    fi
+}
+
+account=$(setting R2_ACCOUNT_ID)
+endpoint=${R2_ENDPOINT:-}
+[[ -z $endpoint && -n $account ]] && endpoint="https://${account}.r2.cloudflarestorage.com"
+token=$(setting R2_API_KEY)
+if [[ -n $token ]]; then
+    [[ -n $account ]] || die "R2_API_KEY needs R2_ACCOUNT_ID (in the environment or .env)"
+    # Prints "<id> <sha256>" or nothing; the token travels in a header, never in argv.
+    pair=$(R2_TOKEN=$token R2_ACCOUNT=$account python3 - <<'PY'
+import hashlib, json, os, urllib.request
+token, account = os.environ["R2_TOKEN"], os.environ["R2_ACCOUNT"]
+url = f"https://api.cloudflare.com/client/v4/accounts/{account}/tokens/verify"
+request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+        result = json.load(response).get("result") or {}
+except Exception:
+    result = {}
+if result.get("status") == "active" and result.get("id"):
+    print(result["id"], hashlib.sha256(token.encode()).hexdigest())
+PY
+)
+    [[ -n $pair ]] || die "R2_API_KEY did not verify as an active token of account R2_ACCOUNT_ID"
+    export AWS_ACCESS_KEY_ID=${pair%% *} AWS_SECRET_ACCESS_KEY=${pair#* }
+    export AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+        AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+    unset AWS_PROFILE AWS_SESSION_TOKEN
+    aws_args=()
+else
+    aws_args=(--profile "$profile")
+fi
+[[ -n $endpoint ]] && aws_args+=(--endpoint-url "$endpoint")
 
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
