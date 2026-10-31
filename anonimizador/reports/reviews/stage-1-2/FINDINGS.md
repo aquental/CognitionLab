@@ -110,3 +110,15 @@ Validation:
 - ruff: clean.
 - `RUN_SAMPLE_EXAMS=1`: 2 passed.
 - 8 mutants, at least one per fix: all killed.
+
+## Antigravity round 2 (`agy-round2.md`, reviewed `0df51b8`)
+
+The file holds Antigravity's drafts before its final list, which are its last three entries. It is recorded as written. All three findings are valid: each reproduction case returned what Antigravity said before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| AB-8 | high | `data nasc` was only a bare label, so with a colon (mid-line, detached, or glued) its date was missed | It is a colon label too; a test requires that of every bare label | `test_every_bare_label_is_a_colon_label_too`; mutant killed | fixed |
+| AB-9 | high | (1) A colon label ending its line took a far word on its row before looking under itself. (2) A number label followed only by a state or a colon (`CRM SP`, `RG :`) never searched its row or the line under it | (1) Beside it within a gap is the value; otherwise both the words under it and the far words of its row are taken. (2) When the words after the label are number parts without a digit, the row and the column under the label are searched | `test_a_colon_heading_takes_the_value_under_it_past_a_far_heading`, `test_a_colon_label_ending_its_block_takes_a_far_value_on_its_row`, `test_a_number_label_followed_by_a_state_or_colon_finds_its_number_elsewhere`; 4 mutants killed | fixed |
+| AB-10 | medium | A border or bullet OCR reads before a bare label (`\| Nome`) hid the label | Leading non-word characters are skipped before the label; the colon check starts at the label | `test_a_border_before_a_bare_label_is_skipped`, `test_a_border_before_a_colon_label_leaves_it_a_colon_label`; 2 mutants killed | fixed |
+
+Validation: `uv run pytest` 191 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 7 mutants, all killed.

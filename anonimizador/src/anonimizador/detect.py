@@ -56,6 +56,7 @@ COLON_LABELS = (
     "requisitante",
     "data de nascimento",
     "nascimento",
+    "data nasc",
     "dt nasc",
     "d n",
     "endereco",
@@ -311,8 +312,11 @@ BARE_LABELS: dict[str, Accepts] = {
     "dt nasc": has_digit,
     "nascimento": has_digit,
 }
+# Border or bullet characters OCR reads before a label ("| Nome") are skipped
+# (Antigravity AB-10). Every bare label is a colon label too, so it keeps its value
+# when it has a colon (Antigravity AB-8).
 BARE_LABEL = re.compile(
-    r"(?:"
+    r"[\W_]*(?P<label>"
     + "|".join(
         r"[\W_]+".join(map(re.escape, label.split()))
         for label in sorted(BARE_LABELS, key=len, reverse=True)
@@ -355,9 +359,10 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     for line in lines:
         text = join(words, [line])
         # A label with a colon is a colon label, whose value is searched the same way.
-        if (m := BARE_LABEL.match(text.folded)) and not COLON_LABEL.match(text.folded):
-            accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group()))]
-            values += bare_value(words, text.words(m.start(), m.end()), accepts)
+        m = BARE_LABEL.match(text.folded)
+        if m and not COLON_LABEL.match(text.folded, m.start("label")):
+            accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group("label")))]
+            values += bare_value(words, text.words(m.start("label"), m.end("label")), accepts)
         for m in COLON_LABEL.finditer(text.folded):
             # The value starts after the word holding the colon, or in it when it is
             # glued to the colon ("Paciente:Fulano").
@@ -369,23 +374,30 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
                 values.append(last)
             elif not any(i > last for i in line):
                 # A label that ends its extracted line has its value on its row, in
-                # another block (Antigravity AB-2), else under it, as a date of birth
-                # under its label (Codex CB-7, Antigravity AB-3). A blank field followed
-                # by another field on its line has none (Codex CB-17).
-                value = beside(words, last, float("inf")) or column_below(
-                    words, first, label_gap(words, first)
-                )
+                # another block (Antigravity AB-2), or under it, as a date of birth
+                # under its label (Codex CB-7, Antigravity AB-3). Beside it within a gap
+                # is its value; else both places are taken, since a far word on its row
+                # can be another heading (Antigravity AB-9). A blank field followed by
+                # another field on its line has none (Codex CB-17).
+                gap = label_gap(words, first)
+                value = beside(words, last, gap) or [
+                    *column_below(words, first, gap),
+                    *beside(words, last, float("inf")),
+                ]
             values += value
         for m in NUMBER_LABEL.finditer(text.folded):
             label_words = text.words(m.start(), m.end())
             first, last = min(label_words), max(label_words)
-            values += number_value(words, [i for i in line if i > last])
-            if not any(i > last for i in line):
-                # A label that ends its extracted line: its number is on its row, in
-                # another block, else under it (Codex CB-18, as CB-12 and AB-2).
-                values += number_value(words, row_after(words, last)) or number_value(
+            after = [i for i in line if i > last]
+            number = number_value(words, after)
+            if not number and all(NUMBER_PART.match(fold(words[i].text)) for i in after):
+                # A label whose line holds no number after it, at most a state or a
+                # colon ("CRM SP", "RG :"): its number is on its row, in another block,
+                # else under it (Codex CB-18, Antigravity AB-9).
+                number = number_value(words, row_after(words, last)) or number_value(
                     words, column_below(words, first, label_gap(words, first))
                 )
+            values += number
             # A number glued to its label ("CRM:123") is in the label's word, however
             # short (Codex CB-11).
             values += [i for i in label_words if any(c.isdigit() for c in words[i].text)]
