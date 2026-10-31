@@ -14,7 +14,7 @@ pub use categorias::{
     TOLERANCIA_SOMA_PROBABILIDADES, UNICODE_VERSAO,
 };
 pub use tipos::{
-    Arquivo, Camada, EntradaClassificacao, ErroCategoria, EstadoClassificacao, EstadoEnviado,
-    EstadoPreparado, MotivoCli, MotivoCodigo, OrigemTexto, Pagina, PaginaEnviada, PaginasModo,
-    PaginasModoInvalido, RespostaEscolha, Uso,
+    Arquivo, Camada, Classificacao, EntradaClassificacao, ErroCategoria, EstadoClassificacao,
+    EstadoEnviado, EstadoPreparado, MotivoCli, MotivoCodigo, OrigemTexto, Pagina, PaginaEnviada,
+    PaginasModo, PaginasModoInvalido, RespostaEscolha, Uso, serializar_probabilidades,
 };

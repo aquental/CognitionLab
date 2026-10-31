@@ -858,7 +858,7 @@ Cada fase termina com os comandos do §14.8 verdes, um registro em `reports/prog
   3. resolver o `unicode-normalization` (`cargo update -p unicode-normalization --precise 0.1.24`, se possível; senão, a guarda do §4.2);
   4. acrescentar `fancy-regex = "0.19.2"` e a feature `classifier-jev`;
   5. criar o esqueleto de `src/classifier/` com os tipos do §5;
-  6. criar o teste de conformidade com uma lista de seções pendentes, que só pode encolher. Uma seção pendente falha se passar a ser coberta sem sair da lista, e nenhuma seção fica pulada em silêncio.
+  6. criar o teste de conformidade com uma lista de seções pendentes, que só pode encolher. Uma seção pendente falha se passar a ser coberta sem sair da lista, e nenhuma seção fica pulada em silêncio. Uma seção só é coberta se estiver registrada com a sua verificação, e um único teste roda todas as verificações registradas.
 - **Saída:** compila; testes dos tipos e das constantes contra TV (`meta`, `constantes`, `criterio`).
 
 ### Fase 1: primitivas e Unicode

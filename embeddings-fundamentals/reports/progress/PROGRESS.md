@@ -361,7 +361,7 @@ Branch `embeddings/classifier`, on top of the spec branch (PR #13). The owner as
 ### Implementation
 - **Dependencies:** `unicode-normalization` pinned to `=0.1.24`, which has the Unicode 16.0.0 tables of the vectors; 0.1.26 had Unicode 18. `pdf-extract` and `stringprep` accept any `0.1`. Also added: `fancy-regex = "0.19.2"` and the feature `classifier-jev = ["dep:reqwest"]`.
 - **Vectors:** `tests/fixtures/classifier/vetores.json` is TestoDoc's file (sha256 `f14676c7…db22e`), with its origin in the README next to it. A count-only check found no word used as a person's name that matches the exam file names.
-- **`src/classifier/`:** `categorias.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `tipos.rs` holds the types of §5.2–§5.5.
+- **`src/classifier/`:** `categorias.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `tipos.rs` holds the types of §5.2–§5.5, `Classificacao` included.
 - **`tests/classifier_vectors.rs`:**
   - the sha256 pin;
   - the partition of the vectors' sections into covered, pending (a list that only shrinks) and excluded;
@@ -378,3 +378,10 @@ Branch `embeddings/classifier`, on top of the spec branch (PR #13). The owner as
 
 ### Reviews
 See `reports/reviews/classifier/classifier-findings.md`.
+
+- **Antigravity, round 1:** 4 findings.
+  - A0-1 (medium): `Classificacao` was missing; fixed.
+  - A0-2 (medium): a covered section could go untested; fixed with a registry of checks.
+  - A0-3 (low): key sets and deserialization were not tested; fixed.
+  - A0-4 (low): open; it waits for the owner to push the TestoDoc rename commit.
+- **Validation of the fixes:** `cargo fmt --check`; clippy with and without `classifier-jev`; 10 mutants tried, all detected.
