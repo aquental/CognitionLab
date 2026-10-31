@@ -157,19 +157,37 @@ def committable(path: str) -> bool:
     directory = os.path.dirname(os.path.abspath(path))
     while not os.path.isdir(directory) and os.path.dirname(directory) != directory:
         directory = os.path.dirname(directory)
+    # Git finds the repository from the path alone, not from an inherited GIT_DIR.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     inside = subprocess.run(
         ["git", "-C", directory, "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
         check=False,
+        env=env,
     )
-    if inside.returncode != 0 or inside.stdout.strip() != b"true":
+    if inside.returncode != 0:
+        # Git failing is "outside" only where no repository is: under a `.git`, it
+        # could not tell, and the answer would fail open (Codex CB-16).
+        if any(os.path.lexists(os.path.join(d, ".git")) for d in ancestors(directory)):
+            raise TermsError("git could not tell whether a path is in a work tree; check git")
+        return False
+    if inside.stdout.strip() != b"true":
         return False
     ignored = subprocess.run(
         ["git", "-C", directory, "check-ignore", "-q", os.path.abspath(path)],
         capture_output=True,
         check=False,
+        env=env,
     )
     return ignored.returncode != 0
+
+
+def ancestors(directory: str) -> list[str]:
+    """`directory` and every directory above it."""
+    found = [directory]
+    while os.path.dirname(found[-1]) != found[-1]:
+        found.append(os.path.dirname(found[-1]))
+    return found
 
 
 def load_terms(path: str) -> list[Term]:

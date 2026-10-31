@@ -192,3 +192,19 @@ def test_a_name_word_that_is_no_bare_label_is_left_alone():
 def test_a_column_value_must_start_under_its_heading():
     heading = placed(("Nome", 0), number=0)
     assert found(heading + placed(("Hemoglobina", 600), number=1)) == {}
+
+
+def test_a_name_beside_its_label_on_another_extracted_line_is_taken():
+    # Codex CB-12: the extractor can put a label and its value in separate blocks.
+    label = Word("Nome", (0, 0, 40, 15), ("ocr", 1, 1, 0))
+    value = [
+        Word("Sicrano", (200, 0, 290, 15), ("ocr", 2, 1, 0)),
+        Word("Inventado", (300, 0, 390, 15), ("ocr", 2, 1, 0)),
+    ]
+    assert found([label, *value]) == {"label": {"Sicrano", "Inventado"}}
+
+
+def test_a_blank_field_followed_by_another_field_takes_nothing_below():
+    # Codex CB-17: "Paciente:" does not end its line, so the next line is no value.
+    words = line("Paciente:", "Idade:", "45", number=0) + line("Hemoglobina", "13,5", number=1)
+    assert found(words) == {}

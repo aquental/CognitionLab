@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import struct
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from concurrent.futures import Executor
@@ -27,8 +28,11 @@ Box = tuple[int, int, int, int]
 # A text layer whose page shape differs from the image by more than this (a rotated
 # page) is not mapped onto it: its boxes would land in the wrong place.
 MAX_ASPECT_DIFFERENCE = 0.02
-# The TSV level of a word.
+# The TSV level of a word, and the columns a word needs.
 TSV_WORD_LEVEL = "5"
+TSV_COLUMNS = frozenset(
+    ("level", "block_num", "par_num", "line_num", "left", "top", "width", "height", "text")
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,18 @@ def render_pdf(path: Path, tmp: Path, dpi: int, timeout: int) -> list[Path]:
 
 # What a malformed tool output raises while it is parsed.
 PARSE_ERRORS = (ET.ParseError, ValueError, KeyError, TypeError, OverflowError)
+# What Pillow raises on a malformed image, besides OSError. A message can quote the
+# file's bytes: a bad EXIF header raises a SyntaxError that does (Codex CB-13).
+IMAGE_ERRORS = (
+    SyntaxError,
+    ValueError,
+    TypeError,
+    KeyError,
+    IndexError,
+    EOFError,
+    struct.error,
+    Image.DecompressionBombError,
+)
 
 
 def ocr_words(image: Path, lang: str, timeout: int) -> list[Word]:
@@ -75,7 +91,11 @@ def ocr_words(image: Path, lang: str, timeout: int) -> list[Word]:
 
 def tsv_words(tsv: str) -> list[Word]:
     words = []
-    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE):
+    rows = csv.DictReader(io.StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE)
+    # Output without the columns of a word is no reading, not an empty page (Codex CB-14).
+    if not TSV_COLUMNS.issubset(rows.fieldnames or ()):
+        raise ValueError("tesseract TSV without its columns")
+    for row in rows:
         text = (row.get("text") or "").strip()
         if row.get("level") != TSV_WORD_LEVEL or not text:
             continue
@@ -161,17 +181,29 @@ def read_pdf_pages(
 def read_image_page(path: Path, tmp: Path, lang: str, timeout: int, use_ocr: bool) -> list[Page]:
     """An image file as one page: its pixels, without anything else the file holds."""
     image = tmp / "page-1.png"
-    with Image.open(path) as im:
-        # Turned as a viewer shows it, then copied as bare pixels: nothing of the
-        # file's chunks or segments (EXIF, XMP, ICC, text) is carried over (R7).
-        shown = ImageOps.exif_transpose(im)
-        mode = pixel_mode(shown)
-        pixels = Image.frombytes(mode, shown.size, shown.convert(mode).tobytes())
+    try:
+        with Image.open(path) as im:
+            # Turned as a viewer shows it, then copied as bare pixels: nothing of the
+            # file's chunks or segments (EXIF, XMP, ICC, text) is carried over (R7).
+            shown = flattened(ImageOps.exif_transpose(im))
+            mode = pixel_mode(shown)
+            pixels = Image.frombytes(mode, shown.size, shown.convert(mode).tobytes())
+    except IMAGE_ERRORS:
+        raise ToolError("the image could not be decoded") from None
     pixels.save(image, "PNG")
     page = Page(1, image, pixels.size)
     if use_ocr:
         page.ocr = ocr_words(image, lang, timeout)
     return [page]
+
+
+def flattened(im: Image.Image) -> Image.Image:
+    """The image as a viewer shows it: transparent pixels over white. Dropping the alpha
+    channel instead would show the color under it, which can be black (Codex CB-15)."""
+    if im.mode not in ("RGBA", "LA", "PA") and "transparency" not in im.info:
+        return im
+    white = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    return Image.alpha_composite(white, im.convert("RGBA"))
 
 
 def pixel_mode(im: Image.Image) -> str:

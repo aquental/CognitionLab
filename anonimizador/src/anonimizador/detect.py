@@ -219,12 +219,25 @@ def colon_value(words: list[Word], line: list[int], last: int) -> list[int]:
     return value
 
 
-def run_after(words: list[Word], line: list[int], last: int, reach: float, gap: float) -> list[int]:
-    """The words after `last` in `line` up to a label or a gap wider than `gap`; the
-    first one must start within `reach` of `last`."""
+def row_after(words: list[Word], index: int) -> list[int]:
+    """The words of the page of `index` to its right whose middle lies within its height,
+    left to right: its row, whatever line the extractor put each one on (Codex CB-12)."""
+    _, top, right, bottom = words[index].box
+    row = [
+        i
+        for i, w in enumerate(words)
+        if w.line[0] == words[index].line[0]
+        and (w.box[0] + w.box[2]) / 2 > right
+        and top <= (w.box[1] + w.box[3]) / 2 <= bottom
+    ]
+    return sorted(row, key=lambda i: words[i].box[0])
+
+
+def run_from(words: list[Word], row: list[int], edge: int, reach: float, gap: float) -> list[int]:
+    """The words of `row` up to a label or a gap wider than `gap`; the first one must
+    start within `reach` of `edge`."""
     value: list[int] = []
-    edge = words[last].box[2]
-    for index in (i for i in line if i > last):
+    for index in row:
         box = words[index].box
         if box[0] - edge > (gap if value else reach) or words[index].text.endswith(":"):
             break
@@ -233,9 +246,9 @@ def run_after(words: list[Word], line: list[int], last: int, reach: float, gap: 
     return value
 
 
-def column_below(words: list[Word], lines: list[list[int]], label: int, gap: float) -> list[int]:
+def column_below(words: list[Word], label: int, gap: float) -> list[int]:
     """The value under a column heading: the nearest word below `label` on its page that
-    starts where the heading starts, and the words after it on its line."""
+    starts where the heading starts, and the words after it on its row."""
     left, top, _, bottom = words[label].box
     under = [
         i
@@ -248,21 +261,19 @@ def column_below(words: list[Word], lines: list[list[int]], label: int, gap: flo
     if not under:
         return []
     first = min(under, key=lambda i: words[i].box[1])
-    line = next(line for line in lines if first in line)
-    return [first, *run_after(words, line, first, gap, gap)]
+    return [first, *run_from(words, row_after(words, first), words[first].box[2], gap, gap)]
 
 
-def bare_value(
-    words: list[Word], lines: list[list[int]], line: list[int], label: set[int]
-) -> list[int]:
+def bare_value(words: list[Word], label: set[int]) -> list[int]:
     """The value of a name label without a colon: beside it, else under it as under a
-    column heading, else the next words of its line, however far."""
+    column heading, else the next words of its row, however far."""
     first, last = min(label), max(label)
     gap = GAP_IN_LABEL_HEIGHTS * (words[first].box[3] - words[first].box[1])
+    row, edge = row_after(words, last), words[last].box[2]
     value = (
-        run_after(words, line, last, gap, gap)
-        or column_below(words, lines, first, gap)
-        or run_after(words, line, last, float("inf"), gap)
+        run_from(words, row, edge, gap, gap)
+        or column_below(words, first, gap)
+        or run_from(words, row, edge, float("inf"), gap)
     )
     return [] if all(fold(words[i].text) in PARTICLES for i in value) else value
 
@@ -273,7 +284,7 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     for k, line in enumerate(lines):
         text = join(words, [line])
         if m := BARE_LABEL.match(text.folded):
-            values += bare_value(words, lines, line, text.words(m.start(), m.end()))
+            values += bare_value(words, text.words(m.start(), m.end()))
         for m in COLON_LABEL.finditer(text.folded):
             # The value starts after the word holding the colon, or in it when it is
             # glued to the colon ("Paciente:Fulano").
@@ -282,9 +293,10 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
             value = colon_value(words, line, last)
             if glued:
                 values.append(last)
-            elif not value and k + 1 < len(lines):
+            elif not any(i > last for i in line) and k + 1 < len(lines):
                 # A label that ends its line has its value on the next line of the same
-                # page (a date-of-birth label above the date, Codex CB-7).
+                # page (a date-of-birth label above the date, Codex CB-7); a blank field
+                # followed by another field on its line has none (Codex CB-17).
                 below = lines[k + 1]
                 if words[below[0]].line[0] == words[last].line[0]:
                     value = colon_value(words, below, below[0] - 1)
