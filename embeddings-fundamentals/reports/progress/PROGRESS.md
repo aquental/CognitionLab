@@ -658,3 +658,23 @@ See `reports/reviews/classifier/classifier-findings.md`.
 
 ### Reviews
 - Suspended by the owner. Phase 6 joins the pending list. When the review resumes, it follows the anonymizer's stage review, with a Python reviewer prompt.
+
+## Classifier — real sending to Jev (2026-10-31)
+
+### Implementation
+- **The key in `.env`:**
+  - `.env.example` now has `TYPESAFE_API_KEY=`, the optional `RLCD_*` settings with their defaults, and a note that the authorization never goes there.
+  - The binary reads the process environment, then the `.env` from the working directory up, then the crate root's `.env` (`classify::ambiente_em_camadas`). As a result, `anonimizador batch --classifier`, run from its own directory, finds the key.
+- **The authorization is per run:** `CLASSIFIER_REMOTE_ALLOWED` is read from the process only, never from a `.env` (`SO_DO_PROCESSO`). Spec §12 records this.
+- **Live test** (`tests/classifier_live.rs`, spec §14.6): it sends three synthetic documents (echocardiogram with strain, Holter, blood test) to the real Jev. It needs `RUN_JEV_LIVE=1` and `CLASSIFIER_REMOTE_ALLOWED=1`, with the key in the environment or `.env`. It checks the shape of each answer, not the exact type:
+  - the state is `ok` or `incerto`;
+  - the probabilities sum to 1;
+  - the confidence is the probability of the chosen type;
+  - the echoed model is an exact version;
+  - token usage is reported.
+
+### Validation
+- fmt, clippy with and without `classifier-jev`, `cargo test` (306 tests) and `cargo test --features classifier-jev` (326 tests): all pass.
+- With `RUN_INTEGRATION=1`: a `.env` that sets `CLASSIFIER_REMOTE_ALLOWED=1` leaves the run `preparado`. A key and a base URL from the working directory's `.env` reach the local server, and the result is `ok`.
+- Mutant: dropping the process-only rule is detected by the unit test and by the binary test.
+- **Not run: the live test itself.** The local `.env` has no TypeSafe key yet. Once the owner adds it, the command is in `CLAUDE.md`.
