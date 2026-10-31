@@ -468,3 +468,11 @@ See `reports/reviews/classifier/classifier-findings.md`.
 - **Properties (§14.2):**
   - Idempotence does **not** hold in TestoDoc. The differential found 65 non-idempotent texts in 5 000 (spec §0.4, F9). The port follows TestoDoc: the differential compares the second pass, and a test pins the example.
   - The marker property holds on separated pieces (256 cases). A known name glued to a digit escapes, in TestoDoc too (F10, a privacy gap reported to the owner).
+
+### Reviews
+- **Pending.** Codex hit its usage limit at 11:22, before this phase's round 1 and before Phase 1's round 2; nothing was sent. Grok has no balance (402), and Antigravity is out until about 2026-11-05.
+- **Owner decision (11:30):** go on with the next phases and run the pending reviews in phase order when Codex returns (2026-11-04 03:38), then Antigravity's.
+- **Owner decision (11:35):** review suspended until the owner resumes it. Pending:
+  - Codex: Phase 1 round 2 (closure of C1-1, C1-2), then Phase 2 and each later phase;
+  - Antigravity: Phases 1 and 2 and each later phase.
+- The acceptance at `c99abcc` passed in a clean worktree: the five §14.8 commands (268 tests each run) and the three differentials.

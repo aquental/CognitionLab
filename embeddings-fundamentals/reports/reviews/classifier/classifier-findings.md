@@ -8,6 +8,8 @@ Adversarial review findings for the classifier port (`spec/CLASSIFIER.md`), phas
 - **Moving on:** after 3 cycles, the work may move to the next phase if only low-severity findings remain.
 - **Raw reports:** `reports/reviews/classifier/phase-N/{agy,codex}-roundK.md`.
 - **Owner decision, 2026-10-31 (Antigravity quota):** while Antigravity has no quota (until about 2026-11-05 07:00), each phase goes on with Codex only, for up to 3 cycles. When the quota returns, Antigravity reviews every phase it missed, and its findings are handled as usual. This is a temporary waiver of the Antigravity step, not an approval.
+- **Owner decision, 2026-10-31 11:30 (every reviewer out of quota):** Codex hit its usage limit (until 2026-11-04 03:38) and Grok has no balance (402), so the Codex round 2 of Phase 1 and round 1 of Phase 2 did not run; nothing was sent. The owner chose to go on with the next phases (TDD, local commits, no push) and to run the pending reviews in phase order when Codex returns, then Antigravity's. Findings go into the phases already done. No phase counts as approved until its reviews ran.
+- **Owner decision, 2026-10-31 11:35: review suspended.** No review runs, not even when the quotas return, until the owner resumes it. The pending reviews are listed in `reports/progress/PROGRESS.md`.
 
 Severity: high, medium, or low, as the reviewer gave it. A changed severity is noted in the solution column.
 
