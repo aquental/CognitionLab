@@ -52,6 +52,20 @@ def regex(pattern):
     return lambda ch: compiled.fullmatch(ch) is not None
 
 
+def cased(ch):
+    return ch.isupper() or ch.islower() or unicodedata.category(ch) == "Lt"
+
+
+def case_ignorable(ch):
+    """Unicode Case_Ignorable as CPython uses it for the final sigma (`handle_capital_sigma`),
+    read from `str.lower()` itself: unicodedata does not expose the property. Before a capital
+    sigma, a case-ignorable code point is skipped back to the cased "A", so the sigma is final;
+    a cased code point after the sigma is skipped only if it is case-ignorable."""
+    if cased(ch):
+        return ("\u0391\u03a3" + ch).lower()[1] == "\u03c2"
+    return ("\u0391" + ch + "\u03a3").lower()[-1] == "\u03c2"
+
+
 def rust_str(s):
     return '"' + "".join(c if 0x20 <= ord(c) < 0x7F and c not in '"\\' else f"\\u{{{ord(c):x}}}" for c in s) + '"'
 
@@ -89,8 +103,9 @@ parts = [
     table("IS_LOWER", "`str.islower()` of one code point.", ranges(str.islower)),
     table("IS_TITLE", "Titlecase letters (category Lt): CPython's `Py_UNICODE_ISTITLE`.",
           ranges(lambda ch: unicodedata.category(ch) == "Lt")),
-    table("IS_CASED", "Cased: `isupper or islower or Lt` of one code point.",
-          ranges(lambda ch: ch.isupper() or ch.islower() or unicodedata.category(ch) == "Lt")),
+    table("IS_CASED", "Cased: `isupper or islower or Lt` of one code point.", ranges(cased)),
+    table("IS_CASE_IGNORABLE", "Case_Ignorable, as CPython's final-sigma rule sees it.",
+          ranges(case_ignorable)),
     table("IS_DIGIT", "`str.isdigit()` of one code point.", ranges(str.isdigit)),
     table("IS_DECIMAL", "`str.isdecimal()` of one code point.", ranges(str.isdecimal)),
     table("IS_SPACE", "`str.isspace()` of one code point.", ranges(str.isspace)),

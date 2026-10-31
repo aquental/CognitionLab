@@ -99,12 +99,54 @@ fn push_mapeado(saida: &mut String, tabela: &'static [(u32, &'static str)], ch: 
     }
 }
 
-/// `str.lower()`.
+/// Case_Ignorable, as CPython's final-sigma rule sees it.
+#[must_use]
+pub fn is_case_ignorable(ch: char) -> bool {
+    em(pyclasses::IS_CASE_IGNORABLE, ch)
+}
+
+/// CPython's `handle_capital_sigma`: the capital sigma at `i` lowers to final `ς` when,
+/// skipping case-ignorable code points, a cased one comes before it and none after it.
+fn sigma_final(chars: &[char], i: usize) -> bool {
+    let nao_ignoravel = |c: &&char| !is_case_ignorable(**c);
+    let antes = chars
+        .get(..i)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find(nao_ignoravel);
+    if !antes.is_some_and(|&c| is_cased(c)) {
+        return false;
+    }
+    let depois = chars
+        .get(i + 1..)
+        .unwrap_or_default()
+        .iter()
+        .find(nao_ignoravel);
+    depois.is_none_or(|&c| !is_cased(c))
+}
+
+/// CPython's `lower_ucs4`: the full lowercase mapping, with the context of a capital
+/// sigma.
+fn push_minuscula(saida: &mut String, chars: &[char], i: usize, ch: char) {
+    if ch == '\u{3a3}' {
+        saida.push(if sigma_final(chars, i) {
+            '\u{3c2}'
+        } else {
+            '\u{3c3}'
+        });
+    } else {
+        push_mapeado(saida, pyclasses::LOWER, ch);
+    }
+}
+
+/// `str.lower()`, with the final sigma.
 #[must_use]
 pub fn lower(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut saida = String::with_capacity(s.len());
-    for ch in s.chars() {
-        push_mapeado(&mut saida, pyclasses::LOWER, ch);
+    for (i, &ch) in chars.iter().enumerate() {
+        push_minuscula(&mut saida, &chars, i, ch);
     }
     saida
 }
@@ -120,18 +162,18 @@ pub fn upper(s: &str) -> String {
 }
 
 /// `str.title()`, as CPython's `do_title`: after a cased code point the next one is
-/// lowered, otherwise it is title-cased.
+/// lowered (with the final sigma), otherwise it is title-cased.
 #[must_use]
 pub fn title(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut saida = String::with_capacity(s.len());
     let mut anterior_tem_caixa = false;
-    for ch in s.chars() {
-        let tabela = if anterior_tem_caixa {
-            pyclasses::LOWER
+    for (i, &ch) in chars.iter().enumerate() {
+        if anterior_tem_caixa {
+            push_minuscula(&mut saida, &chars, i, ch);
         } else {
-            pyclasses::TITLE
-        };
-        push_mapeado(&mut saida, tabela, ch);
+            push_mapeado(&mut saida, pyclasses::TITLE, ch);
+        }
         anterior_tem_caixa = is_cased(ch);
     }
     saida
@@ -403,6 +445,22 @@ mod tests {
         assert_eq!(lower("\u{a7ce}"), "\u{a7ce}");
         assert_eq!(dobrar("\u{a7ce}"), "\u{a7ce}");
         assert!(str_isupper("X\u{a7ce}"));
+    }
+
+    #[test]
+    fn capital_sigma_lowers_by_context_like_cpython() {
+        // CPython 3.14 (`handle_capital_sigma`): final sigma after a cased letter, skipping
+        // case-ignorable code points, when no cased letter follows.
+        assert_eq!(lower("ΟΣ"), "ος");
+        assert_eq!(lower("ΟΣΑ"), "οσα");
+        assert_eq!(lower("ΟΣ\u{301}"), "ος\u{301}");
+        assert_eq!(lower("Ο\u{301}Σ"), "ο\u{301}ς");
+        assert_eq!(lower("AΣ\u{301}B"), "aσ\u{301}b");
+        assert_eq!(lower("Σ"), "σ");
+        assert_eq!(lower("1Σ"), "1σ");
+        assert_eq!(title("ΟΣ"), "Ος");
+        assert_eq!(title("ΣΟΣ ΣΑ"), "Σος Σα");
+        assert_eq!(dobrar("ΟΣ"), "οσ", "dobrar folds each code point alone");
     }
 
     #[test]
