@@ -7,6 +7,7 @@
 
 pub mod canonico;
 pub mod categorias;
+pub mod decisao;
 pub mod estado;
 pub mod indicios;
 pub mod listas;

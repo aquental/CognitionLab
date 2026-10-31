@@ -9,7 +9,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use embeddings_fundamentals::classifier::{
-    self, Camada, Categoria, canonico, estado, indicios, listas, mascaramento, texto,
+    self, Camada, Categoria, EntradaClassificacao, EstadoClassificacao, PaginasModo, canonico,
+    decisao, estado, indicios, listas, mascaramento, texto,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -39,15 +40,14 @@ const COVERED: &[(&str, Check)] = &[
     ("conferir", check_conferir),
     ("nomes_dos_rotulos", check_nomes_dos_rotulos),
     ("nomes_dos_indicios", check_nomes_dos_indicios),
+    ("montar_estado", check_montar_estado),
+    ("validar_respostas", check_validar_respostas),
+    ("decidir_classificacao", check_decidir_classificacao),
 ];
 
 /// Sections a later phase covers (spec/CLASSIFIER.md §20). This list only shrinks: a
 /// phase that covers a section moves it to `COVERED`.
-const PENDING: &[&str] = &[
-    "montar_estado",
-    "decidir_classificacao",
-    "validar_respostas",
-];
+const PENDING: &[&str] = &[];
 
 /// Sections outside the port's scope (spec/CLASSIFIER.md §2.1).
 const EXCLUDED: &[&str] = &["referencia_pseudonima", "bloco_tipo_detectado"];
@@ -414,5 +414,123 @@ fn check_nomes_dos_indicios(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
         let nomes = indicios::nomes_dos_indicios(text(case, "entrada")).expect("runs");
         assert_eq!(nomes, strings(&case["saida"]), "case {i}");
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_montar_estado(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let entrada: EntradaClassificacao =
+            serde_json::from_value(case["entrada"].clone()).expect("the input deserializes");
+        let modo: PaginasModo = text(case, "modo").parse().expect("a pages mode");
+        let prep = estado::montar_estado(&entrada, modo).expect("the state builds");
+        let saida = &case["saida"];
+        let valor = prep.estado.para_value();
+        assert_eq!(valor, saida["estado"], "case {i}: state");
+        assert_eq!(
+            canonico::json_canonico(&valor),
+            text(saida, "json_canonico"),
+            "case {i}"
+        );
+        assert_eq!(
+            hex::encode(prep.digest),
+            text(saida, "digest_hex"),
+            "case {i}: digest"
+        );
+        assert_eq!(
+            Value::from(prep.paginas_enviadas),
+            saida["paginas_enviadas"],
+            "case {i}"
+        );
+        assert_eq!(
+            Value::from(prep.caracteres_enviados),
+            saida["caracteres_enviados"],
+            "case {i}"
+        );
+        assert_eq!(
+            Value::from(prep.truncado),
+            saida["truncado"],
+            "case {i}: truncado"
+        );
+        assert_eq!(
+            contagens(&prep.mascaramentos),
+            saida["mascaramentos"],
+            "case {i}"
+        );
+        assert_eq!(
+            contagens(&prep.bloqueio),
+            saida["bloqueio"],
+            "case {i}: bloqueio"
+        );
+        let origens: Vec<&str> = prep.origens_texto.iter().map(|o| o.as_str()).collect();
+        assert_eq!(origens, strings(&saida["origens_texto"]), "case {i}");
+        assert_eq!(
+            Value::from(prep.caracteres_uteis),
+            saida["caracteres_uteis"],
+            "case {i}"
+        );
+        assert_eq!(
+            Value::from(prep.termo_do_tipo),
+            saida["termo_do_tipo"],
+            "case {i}"
+        );
+        assert_eq!(
+            Value::from(prep.texto_insuficiente()),
+            saida["texto_insuficiente"],
+            "case {i}"
+        );
+        assert_eq!(
+            Value::from(prep.sem_conteudo()),
+            saida["sem_conteudo"],
+            "case {i}"
+        );
+    }
+}
+
+fn check_validar_respostas(section: &Value) {
+    for (i, case) in cases(section).iter().enumerate() {
+        let saida = decisao::validar_respostas(&case["brutas"]).map(|r| {
+            let probabilidades: serde_json::Map<String, Value> = Categoria::TODAS
+                .iter()
+                .map(|c| (c.valor().to_owned(), Value::from(r.probabilidades[c.indice()])))
+                .collect();
+            serde_json::json!({
+                classifier::CRITERIO_ID: {"escolha": r.escolha.valor(), "probabilidades": probabilidades}
+            })
+        });
+        assert_eq!(saida.unwrap_or(Value::Null), case["saida"], "case {i}");
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a check fails by panicking"
+)]
+fn check_decidir_classificacao(section: &Value) {
+    // TD §17.2: floats compared with a tolerance of 1e-12.
+    let perto = |a: f64, b: &Value| (a - b.as_f64().expect("a number")).abs() <= 1e-12;
+    for (i, case) in cases(section).iter().enumerate() {
+        let escolha: Categoria = text(case, "escolha").parse().expect("a type");
+        let mut probabilidades = [0.0; 9];
+        for (chave, p) in case["probabilidades"].as_object().expect("an object") {
+            let c: Categoria = chave.parse().expect("a type");
+            probabilidades[c.indice()] = p.as_f64().expect("a number");
+        }
+        let limiar = case["limiar"].as_f64().expect("a number");
+        let (estado, confianca, margem) =
+            decisao::decidir_classificacao(escolha, &probabilidades, limiar);
+        let saida = &case["saida"];
+        let esperado = match saida[0].as_str().expect("a state") {
+            "ok" => EstadoClassificacao::Ok,
+            "incerto" => EstadoClassificacao::Incerto,
+            outro => panic!("unexpected state {outro}"),
+        };
+        assert_eq!(estado, esperado, "case {i}");
+        assert!(
+            perto(confianca, &saida[1]),
+            "case {i}: confianca {confianca}"
+        );
+        assert!(perto(margem, &saida[2]), "case {i}: margem {margem}");
     }
 }
