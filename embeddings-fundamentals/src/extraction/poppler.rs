@@ -302,6 +302,34 @@ impl OcrEngine for TesseractOcr {
     }
 }
 
+impl TesseractOcr {
+    /// OCR of a standalone image that was already decoded (spec/CLASSIFIER.md §10.2).
+    /// Outside [`OcrEngine`], so the fixture extractor need not implement it.
+    ///
+    /// # Errors
+    ///
+    /// Tesseract failed or its output could not be parsed.
+    pub async fn ocr_image(&self, image: &Path) -> Result<PageText, ExtractionError> {
+        let psm = self.config.ocr_psm.to_string();
+        let ocr: [&std::ffi::OsStr; 7] = [
+            image.as_os_str(),
+            "-".as_ref(),
+            "-l".as_ref(),
+            self.config.ocr_lang.as_ref(),
+            "--psm".as_ref(),
+            psm.as_ref(),
+            "tsv".as_ref(),
+        ];
+        let output = run("tesseract", &ocr).await?;
+        tsv::parse(
+            &String::from_utf8_lossy(&output.stdout),
+            NonZeroU32::MIN,
+            self.config.ocr_dpi,
+            &self.engine,
+        )
+    }
+}
+
 /// `pdfimages -list` and `pdfimages -png -p` (poppler).
 #[derive(Debug, Clone)]
 pub struct PopplerImageExtractor {
