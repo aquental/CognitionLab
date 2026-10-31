@@ -151,3 +151,14 @@ Codex reported 4 findings. All are valid; CB-26 to CB-28 were reproduced before 
 | CB-29 | low | The CB-25 test replaced an attribute that Pillow 10.1 lacks, so it would fail there before the check | `raising=False` | The test itself | fixed |
 
 Validation: `uv run pytest` 197 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.
+
+## Codex round 6 (`codex-round6.md`, reviewed `5526ad5`)
+
+Codex reported 2 findings. Both are valid and were reproduced before the fix.
+
+| ID | Severity | Description | Resolution | Validation evidence | Status |
+|---|---|---|---|---|---|
+| CB-30 | high | A value glued to a bare label (`Paciente-Sicrano`) stayed in the label's word, which bare labels never marked | The label's word is taken when what follows the label in it passes the label's value test, as a glued colon label is taken | `test_a_name_glued_to_a_bare_label_is_taken_with_it` (also glued prose and a glued particle, taken by nothing; with a border before the label); mutants without the check and without the value test are killed | fixed |
+| CB-31 | medium | A state or `nº` before a number counted toward the four-word limit, so the last digits of a number split around punctuation survived | Only words with digits count toward the limit | `test_a_state_or_number_sign_before_a_number_does_not_shorten_it`; mutant killed | fixed |
+
+Validation: `uv run pytest` 199 passed, 2 skipped; ruff clean; `RUN_SAMPLE_EXAMS=1` 2 passed; 3 mutants, all killed.

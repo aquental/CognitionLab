@@ -367,17 +367,24 @@ def number_value(words: list[Word], seq: list[int]) -> list[int]:
     holds a digit: "CRM SP" alone, or a label in prose, is none."""
     taken: list[int] = []
     for index in seq:
-        separator = SEPARATOR.match(words[index].text)
-        # Separators read as words of their own do not count (Codex CB-27).
+        # Only words with digits count toward the limit: not separators read as words
+        # of their own (Codex CB-27), nor a state or "nº" before them (Codex CB-31).
         if not NUMBER_PART.match(fold(words[index].text)) or (
-            not separator
-            and sum(not SEPARATOR.match(words[i].text) for i in taken) >= NUMBER_VALUE_WORDS
+            has_digit(words, [index])
+            and sum(has_digit(words, [i]) for i in taken) >= NUMBER_VALUE_WORDS
         ):
             break
         taken.append(index)
     if not has_digit(words, taken):
         return []
     return [i for i in taken if not SEPARATOR.match(words[i].text)]
+
+
+def after_label(word: str, folded_length: int) -> str:
+    """What follows, in `word`, the first `folded_length` characters of its folded form,
+    without the separators between them."""
+    prefix = next(k for k in range(len(word) + 1) if len(fold(word[:k])) >= folded_length)
+    return re.sub(r"^[\W_]+", "", word[prefix:])
 
 
 def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
@@ -389,7 +396,14 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
         m = BARE_LABEL.match(text.folded)
         if m and not COLON_LABEL.match(text.folded, m.start("label")):
             accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group("label")))]
-            values += bare_value(words, text.words(m.start("label"), m.end("label")), accepts)
+            label = text.words(m.start("label"), m.end("label"))
+            last = max(label)
+            # A value glued to the label ("Paciente-Sicrano") is in the label's word,
+            # as with a colon label (Codex CB-30).
+            glued = after_label(words[last].text, m.end("label") - text.owner.index(last))
+            if glued and accepts([Word(glued, words[last].box, words[last].line)], [0]):
+                values.append(last)
+            values += bare_value(words, label, accepts)
         for m in COLON_LABEL.finditer(text.folded):
             # The value starts after the word holding the colon, or in it when it is
             # glued to the colon ("Paciente:Fulano").

@@ -381,3 +381,28 @@ def test_a_numeric_term_in_fullwidth_digits_is_found_as_count_counts_it():
     assert Term(term).count(term) == 1
     assert found(line("x", term), [term]) == {"term": {term}}
     assert found(line("x", "12345"), [term]) == {"term": {"12345"}}
+
+
+def test_a_name_glued_to_a_bare_label_is_taken_with_it():
+    # Codex CB-30.
+    assert found(line("Paciente-Sicrano", "Inventado")) == {
+        "label": {"Paciente-Sicrano", "Inventado"}
+    }
+    assert found(line("Paciente-Sicrano")) == {"label": {"Paciente-Sicrano"}}
+    assert found(line("Nascimento-01/02/1980"), remove_dates=False) == {
+        "label": {"Nascimento-01/02/1980"}
+    }
+    # Prose glued to it is still prose, and a glued particle alone is no name.
+    assert found(line("Paciente-refere", "dor")) == {}
+    assert found(line("Nome-do", "exame:", "x")) == {}
+    assert found(line("|Nome-Sicrano")) == {"label": {"|Nome-Sicrano"}}
+
+
+def test_a_state_or_number_sign_before_a_number_does_not_shorten_it():
+    # Codex CB-31.
+    assert found(line("RG:", "MG", "12", ".", "345", ".", "678", "-", "9")) == {
+        "label": {"MG", "12", "345", "678", "9"}
+    }
+    assert found(line("CPF", "N\u00ba", "123", ".", "456", ".", "789", "-", "09")) == {
+        "label": {"N\u00ba", "123", "456", "789", "09"}
+    }
