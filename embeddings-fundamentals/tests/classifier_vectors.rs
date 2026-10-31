@@ -57,6 +57,27 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("`{key}` is not a string"))
 }
 
+/// The vectors' `name` section, for a test that checks it. Fails unless the section is
+/// listed in `COVERED`: a test cannot start covering a section that is still `PENDING`
+/// or `EXCLUDED` without moving it (spec/CLASSIFIER.md §20, Phase 0, item 6).
+#[expect(clippy::panic, reason = "test helper")]
+fn section<'a>(vectors: &'a Value, name: &str) -> &'a Value {
+    assert!(
+        COVERED.contains(&name),
+        "section `{name}` is tested but not listed in COVERED"
+    );
+    vectors
+        .get(name)
+        .unwrap_or_else(|| panic!("the vectors have no section `{name}`"))
+}
+
+#[test]
+#[should_panic(expected = "is tested but not listed in COVERED")]
+fn a_pending_section_cannot_be_tested_without_moving_it() {
+    let v = vectors();
+    let _ = section(&v, PENDING[0]);
+}
+
 #[test]
 fn vectors_are_the_pinned_file() {
     let bytes = std::fs::read(vectors_path()).expect("read the vectors");
@@ -85,7 +106,7 @@ fn every_section_is_covered_pending_or_excluded_exactly_once() {
 #[test]
 fn meta_matches_the_port_versions() {
     let v = vectors();
-    let meta = &v["meta"];
+    let meta = section(&v, "meta");
     assert_eq!(
         text(meta, "mascaramento_versao"),
         classifier::MASCARAMENTO_VERSAO
@@ -108,7 +129,7 @@ fn normalization_tables_are_the_vectors_unicode_version() {
 #[test]
 fn constants_match() {
     let v = vectors();
-    let c = &v["constantes"];
+    let c = section(&v, "constantes");
     let int = |k: &str| {
         c[k].as_u64()
             .unwrap_or_else(|| panic!("`{k}` is not an integer"))
@@ -138,7 +159,7 @@ fn constants_match() {
 #[test]
 fn criterion_matches_question_and_options_in_order() {
     let v = vectors();
-    let criterio = &v["criterio"];
+    let criterio = section(&v, "criterio");
     assert_eq!(text(criterio, "id"), classifier::CRITERIO_ID);
     assert_eq!(text(criterio, "pergunta"), classifier::PERGUNTA);
     let opcoes = criterio["opcoes"].as_array().expect("`opcoes` is a list");
