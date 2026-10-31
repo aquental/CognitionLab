@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from anonimizador.terms import Term, TermsError, count_patterns, load_terms
+from anonimizador.terms import Term, TermsError, committable, count_patterns, load_terms
 
 
 def test_words_ignore_case_and_accents():
@@ -141,3 +141,19 @@ def test_a_link_to_a_terms_file_git_could_commit_is_refused(tmp_path: Path):
     (outside / "terms.txt").symlink_to(target)
     with pytest.raises(TermsError, match="inside a git work tree"):
         load_terms(str(outside / "terms.txt"))
+
+
+def test_a_git_that_cannot_tell_refuses_instead_of_failing_open(tmp_path: Path, monkeypatch):
+    # Codex CB-16: a failing `git rev-parse` was taken for "outside any repository".
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / ".git").write_text("gitdir: does-not-exist\n", encoding="utf-8")
+    with pytest.raises(TermsError, match="git could not tell"):
+        committable(str(broken / "terms.txt"))
+    # An inherited GIT_DIR does not hide the repository the path is in.
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    assert committable(str(repo / "terms.txt"))
+    # Outside any repository, the path is not committable.
+    assert not committable(str(tmp_path / "outside" / "terms.txt"))
