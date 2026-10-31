@@ -385,3 +385,41 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - A0-3 (low): key sets and deserialization were not tested; fixed.
   - A0-4 (low): open; it waits for the owner to push the TestoDoc rename commit.
 - **Validation of the fixes:** `cargo fmt --check`; clippy with and without `classifier-jev`; 10 mutants tried, all detected.
+- **Antigravity, round 2:** it confirmed that A0-1, A0-2 and A0-3 are closed, and gave NO FINDINGS.
+- **Codex:** after 03:30.
+
+## Classifier — Phase 1: primitives and Unicode
+
+### Implementation
+- **Python character classes (`scripts/gen-pyclasses.py` → `src/classifier/pyclasses.rs`).**
+  - The script runs under Python 3.14 (UCD 16.0.0) and stops on any other UCD.
+  - It writes, as sorted ranges or maps:
+    - the `re` classes `\d`, `\w`, `\s`, `[^\W\d_]` and `[^\W_]`;
+    - the `str` predicates `isupper`, `islower`, `isdigit`, `isdecimal`, `isspace` and the Cased property;
+    - the titlecase set, category `Lt` (what CPython's `str.isupper` tests; not `str.istitle`);
+    - the full `lower`, `upper` and `title` mappings.
+  - The file carries the generator's sha256. `tests/classifier_pyclasses.rs` checks it on every run.
+  - Two opt-in tests (`RUN_PYTHON_DIFF=1 PYTHON314=…`) regenerate the file and compare it byte for byte, and compare the primitives with Python on 2 000 random strings.
+- **`texto.rs`:**
+  - the predicates, and `lower`, `upper`, `title` and `str_isupper` with Python's semantics;
+  - `strip` and `split` with Python's whitespace;
+  - `compor` (NFC plus every `splitlines` break turned into LF);
+  - `dobrar` (per code point: the first code point of its NFD decomposition, lowered when Python's `lower` gives one code point; the same number of code points);
+  - `MapaOffsets`.
+- **`canonico.rs`:** `json_canonico`, equal to `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, without NFC; it refuses floats. `digest` is the sha256 of that output.
+- **`listas.rs`:** the 13 lists of the vectors, in their order.
+- **`mascaramento::partes_de_nome`** and **`estado::termos_permitidos`.**
+- **Vectors:** `listas`, `dobrar`, `compor`, `partes_de_nome`, `termos_permitidos` and `json_canonico` moved to the check registry. A section with no cases, or a list with a value that is not a string, fails.
+- **Spec:**
+  - §6.3 now says the titlecase table is category `Lt`; TDD found this.
+  - It also says that no table of assigned code points is generated, because the pin of `unicode-normalization` holds.
+
+### Validation (local, 2026-10-31)
+- **Checks:**
+  - `cargo fmt --check`;
+  - clippy with and without `classifier-jev`;
+  - `cargo test` (246 tests, BDD exit 0);
+  - `RUN_PYTHON_DIFF=1 PYTHON314=/opt/homebrew/bin/python3.14 cargo test --test classifier_pyclasses -- --include-ignored` (3 tests).
+- **§14.4 tests in this phase:** `ª` and `ǆ` in `title`, `ß` in `upper`, `İ` in `lower`, initial versus string `isupper`, marks and `‿` outside `\w`, `²`/`½`/`Ⅻ` in `[^\W\d_]`, U+001C–U+001F in `\s`, `\x1f` outside `compor`, and U+A7CE, a letter only from Unicode 17 on, seen as unassigned.
+  - The regex items (`İ`/`ı` under IGNORECASE) belong to Phase 2 (`pyre.rs`), and so does `extract_patient_hints`.
+  - Mutant: `is_upper` through Rust's `char::is_uppercase`, which has Unicode 17 tables; it is detected.

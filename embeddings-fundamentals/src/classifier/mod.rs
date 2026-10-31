@@ -5,7 +5,13 @@
 //! `tests/classifier_vectors.rs` reads directly. The core (masking, state, digest and
 //! decision) is pure: no I/O and no global mutable state.
 
+pub mod canonico;
 pub mod categorias;
+pub mod estado;
+pub mod listas;
+pub mod mascaramento;
+pub mod pyclasses;
+pub mod texto;
 pub mod tipos;
 
 pub use categorias::{

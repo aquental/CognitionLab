@@ -368,9 +368,11 @@ As classes do motor de regex do Rust **não** servem. Verificado em 31/10/2026 c
 
 - `scripts/gen-pyclasses.py` gera `src/classifier/pyclasses.rs`. São listas de faixas de code points para:
   - as classes de regex `\d`, `\w`, `[^\W\d_]`, `[^\W_]` e `\s`;
-  - os predicados de caractere `isupper`, `islower`, `istitle`, `iscased` (a propriedade Unicode Cased, que o CPython usa em `_PyUnicode_IsCased`; para um caractere, `ch.isupper() or ch.islower() or ch.istitle()`), `isdigit`, `isdecimal` e `isspace`;
+  - os predicados de caractere `isupper`, `islower`, `isdigit`, `isdecimal` e `isspace`, o de titlecase e `iscased`:
+    - **titlecase** é a categoria `Lt` (`unicodedata.category(ch) == "Lt"`), a flag que o `s.isupper()` de string testa no CPython. Não serve o `str.istitle()` de um caractere, que também é verdadeiro para maiúsculas (`"A".istitle()`); a Fase 1 achou isso pelo TDD;
+    - **`iscased`** é a propriedade Unicode Cased, que o CPython usa em `_PyUnicode_IsCased`; para um caractere, `ch.isupper() or ch.islower() or category == "Lt"`;
   - os mapeamentos completos `lower()`, `upper()` e `title()` de cada caractere em que o resultado difere da entrada, inclusive os de mais de um code point (`ß` → `SS`, `İ` → `i̇`, `ǆ` → `ǅ`);
-  - o conjunto de code points atribuídos.
+  - o conjunto de code points atribuídos: só no caminho com guarda do §4.2. Não é gerado, porque o pin na 0.1.24 deu certo (Fase 0).
 - O gerador roda com o **Python 3.14** e **aborta** se `unicodedata.unidata_version != "16.0.0"`. Nesta máquina, `python3` é o 3.15.2, com UCD 17.0.0; o 3.14.10 (`/opt/homebrew/bin/python3.14`) tem a 16.0.0.
 - O cabeçalho do arquivo gerado registra a versão do Python, a UCD e o sha256 do gerador. Um teste confere que o arquivo gerado bate com o gerador (como `test_vetores_classificador` faz no TestoDoc).
 - Cada regex portada usa essas faixas como classes explícitas `[...]`, e `\b` vira `(?:(?<=W)(?!W)|(?<!W)(?=W))`, com `W` a classe `\w` do Python. O `fancy-regex` aceita lookbehind de largura fixa.

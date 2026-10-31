@@ -8,7 +8,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use embeddings_fundamentals::classifier::{self, Categoria};
+use embeddings_fundamentals::classifier::{
+    self, Categoria, canonico, estado, listas, mascaramento, texto,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -26,17 +28,18 @@ const COVERED: &[(&str, Check)] = &[
     ("meta", check_meta),
     ("constantes", check_constantes),
     ("criterio", check_criterio),
+    ("listas", check_listas),
+    ("dobrar", check_dobrar),
+    ("compor", check_compor),
+    ("partes_de_nome", check_partes_de_nome),
+    ("termos_permitidos", check_termos_permitidos),
+    ("json_canonico", check_json_canonico),
 ];
 
 /// Sections a later phase covers (spec/CLASSIFIER.md §20). This list only shrinks: a
 /// phase that covers a section moves it to `COVERED`.
 const PENDING: &[&str] = &[
-    "listas",
     "regexes",
-    "dobrar",
-    "compor",
-    "partes_de_nome",
-    "termos_permitidos",
     "nomes_dos_indicios",
     "nomes_dos_rotulos",
     "remover_dados_pessoais",
@@ -44,7 +47,6 @@ const PENDING: &[&str] = &[
     "montar_estado",
     "decidir_classificacao",
     "validar_respostas",
-    "json_canonico",
 ];
 
 /// Sections outside the port's scope (spec/CLASSIFIER.md §2.1).
@@ -235,6 +237,98 @@ fn check_criterio(criterio: &Value) {
             categoria.slug(),
             "slug of {}",
             categoria.valor()
+        );
+    }
+}
+
+/// The cases of a section; a section with no cases fails, so it cannot pass empty.
+#[expect(clippy::panic, reason = "a check fails by panicking")]
+fn cases(section: &Value) -> &[Value] {
+    match section.as_array() {
+        Some(cases) if !cases.is_empty() => cases,
+        _ => panic!("the section is not a non-empty list of cases"),
+    }
+}
+
+/// A list of strings; any other value fails.
+#[expect(clippy::panic, reason = "a check fails by panicking")]
+fn strings(value: &Value) -> Vec<&str> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {value}"))
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .unwrap_or_else(|| panic!("not a string: {item}"))
+        })
+        .collect()
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_listas(section: &Value) {
+    let listas_tv = section.as_object().expect("`listas` is an object");
+    let nomes: Vec<&str> = listas::TODAS.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        nomes,
+        listas_tv.keys().map(String::as_str).collect::<Vec<_>>()
+    );
+    for (nome, lista) in listas::TODAS {
+        assert_eq!(strings(&listas_tv[*nome]), *lista, "list {nome}");
+    }
+}
+
+fn check_dobrar(section: &Value) {
+    for case in cases(section) {
+        let entrada = text(case, "entrada");
+        assert_eq!(
+            texto::dobrar(entrada),
+            text(case, "saida"),
+            "dobrar({entrada:?})"
+        );
+    }
+}
+
+fn check_compor(section: &Value) {
+    for case in cases(section) {
+        let entrada = text(case, "entrada");
+        assert_eq!(
+            texto::compor(entrada),
+            text(case, "saida"),
+            "compor({entrada:?})"
+        );
+    }
+}
+
+fn check_partes_de_nome(section: &Value) {
+    for case in cases(section) {
+        let entrada = text(case, "entrada");
+        assert_eq!(
+            mascaramento::partes_de_nome(entrada),
+            strings(&case["saida"]),
+            "partes_de_nome({entrada:?})"
+        );
+    }
+}
+
+fn check_termos_permitidos(section: &Value) {
+    for case in cases(section) {
+        let entrada = text(case, "entrada");
+        assert_eq!(
+            estado::termos_permitidos(entrada),
+            strings(&case["saida"]),
+            "termos_permitidos({entrada:?})"
+        );
+    }
+}
+
+#[expect(clippy::expect_used, reason = "a check fails by panicking")]
+fn check_json_canonico(section: &Value) {
+    for case in cases(section) {
+        let saida = canonico::json_canonico(&case["valor"]).expect("integers and strings only");
+        assert_eq!(saida, text(case, "saida"));
+        assert_eq!(
+            hex::encode(canonico::digest(&case["valor"]).expect("digest")),
+            text(case, "sha256_hex")
         );
     }
 }
