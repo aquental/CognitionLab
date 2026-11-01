@@ -88,12 +88,14 @@ The owner keeps **real medical exams, with patient names in file names and conte
     - **What may be sent:** the exam-type classifier may send to TypeSafe's Jev the *masked* text of an **anonymized copy** that passed the `anonimizador` re-verification (`verify` ok).
     - **When:** only with both `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`.
     - **Still forbidden:** sending text of the originals, sending to reviewers, and committing any classifier output for these files.
+  - **A second exception (owner decision, 2026-10-31):** the owner stores the originals in a private Cloudflare R2 bucket (`sample-exams`). `../anonimizador/scripts/anonymize-r2.py` uploads the anonymized copies whose re-verification is `ok` to the private bucket `anonymized`. Indexes, logs and the ledger stay local.
 - **Local tests only.**
   - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
   - They work on temporary copies only and never persist outputs in the repository.
   - Their assertion and log messages name a document by its index or checksum prefix, never by file name, and never print its text.
   - They assert properties (the anonymization gate refuses the files, extraction and chunking invariants hold), never document-specific values.
 - **No reading into notes.** Do not read their content into conversation notes, reports, or memory. Aggregate counts (pages, characters, images) are fine.
+- **Fetching them.** The full set (about 1 500 files) lives in the owner's private Cloudflare R2 bucket. `scripts/fetch-sample-exams.sh` syncs it into `tests/sample-exams/r2/`, which git ignores, with `R2_API_KEY` and `R2_ACCOUNT_ID` from `.env` (it derives the S3 key pair from the token at each run) or an `aws` CLI profile `r2`; `--count` shows only the number of objects and their size. The script prints counts only and withholds `aws` output, which names objects. Never run `aws s3 ls` on that bucket in a session: the listing carries patient names. The subdirectory keeps the `RUN_SAMPLE_EXAMS` tests and `anonymize-sample-exams.sh`, which read only the files directly in `tests/sample-exams/`, on the small local set.
 
 Progress, blockers and review records live in `reports/progress/PROGRESS.md` and `reports/reviews/phase-N/`. Read them first when resuming phase work from `spec/prompt/execute.md`.
 

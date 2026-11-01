@@ -137,7 +137,7 @@ def count_patterns(
 ) -> dict[str, int]:
     """The largest count of each pattern over `texts`, zero counts left out. In `joins`
     (readings that hold one occurrence in several overlapping joins, see
-    `channels.mixed_readings`), distinct matches are counted. `joined` is searched for
+    `pdfstrings.mixed_readings`), distinct matches are counted. `joined` is searched for
     `TEXT_PATTERNS` only."""
     counts = {}
     for name, pattern in PATTERNS.items():

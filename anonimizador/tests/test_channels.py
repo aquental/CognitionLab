@@ -5,19 +5,16 @@ import zlib
 
 from anonimizador import channels
 from anonimizador.channels import (
-    AMBIGUOUS,
     Reading,
     image_metadata,
     image_metadata_blocks,
-    mixed_readings,
-    pdf_string_views,
-    png_size,
     raw_readings,
     raw_texts,
     read_image,
-    unescape_literal,
     worth_ocr,
 )
+from anonimizador.images import png_size
+from anonimizador.pdfstrings import AMBIGUOUS, mixed_readings, pdf_string_views, unescape_literal
 from anonimizador.terms import Term, count_patterns
 from anonimizador.verify import block_count
 
