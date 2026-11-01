@@ -33,11 +33,12 @@ uv run anonimizador batch --classifier ../embeddings-fundamentals/target/release
 
 External tools: poppler (`pdftotext`, `pdfinfo`, `pdftoppm`, `pdfimages`) and `tesseract` with `por` data. End-to-end tests skip themselves when a tool is missing.
 
-## Real documents never leave this machine
+## Real documents never leave the private network
 
-The owner's real exams, with patient names in file names and content, are in `../embeddings-fundamentals/tests/sample-exams/`, which git ignores. The rules of `../embeddings-fundamentals/CLAUDE.md` apply here unchanged.
+The owner's real exams, with patient names in file names and content, are in `../embeddings-fundamentals/tests/sample-exams/`, which git ignores. The rules of `../embeddings-fundamentals/CLAUDE.md` apply here, except that the private network replaces "this machine" (owner, 2026-11-01).
 
-- **What never leaves this machine.** Never commit, push, upload, or send these files, or anything derived from them, to a reviewer (Grok, Codex, Antigravity) or to a remote service. "Derived" covers text, OCR, renders, file names, and words taken from file names.
+- **The private network** is the owner's workstation and VPS (`docs/SPEC.md` R1). Everything else is external, such as OpenAI and TypeSafe's Jev.
+- **What never leaves the private network.** Never commit, push, upload, or send these files, or anything derived from them, to a reviewer (Grok, Codex, Antigravity) or to an external service. "Derived" covers text, OCR, renders, file names, and words taken from file names.
 - **Synthetic data is invented from scratch.** Never model a fixture on a real exam, and never reuse a word from an exam's file name. Before sending a review package, count the file-name words of 4 letters or more that it contains. Report counts only.
 - **Tests on real exams are local and opt-in** (`RUN_SAMPLE_EXAMS=1`). They assert properties, name exams by position, and never print text.
 - **The terms file stays outside the repository.** The verifier refuses one that git could commit.
@@ -47,8 +48,9 @@ The owner's real exams, with patient names in file names and content, are in `..
   3. it uploads **only the copies whose re-verification is `ok`**;
   4. it deletes the downloaded originals.
 
-  The index, logs, console and ledger stay local, because they link the originals. Nothing it prints names an exam. The `anonimizador` package itself still never uses the network.
-- **No network.** The tools never use the network. Models for later stages, such as name recognition, are installed ahead of time and run locally.
+  The index, logs, console and ledger stay local, because they link the originals. Nothing it prints names an exam. The `anonimizador` package itself never reaches R2 or any other external host.
+- **No external network.** The tools reach only hosts of the private network, such as the Postgres of the PII vault and the stores (SPEC R12, R13). The classifier's opt-in remote mode and the R2 script above are the only exceptions. Models for later stages, such as name recognition, are installed ahead of time and run locally.
+- **Rust rewrite.** It is planned in `docs/PLAN.md` ("Rust rewrite"). Until stage RS2 ends, the Python code is the reference and receives fixes only.
 - **Staging.** Stage explicit paths only, never `git add -A`, and check `git diff --cached --name-only` before every commit.
 
 ## Code conventions
