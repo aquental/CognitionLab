@@ -144,6 +144,8 @@ RUN_SAMPLE_EXAMS=1 uv run pytest tests/test_sample_exams.py   # local only: the 
 |---|---|
 | `src/anonimizador/terms.py` | Terms, patterns, and matching. The terms file is refused when git could commit it |
 | `src/anonimizador/channels.py` | Readers for the six places |
+| `src/anonimizador/pdfstrings.py` | PDF strings in the bytes: decoding, drawn text, ambiguous joins |
+| `src/anonimizador/images.py` | PNG and JPEG structure: chunks, compressed text, whole-image checks |
 | `src/anonimizador/pdfstreams.py` | PDF streams decoded as their dictionaries say: filters, parameters, lengths |
 | `src/anonimizador/verify.py` | File collection, per-file results, and report lines |
 | `src/anonimizador/cli.py` | The `anonimizador` command |

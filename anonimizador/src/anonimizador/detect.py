@@ -402,57 +402,79 @@ def label_values(words: list[Word], lines: list[list[int]]) -> list[int]:
     values = []
     for line in lines:
         text = join(words, [line])
-        # A label with a colon is a colon label, whose value is searched the same way.
-        m = BARE_LABEL.match(text.folded)
-        if m and not COLON_LABEL.match(text.folded, m.start("label")):
-            accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group("label")))]
-            label = text.words(m.start("label"), m.end("label"))
-            last = max(label)
-            # A value glued to the label ("Paciente-Sicrano") is in the label's word,
-            # as with a colon label (Codex CB-30).
-            glued = after_label(words[last].text, m.end("label") - text.owner.index(last))
-            if glued and accepts([Word(glued, words[last].box, words[last].line)], [0]):
-                values.append(last)
-            values += bare_value(words, label, accepts)
-        for m in COLON_LABEL.finditer(text.folded):
-            # The value starts after the word holding the colon, or in it when it is
-            # glued to the colon ("Paciente:Fulano").
-            label = text.words(m.start(), m.end())
-            first, last = min(label), max(label)
-            # Read from the folded text, where a fullwidth colon is a colon (Codex CB-32).
-            glued = any(c.isalnum() for c in text.folded[m.end() : end_of(text, m.end())])
-            value = colon_value(words, line, last)
-            if glued:
-                values.append(last)
-            elif not any(i > last for i in line):
-                # A label that ends its extracted line has its value on its row, in
-                # another block (Antigravity AB-2), or under it, as a date of birth
-                # under its label (Codex CB-7, Antigravity AB-3). Beside it within a gap
-                # is its value; else both places are taken, since a far word on its row
-                # can be another heading (Antigravity AB-9). A blank field followed by
-                # another field on its line has none (Codex CB-17).
-                gap = label_gap(words, first)
-                value = beside(words, last, gap) or [
-                    *column_below(words, first, gap),
-                    *beside(words, last, float("inf")),
-                ]
-            values += value
-        for m in NUMBER_LABEL.finditer(text.folded):
-            label_words = text.words(m.start(), m.end())
-            first, last = min(label_words), max(label_words)
-            after = [i for i in line if i > last]
-            number = number_value(words, after)
-            if not number and all(NUMBER_PART.match(fold(words[i].text)) for i in after):
-                # A label whose line holds no number after it, at most a state or a
-                # colon ("CRM SP", "RG :"): its number is on its row, in another block,
-                # else under it (Codex CB-18, Antigravity AB-9).
-                number = number_value(words, row_after(words, last)) or number_value(
-                    words, column_below(words, first, label_gap(words, first))
-                )
-            values += number
-            # A number glued to its label ("CRM:123") is in the label's word, however
-            # short (Codex CB-11).
-            values += [i for i in label_words if any(c.isdigit() for c in words[i].text)]
+        values += bare_label_values(words, text)
+        values += colon_label_values(words, line, text)
+        values += number_label_values(words, line, text)
+    return values
+
+
+def bare_label_values(words: list[Word], text: Text) -> list[int]:
+    """The value of the label without a colon that starts the line `text`, if any."""
+    # A label with a colon is a colon label, whose value is searched the same way.
+    m = BARE_LABEL.match(text.folded)
+    if not m or COLON_LABEL.match(text.folded, m.start("label")):
+        return []
+    values = []
+    accepts = BARE_LABELS[" ".join(re.findall(r"[^\W_]+", m.group("label")))]
+    label = text.words(m.start("label"), m.end("label"))
+    last = max(label)
+    # A value glued to the label ("Paciente-Sicrano") is in the label's word,
+    # as with a colon label (Codex CB-30).
+    glued = after_label(words[last].text, m.end("label") - text.owner.index(last))
+    if glued and accepts([Word(glued, words[last].box, words[last].line)], [0]):
+        values.append(last)
+    values += bare_value(words, label, accepts)
+    return values
+
+
+def colon_label_values(words: list[Word], line: list[int], text: Text) -> list[int]:
+    """The values of the colon labels of `line`, whose text is `text`."""
+    values = []
+    for m in COLON_LABEL.finditer(text.folded):
+        # The value starts after the word holding the colon, or in it when it is
+        # glued to the colon ("Paciente:Fulano").
+        label = text.words(m.start(), m.end())
+        first, last = min(label), max(label)
+        # Read from the folded text, where a fullwidth colon is a colon (Codex CB-32).
+        glued = any(c.isalnum() for c in text.folded[m.end() : end_of(text, m.end())])
+        value = colon_value(words, line, last)
+        if glued:
+            values.append(last)
+        elif not any(i > last for i in line):
+            # A label that ends its extracted line has its value on its row, in
+            # another block (Antigravity AB-2), or under it, as a date of birth
+            # under its label (Codex CB-7, Antigravity AB-3). Beside it within a gap
+            # is its value; else both places are taken, since a far word on its row
+            # can be another heading (Antigravity AB-9). A blank field followed by
+            # another field on its line has none (Codex CB-17).
+            gap = label_gap(words, first)
+            value = beside(words, last, gap) or [
+                *column_below(words, first, gap),
+                *beside(words, last, float("inf")),
+            ]
+        values += value
+    return values
+
+
+def number_label_values(words: list[Word], line: list[int], text: Text) -> list[int]:
+    """The numbers of the number labels (CRM, RG) of `line`, whose text is `text`."""
+    values = []
+    for m in NUMBER_LABEL.finditer(text.folded):
+        label_words = text.words(m.start(), m.end())
+        first, last = min(label_words), max(label_words)
+        after = [i for i in line if i > last]
+        number = number_value(words, after)
+        if not number and all(NUMBER_PART.match(fold(words[i].text)) for i in after):
+            # A label whose line holds no number after it, at most a state or a
+            # colon ("CRM SP", "RG :"): its number is on its row, in another block,
+            # else under it (Codex CB-18, Antigravity AB-9).
+            number = number_value(words, row_after(words, last)) or number_value(
+                words, column_below(words, first, label_gap(words, first))
+            )
+        values += number
+        # A number glued to its label ("CRM:123") is in the label's word, however
+        # short (Codex CB-11).
+        values += [i for i in label_words if any(c.isdigit() for c in words[i].text)]
     return values
 
 
