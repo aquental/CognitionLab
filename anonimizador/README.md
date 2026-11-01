@@ -11,8 +11,8 @@ Local tools to anonymize medical PDFs and images, and to verify that no identifi
 | 0 | `anonimizador verify`: counts the owner's identifiers left in a file, in six places | **Done.** Reviewed by Grok (15 rounds), Codex (2 rounds), and Antigravity (3 rounds, no open finding); merged by the owner's decision with Grok round 16 and Codex's confirmation of the later fixes pending ([`FINDINGS.md`](reports/reviews/stage-0/FINDINGS.md)) |
 | 1 | Detection: identifiers with their positions on the page (terms, validated patterns, field labels) | **Implemented, in review**: runs inside `batch`; no separate `detect` command yet |
 | 2 | Redaction: pixel boxes on rasterized pages, metadata removal, PDF rewrite, automatic `verify` of each copy | **Implemented, in review**: `batch`, with the rasterize fallback of R5 only (no true text removal, so no PDF library) |
-| 3 | Name recognition, barcodes and QR codes, and text burned into images | Planned |
-| 4 | `review` and `approve`: a review packet, and recording the review in the manifest only on human approval | Planned |
+| 3 | Name recognition, barcodes and QR codes, and text burned into images | Planned, in Rust |
+| RS0–RS4 | Rust rewrite, then the encrypted PII vault and the approval flow: `review`, `approve`, `reject`, publication of the copy, and the original vault (SPEC R10, R12, R13) | Planned ([`docs/PLAN.md`](docs/PLAN.md)). Until RS2 ends, the Python code above is the reference and receives fixes only |
 
 Requirements: [`docs/SPEC.md`](docs/SPEC.md). The manual procedure that the tools automate: [`docs/ANONYMIZATION.md`](docs/ANONYMIZATION.md).
 
