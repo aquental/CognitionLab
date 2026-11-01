@@ -4,25 +4,34 @@
 
 Turn the owner's real medical PDFs and images into an anonymized corpus that the `embeddings-fundamentals` anonymization gate can accept. The tools automate most of the detection and redaction work. **The review stays human.** The gate requires a recorded decision with a reviewer and a date, and no detector is complete.
 
+The identifiers that a copy loses are not thrown away: they are kept encrypted in a PII vault (R12). After approval, the copy is published to a write-once store and the original is moved to an encrypted vault in Brazil (R13).
+
 ## Inputs and outputs
 
 - **Inputs:**
-  - original PDFs, PNGs, and JPEGs, which are read-only and never modified;
+  - original PDFs, PNGs, and JPEGs, which are never modified, and which leave the source only to the original vault after approval (R13);
   - the owner's terms file, kept outside any git work tree;
-  - settings: OCR languages, DPI, and date policy.
+  - settings: OCR languages, DPI, and date policy;
+  - the master key of the PII vault, kept outside Postgres and outside every repository (R12).
 - **Outputs:**
-  - anonymized copies under neutral names, in a new directory;
+  - anonymized copies under neutral names, staged until review, then published to a write-once store (R13);
+  - the PII vault in Postgres: every detection with its value encrypted, the map from neutral names to originals, the lifecycle state of each exam, and an audit table (R12, R13);
+  - the original vault, in Brazil: the approved originals, encrypted (R13);
   - a per-file review packet;
   - an audit log of counts and kinds;
   - manifest entries for `embeddings-fundamentals`. The review is written into an entry only on human approval.
 
 ## Requirements
 
-### R1. Local only, no traces
-- Never make a network call. Models, such as name recognition, are installed ahead of time.
-- Keep the originals untouched and write every output to a new directory.
-- Reports, logs, and errors carry counts, positions, kinds, and neutral names, never a term, a match, or document text.
-- Keep the map from neutral names to originals outside the repository.
+### R1. Private network only, no traces
+- **The private network (owner, 2026-11-01)** is the owner's workstation and VPS, and the encrypted links between them. Everything else is external: OpenAI, TypeSafe's Jev, any other third-party service, and the reviewers (Grok, Codex, Antigravity).
+- Never call an external service. The one exception is the classifier's remote mode, which sends masked text only, and only when both `--classify-remote` and `CLASSIFIER_REMOTE_ALLOWED=1` are given. Models, such as name recognition, are installed ahead of time.
+- Postgres and the stores of R13 are reached inside the private network only, over TLS or a local socket.
+- Read each original in place and never write it. After approval it is moved, never changed (R13).
+- Write every output to a new place: a new run directory, a new vault row, a new stored object. Nothing written is ever overwritten.
+- Reports, logs, errors, and the index carry counts, positions, kinds, and neutral names, never a term, a match, or document text. A value exists only encrypted in the PII vault (R12).
+- The review packet (R9) shows the original pages, so it stays in the private network and is deleted once the review is recorded.
+- Keep the map from neutral names to originals only in the PII vault, encrypted, and never in a repository.
 - Refuse a terms file that git could commit, through a symbolic link too (Codex C0-11).
 
 ### R2. Verify (stage 0, implemented)
@@ -60,7 +69,7 @@ Combine detectors, because each one misses things:
 - header and footer zones that repeat across pages;
 - text burned into medical images, found by OCR of each image.
 
-Every detection carries its page, its box, its kind, and its detector, and never its text in a report.
+Every detection carries its page, its box, its kind, and its detector. Its text never reaches a report: it is stored only encrypted, in the PII vault (R12).
 
 ### R5. Redact for real
 - **Text layer:** remove the text objects inside each box. Painting over them is not enough. A PDF library's apply-redactions operation does this.
@@ -83,15 +92,44 @@ For each file, produce:
 - the pages with low OCR confidence;
 - the R8 results.
 
-### R10. Approval
-- An explicit command run by the reviewer records the review.
-- It writes the `anonymization` line of the manifest entry (`filename`, `metadata`, `text`, `pixels` set to `"ok"`, with the reviewer and the date).
-- No automatic step ever writes `"ok"`.
+### R10. Approval (flow changed by the owner, 2026-11-01)
+- An explicit command run by the reviewer records the decision on one staged copy: approve or reject, with the reviewer's name.
+- **Approve** is refused unless the copy verifies `ok` (R8) and its review packet (R9) was produced. It records the review in Postgres (`filename`, `metadata`, `text`, `pixels` set to `"ok"`, the reviewer, and the date). Then it publishes the copy and moves the original to the original vault, in the order of R13. Last, it writes the `anonymization` line of the manifest entry for `embeddings-fundamentals`.
+- **Reject** records the reviewer, the date, and the kind of problem. The staged copy is discarded, nothing is published, and the original stays in the source for a new run.
+- No automatic step ever writes `"ok"`, publishes a copy, or moves an original.
 
 ### R11. Proof on synthetic fixtures
 - Plant invented identifiers in every channel: the text layer, covered text, metadata, an incremental update, an embedded image, burned-in text, and a barcode.
 - Measure detection recall per channel, and require zero R2 counts after redaction.
 - Never derive a fixture from a real exam.
+
+### R12. PII vault (owner, 2026-11-01)
+- Every detection is stored in Postgres with its exam, page, box, kind, detector, the reading it came from (file name, metadata, text layer, OCR), and its value. A value found in pixels is the text that OCR read; no image crop is stored.
+- **Encryption in the application.** A value is encrypted before it reaches Postgres, with AES-256-GCM. Each exam has its own data key. A master key wraps the data keys; it is kept in a secret file on the VPS, never in Postgres, never in a repository, and never in a log. Postgres never sees a value or a key.
+- The associated data of each ciphertext names its exam and its row, so a value moved to another row fails to decrypt.
+- A value may also be stored as a keyed digest (HMAC-SHA-256 of its folded form, with a key separate from the master key), to find the same identifier in several exams without decrypting. A plain hash is never stored: a CPF or a phone number is recovered from its hash by trying every value.
+- In memory, a value has a type that cannot be printed, formatted, or logged, and it is erased after use. An error never carries a value.
+- Reading a value back (re-identification) is a separate command that needs the master key.
+- An audit table records every write, read, and erasure: who, when, which exam, and which operation, never a value. The tools' database role can add audit rows but cannot change or delete them.
+- **Erasure.** Erasing an exam first deletes its data key, so its values and its vaulted original become unreadable at once (crypto-shredding). Then its rows and its vaulted file are deleted.
+
+### R13. Lifecycle and storage (owner, 2026-11-01)
+- Each original has a state in Postgres, keyed by the digest of its bytes:
+  1. `received`: found in the source and read in place.
+  2. `staged`: its copy is written to staging, verified (R8), and its detections are in the vault. A copy that verifies `FOUND` or `ERROR` goes back to detection; it is never published.
+  3. `approved` or `rejected`: the reviewer's decision (R10).
+  4. `published`: the approved copy is written to the published store, then read back and checked against its digest.
+  5. `vaulted`: the original is encrypted with its exam's data key, written to the original vault, read back, and checked against its digest. Only then is it removed from the source.
+- **Staging** is in the private network. It holds the copies waiting for review and their packets. A copy leaves staging when it is published or rejected.
+- **The original vault** is in Brazil, in the private network. It holds the approved originals, encrypted and named by digest, for the retention period the owner sets. R12 erases them.
+- **The published store** holds approved copies only, named `exam-<digest>`. It may be outside Brazil. It is write-once: a published copy is never changed, overwritten, or deleted by the tools. A correction is a new copy, with a new name and a new review. The store's immutability (for example, S3 Object Lock in compliance mode) is checked before the first write.
+- Every step is idempotent and keyed by the digest. A run stopped at any point resumes without losing an original, writing a copy twice, or publishing an unapproved copy. An original already processed is reported by position and not read again.
+
+## Legal status (LGPD)
+
+- While the vault holds an exam's values and its map, its published copy is pseudonymized data for whoever holds the master key (LGPD art. 13 §4), not anonymized data (art. 12). It is still personal health data (art. 11).
+- A copy published outside Brazil is an international transfer (art. 33). Record its legal basis before the first one.
+- Erasing an exam (R12) removes the link. Its published copy is then as anonymous as its redaction and its review made it.
 
 ## Limitations to state in every report
 
