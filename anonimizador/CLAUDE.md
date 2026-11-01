@@ -41,6 +41,13 @@ The owner's real exams, with patient names in file names and content, are in `..
 - **Synthetic data is invented from scratch.** Never model a fixture on a real exam, and never reuse a word from an exam's file name. Before sending a review package, count the file-name words of 4 letters or more that it contains. Report counts only.
 - **Tests on real exams are local and opt-in** (`RUN_SAMPLE_EXAMS=1`). They assert properties, name exams by position, and never print text.
 - **The terms file stays outside the repository.** The verifier refuses one that git could commit.
+- **Owner exception, R2 (2026-10-31).** The owner keeps the originals in a private Cloudflare R2 bucket, `sample-exams`, and asked for the anonymized copies to go to a private bucket, `anonymized`. `scripts/anonymize-r2.py` does this in batches:
+  1. it downloads each original under a neutral local name, `src-<key hash>`, into the git-ignored `tests/sample-exams/r2-batches/`;
+  2. it runs `batch` locally;
+  3. it uploads **only the copies whose re-verification is `ok`**;
+  4. it deletes the downloaded originals.
+
+  The index, logs, console and ledger stay local, because they link the originals. Nothing it prints names an exam. The `anonimizador` package itself still never uses the network.
 - **No network.** The tools never use the network. Models for later stages, such as name recognition, are installed ahead of time and run locally.
 - **Staging.** Stage explicit paths only, never `git add -A`, and check `git diff --cached --name-only` before every commit.
 
