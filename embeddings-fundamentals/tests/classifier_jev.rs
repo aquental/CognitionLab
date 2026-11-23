@@ -14,7 +14,7 @@ use embeddings_fundamentals::classifier::jev::{
 use embeddings_fundamentals::classifier::{
     Avaliador, Categoria, Classificacao, EntradaClassificacao, Envio, ErroCategoria,
     EstadoClassificacao, EstadoPreparado, MotivoCodigo, OrigemTexto, Pagina, PaginasModo,
-    RequestNeutro, RlcdProvider, classificar, estado::montar_estado,
+    RequestNeutro, RlcdProvider, classificar, state::montar_estado,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

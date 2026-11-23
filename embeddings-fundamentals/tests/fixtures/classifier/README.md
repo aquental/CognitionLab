@@ -1,6 +1,6 @@
 # Classifier conformance vectors
 
-`vetores.json` is copied unchanged from StealthApp:
+`vectors.json` is copied unchanged from StealthApp, where it is named `vetores.json`:
 
 | | |
 |---|---|

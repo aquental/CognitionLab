@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use embeddings_fundamentals::classifier::{
-    Camada, EntradaClassificacao, Pagina, PaginasModo, estado, indicios, listas, mascaramento,
+    Camada, EntradaClassificacao, Pagina, PaginasModo, masking, patient_hints, state, word_lists,
 };
 #[cfg(feature = "classifier-jev")]
 use embeddings_fundamentals::classifier::{RequestNeutro, jev};
@@ -245,14 +245,14 @@ fn rust(caso: &Value) -> Value {
             .collect()
     };
     let (conhecidos, preservar) = (lista("conhecidos"), lista("preservar"));
-    let r = mascaramento::remover_dados_pessoais(texto, &conhecidos, &preservar).expect("mask");
-    let r2 = mascaramento::remover_dados_pessoais(&r.texto, &conhecidos, &preservar).expect("mask");
+    let r = masking::remover_dados_pessoais(texto, &conhecidos, &preservar).expect("mask");
+    let r2 = masking::remover_dados_pessoais(&r.texto, &conhecidos, &preservar).expect("mask");
     json!({
         "remover": {"texto": r.texto, "contagens": contagens(&r.contagens)},
         "segunda_passada": r2.texto,
-        "conferir": contagens(&mascaramento::conferir(texto, &conhecidos).expect("check")),
-        "nomes_dos_rotulos": mascaramento::nomes_dos_rotulos(texto, &preservar).expect("names"),
-        "nomes_dos_indicios": indicios::nomes_dos_indicios(texto).expect("hints"),
+        "conferir": contagens(&masking::conferir(texto, &conhecidos).expect("check")),
+        "nomes_dos_rotulos": masking::nomes_dos_rotulos(texto, &preservar).expect("names"),
+        "nomes_dos_indicios": patient_hints::nomes_dos_indicios(texto).expect("hints"),
         "montar_estado": montar(&caso["documento"], &conhecidos),
     })
 }
@@ -279,7 +279,7 @@ fn montar(doc: &Value, conhecidos: &[String]) -> Value {
         nomes_conhecidos: conhecidos.to_vec(),
     };
     let modo: PaginasModo = doc["modo"].as_str().expect("mode").parse().expect("mode");
-    let r = estado::montar_estado(&entrada, modo).expect("state");
+    let r = state::montar_estado(&entrada, modo).expect("state");
     #[cfg(feature = "classifier-jev")]
     let corpo = Value::from(jev::corpo_request(&RequestNeutro::new(&r), "jev-1.13.0"));
     // Without the adapter there is no body to compare; see `masking_matches_stealthapp`.
@@ -334,7 +334,7 @@ fn masking_matches_stealthapp() {
         documento,
     );
     let mut runner = TestRunner::new(Config::default());
-    let vocabulario: Vec<&str> = listas::VOCABULARIO_TIPO.to_vec();
+    let vocabulario: Vec<&str> = word_lists::VOCABULARIO_TIPO.to_vec();
     let casos: Vec<Value> = (0..3000)
         .map(|_| {
             let (tokens, conhecidos, preservar, documento) = estrategia
@@ -400,7 +400,7 @@ const TP_SHA256: &[(&str, &str)] = &[
 ];
 
 /// The regexes that are not in the vectors appear, as raw strings, in the pinned
-/// StealthApp files (spec/CLASSIFIER.md §6.4, "Texto das traduções").
+/// StealthApp files (spec/CLASSIFIER.md §6.4, "Text of the translations").
 #[test]
 #[ignore = "needs StealthApp; RUN_DIFFERENTIAL=1 STEALTHAPP_DIR=..."]
 fn helper_regexes_are_stealthapps() {
@@ -417,14 +417,14 @@ fn helper_regexes_are_stealthapps() {
         );
     }
     let mascaramento_py = ler("app/services/mascaramento.py");
-    for texto in mascaramento::textos_auxiliares() {
+    for texto in masking::textos_auxiliares() {
         assert!(
             mascaramento_py.contains(&format!("r\"{texto}\"")),
             "{texto}"
         );
     }
     let hints_py = ler("app/services/patient_hints.py");
-    for texto in [indicios::NOME_REGEX_1, indicios::NOME_REGEX_2] {
+    for texto in [patient_hints::NOME_REGEX_1, patient_hints::NOME_REGEX_2] {
         assert!(hints_py.contains(&format!("r\"{texto}\"")), "{texto}");
     }
     let classificador_py = ler("app/services/classificador_documento.py");

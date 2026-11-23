@@ -1,40 +1,40 @@
-# Plano de migração: mini-swe-agent Python → Rust
+# Migration plan: mini-swe-agent Python → Rust
 
-Data da análise: 28/10/2026. Estado: planejamento; nenhuma implementação Rust ou paridade comprovada nesta entrega.
+Analysis date: 2026-10-28. State: planning; no Rust implementation and no proven parity in this delivery.
 
-## 1. Objetivo e referência
+## 1. Goal and reference
 
-Reimplementar o harness em Rust, mantendo o Python executável como oráculo de comportamento. O resultado deve preservar prompts, ações, observações, limites, custos, término e trajetória nos casos definidos pelo contrato. Traduzir classes linha a linha não é o objetivo: preservar comportamento com ownership claro, tipos explícitos e fluxo simples é.
+Reimplement the harness in Rust, keeping the Python code executable as the behavior oracle. The result must preserve prompts, actions, observations, limits, costs, termination, and trajectory in the cases the contract defines. The goal is not to translate classes line by line: it is to preserve behavior with clear ownership, explicit types, and a simple flow.
 
-O código analisado está em `../mini-swe-agent/src/minisweagent/` e declara versão **2.4.6**. O requisito local em [prompt/migrate.md](prompt/migrate.md) pede apenas ações textuais de shell, sem tool-calling nativo, sem sessões persistentes, e inclui BDD/Cucumber. A referência atual também contém tool-calling e Responses API; portanto, esse requisito descreve um **recorte**, não todo o upstream.
+The analyzed code is in `../mini-swe-agent/src/minisweagent/` and declares version **2.4.6**. The local requirement in [prompt/migrate.md](prompt/migrate.md) asks only for textual shell actions, with no native tool-calling and no persistent sessions, and includes BDD/Cucumber. The current reference also contains tool-calling and the Responses API; so this requirement describes a **subset**, not the whole upstream.
 
-**Atenção à procedência:** `git -C mini-swe-agent rev-parse --show-toplevel` resolve para `CognitionLab`. O SHA `b3cb1431177eba1289ea00ffe7c983a25db8fdad` observado é do repositório pai e **não identifica o commit upstream**. Não declarar a referência congelada pelo SHA até verificar sua origem.
+**Provenance warning:** `git -C mini-swe-agent rev-parse --show-toplevel` resolves to `CognitionLab`. The observed SHA `b3cb1431177eba1289ea00ffe7c983a25db8fdad` belongs to the parent repository and **does not identify the upstream commit**. Do not declare the reference frozen by that SHA until its origin is verified.
 
-Como identificação provisória do conteúdo, a leitura dos 205 arquivos da cópia, excluindo componentes `.git`, `.venv`, `__pycache__` e `.pytest_cache`, produziu SHA-256 agregado `1c9632a76ba2171f2f5421c51d9b64391901997e1c599963bdb937b7913f294e`. Algoritmo: ordenar caminhos relativos; para cada arquivo gerar `sha256(bytes)`, dois espaços, caminho POSIX e newline; concatenar essas linhas em UTF-8 e calcular SHA-256. Isso identifica o snapshot local, não comprova origem upstream. O valor foi recalculado em 28/10/2026 com o mesmo algoritmo e coincidiu (205 arquivos). A análise detalhada do código que sustenta este plano está em [STUDY.md](STUDY.md); quando qualquer um dos dois divergir do código, prevalece o código Python e tanto PLAN.md quanto STUDY.md devem ser corrigidos.
+As a provisional content identifier, reading the 205 files of the copy, excluding `.git`, `.venv`, `__pycache__`, and `.pytest_cache` components, produced the aggregate SHA-256 `1c9632a76ba2171f2f5421c51d9b64391901997e1c599963bdb937b7913f294e`. Algorithm: sort the relative paths; for each file, write `sha256(bytes)`, two spaces, the POSIX path, and a newline; concatenate these lines in UTF-8 and compute the SHA-256. This identifies the local snapshot; it does not prove upstream origin. The value was recomputed on 2026-10-28 with the same algorithm and matched (205 files). The detailed code analysis behind this plan is in [STUDY.md](STUDY.md); when either document disagrees with the code, the Python code wins and both PLAN.md and STUDY.md must be corrected.
 
-## 2. Organização proposta
+## 2. Proposed layout
 
-Todos os caminhos a seguir são relativos a `mini-rust-swe-agent/`. A árvore é planejada; não significa que os arquivos já existem.
+All paths below are relative to `mini-rust-swe-agent/`. The tree is planned; it does not mean the files already exist.
 
 ```text
 mini-rust-swe-agent/
-├── README.md                    # estudo, arquitetura e status verificável
-├── mini-swe-agent/              # referência Python preservada
+├── README.md                    # study, architecture, and verifiable status
+├── mini-swe-agent/              # preserved Python reference
 ├── spec/
 │   ├── PLAN.md
-│   ├── STUDY.md                 # análise do código Python e gates P01–P18
-│   ├── PRD.md                   # placeholder vazio; preencher ou remover
-│   ├── prompt/                  # enunciados da tarefa (migrate.md, estudo.md)
-│   ├── reference.json           # origem, SHA ou snapshot, versões e hashes
-│   ├── parity.md               # contratos e divergências permitidas
-│   ├── scope.md                # matriz de cobertura
-│   └── adr/                    # decisões com motivos e consequências
+│   ├── STUDY.md                 # analysis of the Python code and gates P01–P18
+│   ├── PRD.md                   # empty placeholder; fill in or remove
+│   ├── prompt/                  # task statements (migrate.md, study.md)
+│   ├── reference.json           # origin, SHA or snapshot, versions, and hashes
+│   ├── parity.md               # contracts and allowed divergences
+│   ├── scope.md                # coverage matrix
+│   └── adr/                    # decisions with reasons and consequences
 ├── rust-mini-swe-agent/
 │   ├── Cargo.toml
 │   ├── Cargo.lock
 │   ├── rust-toolchain.toml
 │   ├── src/
-│   │   ├── main.rs              # argumentos, composição e exit code
+│   │   ├── main.rs              # arguments, composition, and exit code
 │   │   ├── lib.rs
 │   │   ├── agent.rs
 │   │   ├── model.rs
@@ -47,48 +47,48 @@ mini-rust-swe-agent/
 │       ├── parity.rs
 │       └── bdd.rs
 ├── parity/
-│   ├── fixtures/               # entradas comuns e resultados esperados
-│   ├── python_runner.py        # importa a referência, sem alterá-la
-│   ├── compare.py              # diff estrutural por caminho JSON
-│   └── features/               # cenários Gherkin compartilhados
-└── reports/                    # evidências de execução, sem segredos
+│   ├── fixtures/               # shared inputs and expected results
+│   ├── python_runner.py        # imports the reference without changing it
+│   ├── compare.py              # structural diff by JSON path
+│   └── features/               # shared Gherkin scenarios
+└── reports/                    # run evidence, no secrets
 ```
 
-Começar com **um pacote Cargo, biblioteca e binário**. Extrair submódulos quando surgirem implementações alternativas; não começar com um workspace de várias crates. O histórico Git permanece no pai. A referência Python não deve receber ajustes para fazer o Rust passar.
+Start with **one Cargo package, a library and a binary**. Extract submodules when alternative implementations appear; do not start with a multi-crate workspace. The Git history stays in the parent. The Python reference must not be adjusted to make Rust pass.
 
-## 3. Escopo e marcos
+## 3. Scope and milestones
 
-| Capacidade | M1: paridade offline | M2: agente utilizável | Evolução posterior |
+| Capability | M1: offline parity | M2: usable agent | Later evolution |
 |---|---|---|---|
-| Traits, loop, histórico, erros e limites | Obrigatória | Mantida | Mantida |
-| Modelo determinístico e ambiente roteirizado | Obrigatórios | Regressão | Regressão |
-| Parsing textual, templates, configuração | Obrigatórios no subconjunto documentado | Configurações textuais completas selecionadas | Ampliar com fixtures |
-| LocalEnvironment POSIX e trajetória 1.1 | Obrigatórios | Mantidos | Outros SOs exigem contrato próprio |
-| CLI não interativa | Obrigatória | Interface documentada | Compatibilidade de aliases quando necessária |
-| Um provedor real textual | Fora do gate offline | Obrigatório, provedor/modelo identificados | Cada outro provedor tem gate próprio |
-| Docker | Contrato e casos definidos | Marco separado M3 | Não presumir isolamento pelo nome do backend |
-| OpenRouter/Requesty/Portkey/LiteLLM | Inventariados | Apenas integração escolhida | Adaptadores explícitos; sem promessa de substituir todo LiteLLM |
-| InteractiveAgent e inspector | Adiados | Adiados | M4, se incluídos no produto |
-| SWE-bench, ProgramBench e execução em lote | Adiados | Adiados | M4, avaliação e concorrência controlada |
-| Singularity, Bubblewrap, Contree, SWE-ReX/Modal | Adiados | Adiados | Cada backend exige ambiente e teste próprios |
-| Tool-calling, Responses API, multimodal | Excluídos do recorte inicial | Excluídos | Só ampliar mediante mudança explícita do escopo |
-| Importação dinâmica de classes Python | Excluída | Registro de implementações Rust | Não prometer plugins Python no binário |
-| Ferramentas além do shell e sessões persistentes | Excluídas | Excluídas | Exigem novo desenho e novo contrato |
+| Traits, loop, history, errors, and limits | Required | Kept | Kept |
+| Deterministic model and scripted environment | Required | Regression | Regression |
+| Textual parsing, templates, configuration | Required for the documented subset | Selected textual configurations complete | Extend with fixtures |
+| POSIX LocalEnvironment and trajectory 1.1 | Required | Kept | Other OSes need their own contract |
+| Non-interactive CLI | Required | Documented interface | Alias compatibility when needed |
+| One real textual provider | Outside the offline gate | Required, provider/model identified | Each other provider has its own gate |
+| Docker | Contract and cases defined | Separate milestone M3 | Do not assume isolation from the backend's name |
+| OpenRouter/Requesty/Portkey/LiteLLM | Inventoried | Only the chosen integration | Explicit adapters; no promise to replace all of LiteLLM |
+| InteractiveAgent and inspector | Deferred | Deferred | M4, if included in the product |
+| SWE-bench, ProgramBench, and batch runs | Deferred | Deferred | M4, evaluation and controlled concurrency |
+| Singularity, Bubblewrap, Contree, SWE-ReX/Modal | Deferred | Deferred | Each backend needs its own environment and tests |
+| Tool-calling, Responses API, multimodal | Excluded from the initial scope | Excluded | Extend only through an explicit scope change |
+| Dynamic import of Python classes | Excluded | Registry of Rust implementations | Do not promise Python plugins in the binary |
+| Tools beyond the shell and persistent sessions | Excluded | Excluded | Need a new design and a new contract |
 
-“Migração do recorte textual concluída” e “paridade com todo o upstream” são afirmações diferentes. Registrar cada exclusão com justificativa. M1 não conclui a migração integral.
+"Migration of the textual subset is complete" and "parity with the whole upstream" are different claims. Record each exclusion with its justification. M1 does not complete the full migration.
 
-## 4. Passo a passo
+## 4. Step by step
 
-### Passo 0 — Fixar a referência e tornar o Python reproduzível
+### Step 0 — Pin the reference and make the Python side reproducible
 
-1. Preservar a cópia atual; registrar inventário e hashes em `spec/reference.json`/manifesto separado.
-2. Se houver acesso à origem, obter um checkout separado, identificar um SHA upstream verificável e comparar seu conteúdo com a cópia. Registrar alterações locais. Não substituir silenciosamente a referência pela branch principal.
-3. Preservar `LICENSE.md` e atribuição aos autores; documentar a origem dos prompts, fixtures e código adaptado.
-4. Fixar versão do Python e resolver dependências num ambiente exclusivo. O `pyproject.toml` possui intervalos abertos; apenas `pip install` não oferece reprodutibilidade. Exportar lock/constraints com versões e, quando viável, hashes.
-5. Usar diretório temporário para `MSWEA_GLOBAL_CONFIG_DIR`, `MSWEA_SILENT_STARTUP=1`, ambiente controlado e ausência de credenciais reais. A importação do pacote cria diretório e carrega `.env` global.
-6. Rodar primeiro testes selecionados de configuração, serialização, agente e ambiente local. Registrar dependências, SO, shell, código de saída, falhas e skips. Separar testes de rede, containers e `--run-fire`, que podem custar dinheiro.
+1. Keep the current copy; record the inventory and hashes in `spec/reference.json`/a separate manifest.
+2. If the origin is reachable, get a separate checkout, identify a verifiable upstream SHA, and compare its content with the copy. Record local changes. Do not silently replace the reference with the main branch.
+3. Keep `LICENSE.md` and the attribution to the authors; document the origin of the prompts, fixtures, and adapted code.
+4. Pin the Python version and resolve dependencies in a dedicated environment. `pyproject.toml` has open ranges; `pip install` alone does not give reproducibility. Export a lock/constraints file with versions and, when feasible, hashes.
+5. Use a temporary directory for `MSWEA_GLOBAL_CONFIG_DIR`, set `MSWEA_SILENT_STARTUP=1`, control the environment, and use no real credentials. Importing the package creates a directory and loads the global `.env`.
+6. First run selected tests for configuration, serialization, agent, and local environment. Record dependencies, OS, shell, exit code, failures, and skips. Keep apart the network, container, and `--run-fire` tests, which can cost money.
 
-Comandos iniciais, a executar da pasta deste projeto; não executados por esta documentação:
+Initial commands, to run from this project's folder; this document has not run them:
 
 ```bash
 python3 -m venv .venv-reference
@@ -103,49 +103,49 @@ MSWEA_GLOBAL_CONFIG_DIR="$PWD/reports/python-config" MSWEA_SILENT_STARTUP=1 \
   mini-swe-agent/tests/utils/test_serialize.py
 ```
 
-O freeze registra o ambiente inicial, mas a instalação editável referencia o código local: reprodutibilidade exige também o snapshot e um lock validado numa instalação limpa. Alternativa equivalente: `uv run pytest ...` executado dentro de `mini-swe-agent/`, que resolve o `pyproject.toml`; não há `uv.lock` na cópia, então exportar `uv lock`/`uv export` para `spec/` cumpre o mesmo papel do freeze.
+The freeze records the initial environment, but the editable install points at the local code: reproducibility also needs the snapshot and a lock validated in a clean install. Equivalent alternative: `uv run pytest ...` run inside `mini-swe-agent/`, which resolves `pyproject.toml`; the copy has no `uv.lock`, so exporting `uv lock`/`uv export` to `spec/` plays the same role as the freeze.
 
-**Aceite:** manifesto identifica a referência sem confundir SHA do pai; conjunto offline executável e resultado registrado; nenhuma alteração na fonte Python.
+**Acceptance:** the manifest identifies the reference without confusing it with the parent's SHA; an offline set runs and its result is recorded; no change to the Python source.
 
-### Passo 1 — Escrever os contratos antes da implementação
+### Step 1 — Write the contracts before the implementation
 
-Criar `spec/parity.md` com entradas, saídas, estado, efeitos colaterais e exemplos de cada fronteira:
+Create `spec/parity.md` with the inputs, outputs, state, side effects, and examples of each boundary:
 
-| Fronteira | Contrato mínimo |
+| Boundary | Minimum contract |
 |---|---|
-| Model | Consulta recebe histórico ordenado; resposta inclui conteúdo, ações e custo; formata mensagens e observações; exporta variáveis e configuração |
-| Environment | `execute(action, cwd="")` no Protocol; `LocalEnvironment` aceita ainda `timeout` como keyword, mas `DefaultAgent.execute_actions` chama `env.execute(action)` sem cwd nem timeout, logo o cwd efetivo é `config.cwd` ou o cwd do processo e o timeout é `config.timeout` (30 s). Um campo `cwd` dentro da action não é lido. Retorna output, returncode, exception_info e extras, ou sinaliza submissão |
-| Agent | Coordena chamadas, custos, limites, mensagens e término; retorna extras da mensagem final |
-| Configuração | YAML e `a.b=valor`; parsing JSON do valor ou string; merge recursivo; ausência é distinta de null/false/zero |
-| Templates | Jinja com StrictUndefined; ordem das variáveis, filtros, slicing, Unicode e whitespace preservados |
-| Trajetória | Objeto completo com `info`, `messages` e `trajectory_format`; preservar campos extensíveis |
-| CLI | Argumentos, precedência, stdout/stderr, caminho de saída, exit code e interrupção definidos |
+| Model | A query receives the ordered history; the response includes content, actions, and cost; formats messages and observations; exports variables and configuration |
+| Environment | `execute(action, cwd="")` in the Protocol; `LocalEnvironment` also accepts `timeout` as a keyword, but `DefaultAgent.execute_actions` calls `env.execute(action)` with neither cwd nor timeout, so the effective cwd is `config.cwd` or the process cwd and the timeout is `config.timeout` (30 s). A `cwd` field inside the action is not read. Returns output, returncode, exception_info, and extras, or signals a submission |
+| Agent | Coordinates calls, costs, limits, messages, and termination; returns the extras of the final message |
+| Configuration | YAML and `a.b=value`; parses the value as JSON or falls back to a string; recursive merge; absent is distinct from null/false/zero |
+| Templates | Jinja with StrictUndefined; variable order, filters, slicing, Unicode, and whitespace preserved |
+| Trajectory | Full object with `info`, `messages`, and `trajectory_format`; preserve extensible fields |
+| CLI | Arguments, precedence, stdout/stderr, output path, exit code, and interruption defined |
 
-Registrar sutilezas do código real:
+Record the subtleties of the real code:
 
-- O parser textual usa a regex ```` ```mswea_bash_command\s*\n(.*?)\n``` ```` com DOTALL (newline obrigatório após o nome e antes do fecho), aplica `strip()` a cada captura e exige **exatamente uma** captura. `content` nulo vira `""`; um bloco vazio ainda é uma captura válida (comando vazio); várias linhas num bloco são um único comando; fence `bash` comum não conta; zero ou vários blocos produzem `FormatError`. O motor `regex` do Rust não aceita lookaround nem todas as flags do `re`: `action_regex` configurável só é suportado no subconjunto comum, com rejeição explícita do resto.
-- Limites são verificados **antes** da consulta: `0 < limite <= acumulado`. Zero desabilita. `n_calls` aumenta antes de `model.query` e esse incremento sobrevive a `FormatError` e a falhas do modelo: `api_calls` já conta a tentativa enquanto `instance_cost` pode ainda não conter o custo dessa resposta. O custo é acrescentado após a resposta ou pelo tratamento de erro de formato.
-- **Estatísticas globais** (`GlobalModelStats`, STUDY §8) fazem parte do contrato de Model: todo `query()` bem-sucedido chama `add(custo)` depois de calcular o custo e **antes** do parser; os limiares vêm de `MSWEA_GLOBAL_COST_LIMIT`/`MSWEA_GLOBAL_CALL_LIMIT`, usam `<` (`0 < cost_limit < custo_total`, `0 < call_limit < n_calls + 1`, logo `call_limit == 1` falha já na primeira resposta) e lançam `RuntimeError`, que o agente trata como erro inesperado (mensagem `exit` diagnóstica, save, propagação). O Rust recebe a instância de estatísticas por composição, nunca por singleton oculto; cada cenário de teste cria a sua.
-- `FormatError` preserva mensagens, cobra o custo disponível na primeira mensagem carregada, incrementa erros consecutivos e pode terminar com `exit_status: RepeatedFormatError`, que é um **valor de status** na mensagem `exit`, não uma classe de exceção. Nesse caminho nenhuma mensagem `assistant` é criada: o Rust não deve sintetizar uma. Um passo limpo zera esse contador.
-- `extra.actions` ausente ou `[]` não é erro no agente: `execute_actions` produz lista vazia de outputs e chama `format_observation_messages` uma vez; o passo conta como limpo e o loop segue até um limite.
-- `run()` limpa mensagens, mas não reinicializa todos os contadores nem o tempo iniciado no construtor. Testar reutilização do mesmo agente ou documentar restrição a uma execução por instância; não “corrigir” silenciosamente.
-- `execute_actions()` executa sequencialmente. Uma submissão interrompe a sequência e não gera a observação normal. Testar isso mesmo que o parser textual normalmente produza uma única ação.
-- O `finally` salva após cada tentativa de passo; erros inesperados acrescentam mensagem `exit` e são propagados. Falhas antes de entrar no loop (por exemplo, renderização inicial) têm comportamento distinto.
-- `get_template_vars()` faz merge de configuração do agente → ambiente → modelo → contadores/tempo → variáveis extras → argumentos. No ambiente local entram plataforma e variáveis de ambiente.
-- O shell local usa `shell=True`: em POSIX o padrão é `/bin/sh -c`, apesar do texto mencionar bash. Registrar ADR: modo compatível reproduz `/bin/sh`; bash explícito é opção distinta, testada, com divergência declarada.
-- `cd` e `export` não persistem entre ações; alterações em arquivos persistem. `stderr` é mesclado ao stdout, UTF-8 inválido é substituído e timeout mata o grupo de processos em POSIX.
-- Submissão: `lines = output.lstrip().splitlines(keepends=True)`; termina se `lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"` e `returncode == 0`; submissão = `"".join(lines[1:])`. Espaços ao redor do marcador na primeira linha são aceitos; case diferente, texto extra na linha, log antes do marcador, retorno não zero ou marcador apenas no texto do LLM não submetem. CRLF é preservado na submissão; marcador sem newline final produz submissão vazia. A matriz completa (8 + 2 casos) está no STUDY §5.
-- **Seleção de classes não vem do YAML textual:** `default.yaml` e `mini_textbased.yaml` não definem `model.model_class`, e `get_model` cai em `LitellmModel` (tool-calling). O oráculo Python deve instanciar `DefaultAgent`, `LitellmTextbasedModel`/`DeterministicModel` e `LocalEnvironment` diretamente, ou passar `model_class` explícito. No Rust, a CLI mínima só oferece o caminho textual, e isso é uma decisão registrada, não paridade com `mini` (STUDY §3.3).
-- As configs são Pydantic com `extra='ignore'`: `mode: confirm` do YAML é descartado pelo `DefaultAgent`, chaves desconhecidas não aparecem em `info.config` nem no contexto de template; `output_path` serializa como string ou `null`. Serde deve ignorar campos desconhecidos nesses structs e serializar `Option<PathBuf>` como `null`.
-- Um filho em background que herda o stdout mantém o pipe aberto: o comando só termina no timeout, com saída parcial e grupo morto (STUDY §4). O Rust deve reproduzir isso lendo até EOF, não até a saída do shell pai.
-- `DeterministicModel` tem ações especiais `raise`, `/sleep N` e `/warning msg` que avançam para o próximo output sem contar chamada; o custo global usa `cost_per_call` e o custo local usa `extra.cost` da mensagem (STUDY §3.4). Em JSON, `raise` vira uma tag com o nome da exceção.
-- `run()` acumula `extra_template_vars` com `|=` e não zera `n_consecutive_format_errors`; falhas de `save()` dentro do `finally` substituem a exceção em voo.
+- The textual parser uses the regex ```` ```mswea_bash_command\s*\n(.*?)\n``` ```` with DOTALL (a newline is required after the name and before the closing fence), applies `strip()` to each capture, and requires **exactly one** capture. Null `content` becomes `""`; an empty block is still a valid capture (empty command); several lines in a block are a single command; a plain `bash` fence does not count; zero or several blocks produce `FormatError`. The Rust `regex` engine does not support lookaround or every `re` flag: a configurable `action_regex` is supported only in the common subset, and the rest is rejected explicitly.
+- Limits are checked **before** the query: `0 < limit <= accumulated`. Zero disables. `n_calls` is incremented before `model.query`, and that increment survives `FormatError` and model failures: `api_calls` already counts the attempt while `instance_cost` may not yet include that response's cost. The cost is added after the response or by the format-error handler.
+- **Global statistics** (`GlobalModelStats`, STUDY §8) are part of the Model contract: every successful `query()` calls `add(cost)` after computing the cost and **before** the parser; the thresholds come from `MSWEA_GLOBAL_COST_LIMIT`/`MSWEA_GLOBAL_CALL_LIMIT`, use `<` (`0 < cost_limit < total_cost`, `0 < call_limit < n_calls + 1`, so `call_limit == 1` already fails on the first response), and raise `RuntimeError`, which the agent handles as an unexpected error (diagnostic `exit` message, save, propagation). Rust receives the statistics instance by composition, never through a hidden singleton; each test scenario creates its own.
+- `FormatError` preserves messages, charges the cost available in the first message it carries, increments the consecutive-error counter, and can end with `exit_status: RepeatedFormatError`, which is a **status value** in the `exit` message, not an exception class. On this path no `assistant` message is created: Rust must not synthesize one. A clean step resets this counter.
+- A missing or `[]` `extra.actions` is not an error in the agent: `execute_actions` produces an empty list of outputs and calls `format_observation_messages` once; the step counts as clean and the loop continues until a limit.
+- `run()` clears the messages but does not reset every counter, nor the start time set in the constructor. Test reuse of the same agent, or document a one-run-per-instance restriction; do not silently "fix" it.
+- `execute_actions()` runs sequentially. A submission stops the sequence and produces no normal observation. Test this even though the textual parser normally produces a single action.
+- The `finally` saves after each step attempt; unexpected errors append an `exit` message and are propagated. Failures before entering the loop (for example, the initial rendering) behave differently.
+- `get_template_vars()` merges agent configuration → environment → model → counters/time → extra variables → arguments. In the local environment, the platform and the environment variables are included.
+- The local shell uses `shell=True`: on POSIX the default is `/bin/sh -c`, even though the text mentions bash. Record an ADR: compatible mode reproduces `/bin/sh`; explicit bash is a separate, tested option with a declared divergence.
+- `cd` and `export` do not persist between actions; file changes do persist. `stderr` is merged into stdout, invalid UTF-8 is replaced, and a timeout kills the process group on POSIX.
+- Submission: `lines = output.lstrip().splitlines(keepends=True)`; it ends if `lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"` and `returncode == 0`; submission = `"".join(lines[1:])`. Spaces around the marker on the first line are accepted; a different case, extra text on the line, a log line before the marker, a non-zero return code, or the marker only in the LLM's text do not submit. CRLF is preserved in the submission; a marker without a trailing newline produces an empty submission. The full matrix (8 + 2 cases) is in STUDY §5.
+- **Class selection does not come from the textual YAML:** `default.yaml` and `mini_textbased.yaml` do not define `model.model_class`, and `get_model` falls back to `LitellmModel` (tool-calling). The Python oracle must instantiate `DefaultAgent`, `LitellmTextbasedModel`/`DeterministicModel`, and `LocalEnvironment` directly, or pass an explicit `model_class`. In Rust, the minimal CLI offers only the textual path, and this is a recorded decision, not parity with `mini` (STUDY §3.3).
+- The configs are Pydantic with `extra='ignore'`: the YAML's `mode: confirm` is dropped by `DefaultAgent`, unknown keys appear neither in `info.config` nor in the template context; `output_path` serializes as a string or `null`. Serde must ignore unknown fields in these structs and serialize `Option<PathBuf>` as `null`.
+- A background child that inherits stdout keeps the pipe open: the command only ends at the timeout, with partial output and the group killed (STUDY §4). Rust must reproduce this by reading until EOF, not until the parent shell exits.
+- `DeterministicModel` has special actions `raise`, `/sleep N`, and `/warning msg` that advance to the next output without counting a call; the global cost uses `cost_per_call` and the local cost uses the message's `extra.cost` (STUDY §3.4). In JSON, `raise` becomes a tag with the exception name.
+- `run()` accumulates `extra_template_vars` with `|=` and does not reset `n_consecutive_format_errors`; `save()` failures inside the `finally` replace the in-flight exception.
 
-**Aceite:** cada regra aponta para fonte/teste Python e possui cenário observável; divergências deliberadas têm ADR.
+**Acceptance:** each rule points to a Python source/test and has an observable scenario; deliberate divergences have an ADR.
 
-### Passo 2 — Criar o pacote Rust
+### Step 2 — Create the Rust package
 
-Executar a partir de `mini-rust-swe-agent/` quando começar a implementação:
+Run from `mini-rust-swe-agent/` when the implementation starts:
 
 ```bash
 cargo new --bin --edition 2024 --vcs none --name mini-swe rust-mini-swe-agent
@@ -154,99 +154,99 @@ cargo build
 cargo test
 ```
 
-`--vcs none` evita repositório aninhado. O pacote `mini-swe` terá import Rust `mini_swe`; o diretório continua `rust-mini-swe-agent`. Se a pasta já existir, inspecionar seu conteúdo antes de usar `cargo init`; não sobrescrever outro pacote. Ver [Cargo: criação de pacote](https://doc.rust-lang.org/cargo/guide/creating-a-new-project.html) e [cargo init](https://doc.rust-lang.org/cargo/commands/cargo-init.html).
+`--vcs none` avoids a nested repository. The `mini-swe` package will have the Rust import name `mini_swe`; the directory stays `rust-mini-swe-agent`. If the folder already exists, inspect its contents before using `cargo init`; do not overwrite another package. See [Cargo: creating a package](https://doc.rust-lang.org/cargo/guide/creating-a-new-project.html) and [cargo init](https://doc.rust-lang.org/cargo/commands/cargo-init.html).
 
-1. Adicionar `src/lib.rs`; manter `main.rs` apenas como composição e tratamento final de erros.
-2. Fixar a toolchain em `rust-toolchain.toml` com `channel = "1.99.1"` e componentes `rustfmt` e `clippy`, como em `../embeddings-fundamentals/`; `cargo 1.99.1` e `rustc 1.99.1` foram verificados instalados em 28/10/2026. Declarar `edition = "2024"`, `rust-version = "1.99"` e `publish = false`. Copiar o `clippy.toml` do crate irmão (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests = true`) para que a regra "sem unwrap fora de testes" seja verificada por lint, não por revisão.
-3. Versionar `Cargo.lock` do executável. Adicionar ignore de `target`, ambientes Python e relatórios temporários sem esconder fixtures.
-4. Introduzir dependências conforme a etapa: `serde`/`serde_json` (feature `preserve_order`, para que a ordem das chaves acompanhe a inserção como no Python), `thiserror`, `clap`, `regex`; `minijinja` com `UndefinedBehavior::Strict` como candidato ao motor de templates, validado no passo 5; `serde_yaml` ou sucessor mantido para YAML; `nix` (feature `signal`/`process`) para `killpg` sem `unsafe` próprio; biblioteca de HTTP somente no M2. Confirmar manutenção, licenças, MSRV e recursos antes de fixar versões. Estado em 28/10/2026: toolchain 1.99.1, `std::io::pipe` com `PipeWriter::try_clone`, `process_group` e `ExitStatusExt::signal` confirmados por compilação; `minijinja` (slices negativos, `length` em code points, `is defined` sob `Strict`), `nix::sys::signal::killpg`, `serde_yaml` e `cucumber` ainda **não confirmados**: verificar antes de fixar e gravar as versões em `spec/reference.json`.
-5. Preferir execução síncrona no primeiro marco, coerente com `std::process::Command` e o loop original. Tokio só quando houver necessidade comprovada de I/O concorrente. Não introduzir async em toda a API antecipadamente.
-6. Habilitar warnings e Clippy seletivamente; proibir unsafe próprio no núcleo quando possível. Não copiar automaticamente `panic=abort` ou ajustes agressivos de release: encerramento e limpeza precisam ser verificados.
+1. Add `src/lib.rs`; keep `main.rs` to composition and final error handling only.
+2. Pin the toolchain in `rust-toolchain.toml` with `channel = "1.99.1"` and the `rustfmt` and `clippy` components, as in `../embeddings-fundamentals/`; `cargo 1.99.1` and `rustc 1.99.1` were verified as installed on 2026-10-28. Declare `edition = "2024"`, `rust-version = "1.99"`, and `publish = false`. Copy `clippy.toml` from the sibling crate (`allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests = true`) so that the "no unwrap outside tests" rule is checked by a lint, not by review.
+3. Commit the executable's `Cargo.lock`. Ignore `target`, Python environments, and temporary reports without hiding fixtures.
+4. Add dependencies as each step needs them: `serde`/`serde_json` (feature `preserve_order`, so key order follows insertion as in Python), `thiserror`, `clap`, `regex`; `minijinja` with `UndefinedBehavior::Strict` as the candidate template engine, validated in step 5; `serde_yaml` or a maintained successor for YAML; `nix` (feature `signal`/`process`) for `killpg` without our own `unsafe`; an HTTP library only in M2. Confirm maintenance, licenses, MSRV, and features before pinning versions. State on 2026-10-28: toolchain 1.99.1, `std::io::pipe` with `PipeWriter::try_clone`, `process_group`, and `ExitStatusExt::signal` confirmed by compiling; `minijinja` (negative slices, `length` in code points, `is defined` under `Strict`), `nix::sys::signal::killpg`, `serde_yaml`, and `cucumber` **not yet confirmed**: check them before pinning and record the versions in `spec/reference.json`.
+5. Prefer synchronous execution in the first milestone, consistent with `std::process::Command` and the original loop. Use Tokio only when there is a proven need for concurrent I/O. Do not make the whole API async in advance.
+6. Enable warnings and Clippy selectively; forbid our own unsafe in the core where possible. Do not copy `panic=abort` or aggressive release settings automatically: shutdown and cleanup must be verified.
 
-**Aceite:** build, fmt, Clippy e testes básicos passam na toolchain fixada; biblioteca importável; binário sem lógica de domínio.
+**Acceptance:** build, fmt, Clippy, and basic tests pass on the pinned toolchain; the library is importable; the binary has no domain logic.
 
-### Passo 3 — Definir tipos e traits core
+### Step 3 — Define the core types and traits
 
-1. Criar `Model`, `Environment` e `Agent` com operações equivalentes aos protocols Python. Separar a representação interna do JSON de compatibilidade.
-2. Definir tipos para mensagem, ação, resultado da execução, estado final e estatísticas. Usar enums para resultados conhecidos e `serde_json::Value`/mapas apenas nas extensões necessárias.
-3. Usar `&str` e slices nas entradas, `&mut self` para estado mutável e ownership único do histórico. Generics são suficientes inicialmente; enums ou objetos de trait podem compor backends quando a CLI exigir seleção dinâmica.
-4. Modelar submissão/limite como resultado de controle carregando mensagens; falhas recuperáveis com `Result`, erros tipados com `thiserror`, contexto no limite da aplicação. Não transformar toda interrupção normal em falha fatal.
-5. Definir relógio injetável para testes que devolve segundos como `f64`, no modo paridade com semântica de parede igual a `time.time()`: `elapsed_seconds = int(now - start)` trunca rumo a zero, então `wall_time_limit_seconds: 1` ainda permite uma consulta aos 1,999 s. Um relógio monotônico muda términos e prompts e fica como ADR de produto fora do gate M1. O comparador exercita os limites avançando o relógio injetado, sem sleeps.
-6. Iniciar uma implementação roteirizada mínima de ambiente para testar o contrato antes de conectar processos reais. Isso é infraestrutura de teste; o modelo determinístico completo continua no passo 6.
+1. Create `Model`, `Environment`, and `Agent` with operations equivalent to the Python protocols. Keep the internal representation separate from the compatibility JSON.
+2. Define types for message, action, execution result, final state, and statistics. Use enums for known results and `serde_json::Value`/maps only for the extensions that need them.
+3. Use `&str` and slices for inputs, `&mut self` for mutable state, and single ownership of the history. Generics are enough at first; enums or trait objects can compose backends when the CLI needs dynamic selection.
+4. Model submission/limits as a control result that carries messages; recoverable failures with `Result`, typed errors with `thiserror`, context at the application boundary. Do not turn every normal interruption into a fatal failure.
+5. Define an injectable clock for tests that returns seconds as `f64`, with wall-clock semantics equal to `time.time()` in parity mode: `elapsed_seconds = int(now - start)` truncates toward zero, so `wall_time_limit_seconds: 1` still allows a query at 1.999 s. A monotonic clock changes terminations and prompts and stays as a product ADR outside the M1 gate. The comparator exercises the limits by advancing the injected clock, without sleeps.
+6. Start a minimal scripted environment implementation to test the contract before wiring up real processes. This is test infrastructure; the full deterministic model is still in step 6.
 
-**Aceite:** regras de serialização dos tipos e resultados de controle verificadas; APIs não exigem clone do histórico a cada passo; sem panic em erros esperados.
+**Acceptance:** serialization rules for the types and control results are verified; the APIs do not require cloning the history at each step; no panic on expected errors.
 
-### Passo 4 — Implementar LocalEnvironment
+### Step 4 — Implement LocalEnvironment
 
-1. Criar processos independentes com `std::process::Command`, cwd e ambiente obedecendo à precedência Python.
-2. Mesclar stdout/stderr no ponto de captura com **um único pipe**: criar com `std::io::pipe()` (estável desde Rust 1.87), passar o escritor como `Stdio` de stdout e um `try_clone()` dele como stderr, fechar as cópias do pai e ler o leitor até EOF numa thread. Não concatenar dois buffers ao final, pois isso altera a ordem. Ler até EOF, não até `wait()` retornar, para reproduzir o caso do filho em background que segura o pipe. Um programa mínimo com `std::io::pipe`, `try_clone`, `process_group(0)` e `ExitStatusExt::signal` compilou e rodou com `rustc 1.99.1` em 28/10/2026 (saída mesclada na ordem, `code() == None`, `signal() == Some(15)` para um shell morto por SIGTERM).
-3. Lançar o shell com `std::os::unix::process::CommandExt::process_group(0)` e, no timeout, `nix::sys::signal::killpg(pid, SIGKILL)` sobre o grupo; matar apenas o shell pai é insuficiente. `process_group(0)` faz `setpgid` (novo grupo, mesma sessão), enquanto `start_new_session=True` faz `setsid` (nova sessão e grupo); para `killpg` no líder o efeito é o mesmo, e a diferença de sessão (HUP, terminal controlador) fica registrada como ADR porque `setsid` via `pre_exec` exigiria `unsafe`. O timeout é um **prazo absoluto desde o spawn**, como em `communicate(timeout=...)`: a thread leitora lê até EOF e o pai espera o resultado até o deadline; nunca medir ociosidade entre bytes, pois um comando que escreve sem parar por 60 s com timeout 30 s precisa expirar aos 30 s. Após o prazo: `killpg`, `wait()`, devolver a saída parcial já lida. O shell é `/bin/sh -c <comando>`, como `shell=True` no POSIX.
-4. Definir retorno por sinal (Python entrega `-N` para sinal N; `ExitStatus::code()` é `None` e exige `ExitStatusExt::signal()`), falha ao criar processo, diretório inexistente, timeout e UTF-8 inválido (`String::from_utf8_lossy`, que substitui como `errors="replace"`). O resultado de erro é `returncode: -1`, `exception_info: "An error occurred while executing the command: ..."` e `extra.{exception_type, exception}`; `exception_type` usa o nome Python (`TimeoutExpired`, `FileNotFoundError`, `NotADirectoryError`) como metadado de compatibilidade, sem fingir traceback.
-5. Implementar marcador de submissão com testes de espaços iniciais, CRLF, linha sem newline, marcador no meio do output e retorno não zero.
-6. Executar comandos de teste apenas em diretórios temporários. Definir SOs suportados: Linux/macOS POSIX no início; Windows fica explicitamente fora desse gate.
+1. Create independent processes with `std::process::Command`, with cwd and environment following the Python precedence.
+2. Merge stdout/stderr at the capture point with **a single pipe**: create it with `std::io::pipe()` (stable since Rust 1.87), pass the writer as the stdout `Stdio` and a `try_clone()` of it as stderr, close the parent's copies, and read the reader until EOF in a thread. Do not concatenate two buffers at the end, since that changes the order. Read until EOF, not until `wait()` returns, to reproduce the case of a background child that holds the pipe. A minimal program with `std::io::pipe`, `try_clone`, `process_group(0)`, and `ExitStatusExt::signal` compiled and ran with `rustc 1.99.1` on 2026-10-28 (merged output in order, `code() == None`, `signal() == Some(15)` for a shell killed by SIGTERM).
+3. Launch the shell with `std::os::unix::process::CommandExt::process_group(0)` and, on timeout, call `nix::sys::signal::killpg(pid, SIGKILL)` on the group; killing only the parent shell is not enough. `process_group(0)` does `setpgid` (new group, same session), while `start_new_session=True` does `setsid` (new session and group); for `killpg` on the leader the effect is the same, and the session difference (HUP, controlling terminal) is recorded as an ADR because `setsid` through `pre_exec` would require `unsafe`. The timeout is an **absolute deadline from spawn**, as in `communicate(timeout=...)`: the reader thread reads until EOF and the parent waits for the result until the deadline; never measure idle time between bytes, because a command that writes nonstop for 60 s with a 30 s timeout must expire at 30 s. After the deadline: `killpg`, `wait()`, return the partial output already read. The shell is `/bin/sh -c <command>`, as `shell=True` on POSIX.
+4. Define the return code for a signal (Python gives `-N` for signal N; `ExitStatus::code()` is `None` and needs `ExitStatusExt::signal()`), process creation failure, a missing directory, timeout, and invalid UTF-8 (`String::from_utf8_lossy`, which replaces like `errors="replace"`). The error result is `returncode: -1`, `exception_info: "An error occurred while executing the command: ..."`, and `extra.{exception_type, exception}`; `exception_type` uses the Python name (`TimeoutExpired`, `FileNotFoundError`, `NotADirectoryError`) as compatibility metadata, without faking a traceback.
+5. Implement the submission marker with tests for leading spaces, CRLF, a line without a newline, the marker in the middle of the output, and a non-zero return code.
+6. Run test commands only in temporary directories. Define the supported OSes: Linux/macOS POSIX at first; Windows is explicitly outside this gate.
 
-**Aceite:** testes isolados de `LocalEnvironment` (cwd/env/precedência, retorno, sinal, stream mesclado, UTF-8, marcador, timeout) passam, sem depender do comparador do passo 7; dois casos de filho em background são obrigatórios: (a) filho que herda o stdout → `TimeoutExpired`, saída parcial preservada, grupo inteiro morto; (b) filho com stdio redirecionado → comando retorna 0 imediatamente e o descendente **sobrevive**, como na referência; nenhuma persistência indevida de cwd/env entre ações; arquivos persistem como no Python.
+**Acceptance:** isolated `LocalEnvironment` tests (cwd/env/precedence, return code, signal, merged stream, UTF-8, marker, timeout) pass, without depending on the comparator from step 7; two background-child cases are required: (a) a child that inherits stdout → `TimeoutExpired`, partial output preserved, whole group killed; (b) a child with redirected stdio → the command returns 0 immediately and the descendant **survives**, as in the reference; no unintended persistence of cwd/env between actions; files persist as in Python.
 
-### Passo 5 — Implementar DefaultAgent, configuração e templates
+### Step 5 — Implement DefaultAgent, configuration, and templates
 
-1. Reproduzir `run()`/`step()` como no STUDY §2: renderizar system e instance **uma vez, antes do loop** (falha aqui não salva trajetória); depois, a cada iteração, `step()` = verificar limites → `n_calls += 1` → consultar → somar custo e acrescentar `assistant` → executar ações em sequência → formatar observações; três saídas do passo: limpo (zera erros consecutivos), `FormatError` (cobra, conta, acrescenta mensagens e talvez `exit RepeatedFormatError`), interrupção com mensagens (`Submitted`, `LimitsExceeded`, `TimeExceeded`: só acrescenta) ou erro inesperado (acrescenta `exit` diagnóstico e propaga); `save` roda sempre após a tentativa, e só então se testa `messages[-1].role == "exit"`. Uma submissão interrompe `execute_actions` sem a observação normal.
-2. Preservar o caminho excepcional de erro de formato, custos, contadores e mensagens; separar erros inesperados de término normal.
-3. Reproduzir busca de YAML e merge de specs; testar false, zero, null, listas substituídas, objetos mesclados, chave vazia e campos desconhecidos. Os defaults das structs Rust são os do Pydantic, não os dos YAMLs; sem `deny_unknown_fields`:
+1. Reproduce `run()`/`step()` as in STUDY §2: render system and instance **once, before the loop** (a failure here does not save a trajectory); then, on each iteration, `step()` = check limits → `n_calls += 1` → query → add cost and append `assistant` → execute actions in sequence → format observations; the step has these outcomes: clean (resets consecutive errors), `FormatError` (charges, counts, appends messages, and maybe `exit RepeatedFormatError`), interruption with messages (`Submitted`, `LimitsExceeded`, `TimeExceeded`: only appends), or unexpected error (appends a diagnostic `exit` and propagates); `save` always runs after the attempt, and only then is `messages[-1].role == "exit"` tested. A submission stops `execute_actions` without the normal observation.
+2. Preserve the exceptional path for format errors, costs, counters, and messages; keep unexpected errors separate from normal termination.
+3. Reproduce the YAML lookup and the spec merge; test false, zero, null, replaced lists, merged objects, an empty key, and unknown fields. The Rust struct defaults are Pydantic's, not the YAMLs'; no `deny_unknown_fields`:
 
-| Campo | Default Pydantic | `default.yaml` | `mini_textbased.yaml` |
+| Field | Pydantic default | `default.yaml` | `mini_textbased.yaml` |
 |---|---|---|---|
 | `agent.step_limit` | 0 | 0 | 0 |
-| `agent.cost_limit` | 3.0 | 0.0 (desligado) | 3.0 |
-| `agent.wall_time_limit_seconds` | 0 | ausente | ausente |
-| `agent.max_consecutive_format_errors` | 3 | ausente | ausente |
-| `agent.output_path` | None | ausente | ausente |
-| `agent.mode` | não existe em `AgentConfig` | ausente | `confirm` (ignorado) |
-| `environment.{cwd, env, timeout}` | `""`, `{}`, 30 | só `env` | só `env` |
-| `model.action_regex` / `format_error_template` | regex padrão / template curto | — / template longo | — / template longo |
-| `model.cost_per_call` (determinístico) | 1.0 | — | — |
+| `agent.cost_limit` | 3.0 | 0.0 (off) | 3.0 |
+| `agent.wall_time_limit_seconds` | 0 | absent | absent |
+| `agent.max_consecutive_format_errors` | 3 | absent | absent |
+| `agent.output_path` | None | absent | absent |
+| `agent.mode` | does not exist in `AgentConfig` | absent | `confirm` (ignored) |
+| `environment.{cwd, env, timeout}` | `""`, `{}`, 30 | only `env` | only `env` |
+| `model.action_regex` / `format_error_template` | default regex / short template | — / long template | — / long template |
+| `model.cost_per_call` (deterministic) | 1.0 | — | — |
 
-4. Validar o motor de template com os arquivos reais `default.yaml` e `mini_textbased.yaml`. Recursos efetivamente usados: `{{ var }}`, `{% if %}`/`{% else %}`, `{% set %}`, teste `is defined`, operador `in [..]`, filtro `length`, slices de string `[:5000]`/`[-5000:]`, controle de whitespace `{%- -%}` e acesso a atributo (`output.output`). Verificar no MiniJinja slices negativos e contagem por code point; se algum recurso faltar, registrar ADR em vez de reescrever os templates. Comparar prompts byte a byte, nos três contextos descritos no STUDY §7, cada um com seu golden: system/instance (contexto completo do agente, cujo merge interno do ambiente é config → `platform.uname()` → `os.environ` → kwargs), observação (contexto do agente mais `output=`), erro de formato (apenas `actions`, `error` e `finish_reason`). Fixtures congelam `uname` e `environ` por injeção, senão o prompt depende da máquina. Testar colisões: env var `system` sobrescrevendo a plataforma e chave `output` no contexto, que no Python é erro de argumento duplicado. `get_template_vars` usa `model_dump()` sem `mode="json"`, portanto `output_path` chega ao template como objeto `Path`, não string.
-5. Testar truncamento de observações em torno de 10.000 caracteres, inclusive Unicode multibyte; contar caracteres como a referência, não bytes.
-6. Cobrir falha ao salvar e precedência entre erro original e erro de persistência. Melhorias como gravação atômica devem ter ADR e preservar o contrato externo definido.
+4. Validate the template engine with the real `default.yaml` and `mini_textbased.yaml` files. Features actually used: `{{ var }}`, `{% if %}`/`{% else %}`, `{% set %}`, the `is defined` test, the `in [..]` operator, the `length` filter, string slices `[:5000]`/`[-5000:]`, whitespace control `{%- -%}`, and attribute access (`output.output`). Check negative slices and code-point counting in MiniJinja; if a feature is missing, record an ADR instead of rewriting the templates. Compare prompts byte for byte, in the three contexts described in STUDY §7, each with its own golden: system/instance (the agent's full context, whose internal environment merge is config → `platform.uname()` → `os.environ` → kwargs), observation (the agent's context plus `output=`), format error (only `actions`, `error`, and `finish_reason`). Fixtures freeze `uname` and `environ` by injection; otherwise the prompt depends on the machine. Test collisions: an env var `system` overriding the platform, and an `output` key in the context, which in Python is a duplicate-argument error. `get_template_vars` uses `model_dump()` without `mode="json"`, so `output_path` reaches the template as a `Path` object, not a string.
+5. Test observation truncation around 10,000 characters, including multibyte Unicode; count characters as the reference does, not bytes.
+6. Cover a save failure and the precedence between the original error and the persistence error. Improvements such as atomic writes need an ADR and must preserve the defined external contract.
 
-**Aceite:** loop testado com o modelo e ambiente roteirizados mínimos do passo 3 (sequência de mensagens, custos, contadores e status de saída conferidos contra valores derivados à mão do código Python); templates completos do recorte passam, sem normalização de whitespace. A comparação automática com o Python fica para o passo 7.
+**Acceptance:** the loop is tested with the minimal scripted model and environment from step 3 (message sequence, costs, counters, and exit status checked against values derived by hand from the Python code); the full templates of the subset pass, with no whitespace normalization. Automatic comparison with Python is left for step 7.
 
-### Passo 6 — Modelo determinístico e oráculo diferencial
+### Step 6 — Deterministic model and differential oracle
 
-1. Reutilizar conceitualmente `models/test_models.py`, mantendo o runner externo à referência. `DeterministicModel` devolve mensagens já estruturadas: **ele sozinho não testa parsing da resposta textual**. O double Rust reproduz `cost_per_call` (estatística compartilhada) separado de `extra.cost` (custo do agente), as ações especiais `/sleep N` e `/warning msg` (avançam sem contar chamada) e `raise` como tag JSON com o nome da exceção; esgotar `outputs` é erro inesperado, como o `IndexError` Python.
-2. Criar dois conjuntos: respostas estruturadas para o loop; conteúdo bruto para o parser e adaptador textual. Simular também resposta faturada inválida para verificar cobrança e persistência.
-3. Definir fixtures JSON com tarefa, config, sequência de respostas, custo, saídas do ambiente, relógio e resultado esperado. Eventos de erro devem ser tags JSON, não objetos de exceção Python serializados. `tests/test_data/local.traj.json` serve apenas como roteiro de respostas e observações esperadas: é uma lista de mensagens com prompts de uma versão anterior dos templates, e `update_outputs_local.py` não roda mais com a `DeterministicModelConfig` atual (STUDY §10).
-4. O runner Python adapta a fixture aos componentes originais; o Rust consome a mesma fixture. Capturar pedidos enviados ao modelo e ações passadas ao ambiente, além da trajetória final.
-5. Casos de processo real usam cópias independentes do mesmo diretório inicial. Nunca rodar Python e Rust sequencialmente sobre o mesmo diretório mutável.
-6. Falhar se respostas ou outputs roteirizados sobrarem/faltarem. Evita testes que passam sem executar o cenário inteiro.
-7. As estatísticas compartilhadas são injetadas por cenário; `cargo test` roda em paralelo e um singleton de processo faria cenários dividirem orçamento, como o `reset_global_stats` do Python precisa contornar. Se existir algum fallback global, seus testes usam `--test-threads=1` ou `serial_test`.
+1. Reuse `models/test_models.py` conceptually, keeping the runner outside the reference. `DeterministicModel` returns messages that are already structured: **on its own it does not test parsing of the textual response**. The Rust double reproduces `cost_per_call` (shared statistics) separately from `extra.cost` (agent cost), the special actions `/sleep N` and `/warning msg` (advance without counting a call), and `raise` as a JSON tag with the exception name; running out of `outputs` is an unexpected error, like the Python `IndexError`.
+2. Create two sets: structured responses for the loop; raw content for the parser and the textual adapter. Also simulate an invalid billed response to check charging and persistence.
+3. Define JSON fixtures with the task, config, response sequence, cost, environment outputs, clock, and expected result. Error events must be JSON tags, not serialized Python exception objects. `tests/test_data/local.traj.json` serves only as a script of responses and expected observations: it is a list of messages with prompts from an earlier version of the templates, and `update_outputs_local.py` no longer runs with the current `DeterministicModelConfig` (STUDY §10).
+4. The Python runner adapts the fixture to the original components; Rust consumes the same fixture. Capture the requests sent to the model and the actions passed to the environment, in addition to the final trajectory.
+5. Real-process cases use independent copies of the same initial directory. Never run Python and Rust one after the other on the same mutable directory.
+6. Fail if scripted responses or outputs are left over or missing. This prevents tests that pass without running the whole scenario.
+7. Shared statistics are injected per scenario; `cargo test` runs in parallel, and a process singleton would make scenarios share a budget, which Python's `reset_global_stats` has to work around. If any global fallback exists, its tests use `--test-threads=1` or `serial_test`.
 
-**Aceite:** runner repetível offline, sem shell no conjunto puramente roteirizado e sem rede; diferenças reportadas por caminho JSON, com entradas e versões preservadas.
+**Acceptance:** a repeatable offline runner, with no shell in the purely scripted set and no network; differences reported by JSON path, with inputs and versions preserved.
 
-### Passo 7 — Serialização e comparação das saídas
+### Step 7 — Serialization and output comparison
 
-O envelope é `recursive_merge(agent_data, model.serialize(), env.serialize(), *extra_dicts)`, onde `agent_data` tem `info.model_stats.{instance_cost, api_calls}`, `info.config.{agent, agent_type}`, `info.mini_version`, `info.exit_status`, `info.submission` (os dois últimos lidos do `extra` da última mensagem, `""` se ausentes), `messages` e `trajectory_format: "mini-swe-agent-1.1"`; o modelo contribui `info.config.{model, model_type}` e o ambiente `info.config.{environment, environment_type}`. As configs entram via `model_dump(mode="json")` (Path → string, None → null). `save` cria os diretórios pai e grava `json.dumps(data, indent=2)`. Golden files vêm de `DefaultAgent.save()` no oráculo identificado; `local.traj.json` é uma lista de seis mensagens com templates antigos e não serve de golden.
+The envelope is `recursive_merge(agent_data, model.serialize(), env.serialize(), *extra_dicts)`, where `agent_data` has `info.model_stats.{instance_cost, api_calls}`, `info.config.{agent, agent_type}`, `info.mini_version`, `info.exit_status`, `info.submission` (the last two read from the last message's `extra`, `""` if absent), `messages`, and `trajectory_format: "mini-swe-agent-1.1"`; the model contributes `info.config.{model, model_type}` and the environment `info.config.{environment, environment_type}`. The configs go in through `model_dump(mode="json")` (Path → string, None → null). `save` creates the parent directories and writes `json.dumps(data, indent=2)`. Golden files come from `DefaultAgent.save()` on the identified oracle; `local.traj.json` is a list of six messages with old templates and is not usable as a golden.
 
-O comparador terá três resultados separados:
+The comparator will have three separate results:
 
-1. **Protocolo:** prompts, respostas, ações, observações e ordem coincidem.
-2. **Estado:** custos, número de chamadas, término, submissão e snapshots intermediários coincidem.
-3. **Processo/artefatos:** stdout, stderr, exit code e diff de arquivos coincidem segundo o contrato da CLI/ambiente.
+1. **Protocol:** prompts, responses, actions, observations, and order match.
+2. **State:** costs, number of calls, termination, submission, and intermediate snapshots match.
+3. **Process/artifacts:** stdout, stderr, exit code, and file diff match according to the CLI/environment contract.
 
-Política de normalização:
+Normalization policy:
 
-- Comparar o JSON **interpretado**, nunca os bytes: `json.dumps(indent=2)` escapa não-ASCII (`ensure_ascii=True`) e o `serde_json` não; separadores e indentação também podem diferir sem violar o contrato. Ordenar chaves apenas para exibir diff; manter ordem de arrays.
-- Congelar timestamps quando possível; caso contrário, normalizar somente caminhos aprovados como `messages[*].extra.timestamp`, preservando presença e tipo (float em segundos, como `time.time()`; `elapsed_seconds` é inteiro).
-- Mapear caminhos temporários e nomes de classes em `info.config.*_type` explicitamente. Comparar os valores originais contra os esperados antes do mapeamento.
-- Versão Rust e origem Python devem ter metadados próprios; não declarar que o Rust é a versão Python. Registrar mapeamento de `mini_version` para compatibilidade.
-- Tracebacks nativos diferem: validar presença/categoria e normalizar apenas o campo diagnosticamente não portátil. Não apagar `extra` inteiro.
-- Strings de prompts, comandos, output e submissão são exatas. Não aplicar strip ou remover linhas para “corrigir” divergências.
-- Custo deve ter política explícita: comparação exata em fixtures controladas e tolerância pequena justificada para floating point calculado; testar limiares sem arredondar antes de decidir término.
-- Campo ausente, null, string vazia e zero continuam distintos. JSON inesperado deve falhar, não ser ignorado.
+- Compare the **parsed** JSON, never the bytes: `json.dumps(indent=2)` escapes non-ASCII (`ensure_ascii=True`) and `serde_json` does not; separators and indentation can also differ without breaking the contract. Sort keys only to display the diff; keep array order.
+- Freeze timestamps when possible; otherwise normalize only approved paths such as `messages[*].extra.timestamp`, preserving presence and type (float seconds, like `time.time()`; `elapsed_seconds` is an integer).
+- Map temporary paths and class names in `info.config.*_type` explicitly. Compare the original values against the expected ones before mapping.
+- The Rust version and the Python origin must have their own metadata; do not claim that Rust is the Python version. Record the `mini_version` mapping used for compatibility.
+- Native tracebacks differ: validate presence/category and normalize only the diagnostically non-portable field. Do not drop the whole `extra`.
+- Prompt, command, output, and submission strings are exact. Do not strip or remove lines to "fix" divergences.
+- Cost needs an explicit policy: exact comparison in controlled fixtures and a small, justified tolerance for computed floating point; test thresholds without rounding before deciding termination.
+- Absent field, null, empty string, and zero stay distinct. Unexpected JSON must fail, not be ignored.
 
-Testar o próprio comparador com mutações: alterar um comando, uma mensagem, custo, campo ausente e ordem deve falhar; alterar exclusivamente timestamp autorizado deve passar. Golden files só podem ser atualizados conscientemente a partir do Python identificado, com revisão do diff.
+Test the comparator itself with mutations: changing a command, a message, a cost, a missing field, or the order must fail; changing only an authorized timestamp must pass. Golden files may only be updated deliberately from the identified Python, with a review of the diff.
 
-Interface **planejada**, a implementar antes de usar:
+**Planned** interface, to implement before use:
 
 ```bash
 .venv-reference/bin/python parity/python_runner.py --fixture parity/fixtures/success.json --output reports/python.json
@@ -254,59 +254,59 @@ cargo run --manifest-path rust-mini-swe-agent/Cargo.toml --bin parity-runner -- 
 .venv-reference/bin/python parity/compare.py reports/python.json reports/rust.json
 ```
 
-`parity-runner` será um alvo auxiliar, não a interface de produção. O comparador deverá retornar zero para equivalência, um para diferença e outro código documentado para erro de execução.
+`parity-runner` will be an auxiliary target, not the production interface. The comparator should return zero for equivalence, one for a difference, and another documented code for an execution error.
 
-**Aceite:** o comparador rejeita cada mutação listada (comando, mensagem, custo, campo ausente, ordem) e aceita apenas o timestamp autorizado; ao menos uma fixture roteirizada produz envelope Python e Rust equivalentes segundo a política acima; os campos `*_type` e `mini_version` do Rust estão documentados com o mapeamento usado.
+**Acceptance:** the comparator rejects each listed mutation (command, message, cost, missing field, order) and accepts only the authorized timestamp; at least one scripted fixture produces equivalent Python and Rust envelopes under the policy above; Rust's `*_type` and `mini_version` fields are documented with the mapping used.
 
-### Passo 8 — BDD/Cucumber e CLI mínima
+### Step 8 — BDD/Cucumber and minimal CLI
 
-Criar cenários Gherkin em `parity/features/`, executados por um alvo de teste Rust com Cucumber. Usar adapters para as mesmas fixtures Python; não duplicar expectativas manualmente em duas suítes. Confirmar a API e versão da crate Cucumber na implementação. BDD documenta comportamento público; testes unitários continuam cobrindo detalhes do parser e merge.
+Create Gherkin scenarios in `parity/features/`, run by a Rust test target with Cucumber. Use adapters for the same Python fixtures; do not duplicate expectations by hand in two suites. Confirm the Cucumber crate's API and version during implementation. BDD documents public behavior; unit tests still cover parser and merge details.
 
 ```gherkin
-Feature: Conclusão e limites do agente textual
-  Scenario: Submissão encerra a execução
-    Given uma tarefa com respostas determinísticas
-    And o comando retorna o marcador de submissão e "resolvido" com código zero
-    When executo o cenário nos harnesses Python e Rust
-    Then ambos terminam com status "Submitted"
-    And a submissão e o histórico são equivalentes
-    And nenhuma consulta adicional é realizada
+Feature: Completion and limits of the textual agent
+  Scenario: Submission ends the run
+    Given a task with deterministic responses
+    And the command returns the submission marker and "resolved" with exit code zero
+    When I run the scenario in the Python and Rust harnesses
+    Then both end with status "Submitted"
+    And the submission and the history are equivalent
+    And no additional query is made
 
-  Scenario: Limite é verificado antes da próxima consulta
-    Given um limite de 1 chamada e uma resposta que não submete
-    When executo o cenário nos harnesses Python e Rust
-    Then exatamente 1 consulta é realizada em cada harness
-    And ambos terminam com status "LimitsExceeded"
+  Scenario: The limit is checked before the next query
+    Given a limit of 1 call and a response that does not submit
+    When I run the scenario in the Python and Rust harnesses
+    Then exactly 1 query is made in each harness
+    And both end with status "LimitsExceeded"
 ```
 
-Adicionar cenários para timeout com filho, shell sem estado persistente, erro de formato consecutivo, custo no limiar, template inválido, saída Unicode e gravação em falha.
+Add scenarios for timeout with a child, shell with no persistent state, consecutive format errors, cost at the threshold, invalid template, Unicode output, and saving on failure.
 
-A CLI mínima aceita tarefa, config repetível, modelo, ambiente, limites e arquivo de saída. Defaults devem selecionar o agente não interativo e caminho textual. O `mini` Python usa agente interativo por padrão e, sem `model_class`, o modelo de tool-calling: o runner de comparação instancia `DefaultAgent` e o modelo textual/determinístico diretamente, sem passar pelo `mini`. Documentar correspondência e divergências de flags/exit codes, sem prometer interface completa de `mini-extra`. Política de interrupção: no Python, `KeyboardInterrupt` não passa pelo `except Exception`, mas o `finally` ainda salva a trajetória; a CLI Rust instala um handler de SIGINT que salva o estado corrente e sai com código documentado, em vez do abort padrão sem save. Exit code: 0 para término normal (qualquer `exit_status`), diferente de zero para erro propagado.
+The minimal CLI accepts the task, a repeatable config, model, environment, limits, and output file. Defaults must select the non-interactive agent and the textual path. Python's `mini` uses the interactive agent by default and, without `model_class`, the tool-calling model: the comparison runner instantiates `DefaultAgent` and the textual/deterministic model directly, without going through `mini`. Document how flags/exit codes correspond and where they diverge, without promising the full `mini-extra` interface. Interruption policy: in Python, `KeyboardInterrupt` does not go through `except Exception`, but the `finally` still saves the trajectory; the Rust CLI installs a SIGINT handler that saves the current state and exits with a documented code, instead of the default abort without saving. Exit code: 0 for normal termination (any `exit_status`), non-zero for a propagated error.
 
-**Aceite M1:** os gates P01–P18 do STUDY §10 estão fechados, cada um apontando para o teste ou fixture que o cobre; as features Gherkin obrigatórias são as nominadas acima (submissão, limite antes da consulta, timeout com filho, shell sem estado, erro de formato consecutivo, custo no limiar, template inválido, saída Unicode, gravação em falha), sem skip silencioso; CLI gera trajetória legível; relatório indica exatamente o que foi testado.
+**M1 acceptance:** the gates P01–P18 from STUDY §10 are closed, each pointing to the test or fixture that covers it; the required Gherkin features are the ones named above (submission, limit before the query, timeout with a child, stateless shell, consecutive format errors, cost at the threshold, invalid template, Unicode output, saving on failure), with no silent skip; the CLI produces a readable trajectory; the report states exactly what was tested.
 
-### Passo 9 — Um provedor real (M2)
+### Step 9 — One real provider (M2)
 
-1. Escolher e registrar provedor, modelo e formato de API; manter ações textuais de shell.
-2. Implementar autenticação por variável de ambiente, payload, timeout, retry limitado, erros HTTP, respostas vazias/truncadas, usage e custo. Não registrar tokens ou payloads sensíveis.
-3. Usar servidor HTTP de teste e respostas gravadas/sanitizadas para comparar o adaptador com o caminho Python escolhido. LiteLLM agrega comportamento que não é automaticamente reproduzido por um cliente HTTP.
-4. Testar separadamente 401/403, 429, 5xx, timeout e JSON inválido. Congelar tempo/backoff nos testes; distinguir tentativas HTTP de consultas contabilizadas pelo agente.
-5. Executar smoke test real opt-in com orçamento explícito e diretório descartável. Não exigir texto idêntico de duas chamadas reais, mesmo com temperatura zero.
-6. Avaliar tarefas fixas com número de amostras, versão do modelo, custo, latência e taxa de sucesso. Separar variação do modelo de regressão do harness.
+1. Choose and record the provider, model, and API format; keep textual shell actions.
+2. Implement authentication through an environment variable, payload, timeout, bounded retry, HTTP errors, empty/truncated responses, usage, and cost. Do not log tokens or sensitive payloads.
+3. Use a test HTTP server and recorded/sanitized responses to compare the adapter with the chosen Python path. LiteLLM adds behavior that a plain HTTP client does not reproduce automatically.
+4. Test 401/403, 429, 5xx, timeout, and invalid JSON separately. Freeze time/backoff in tests; distinguish HTTP attempts from queries counted by the agent.
+5. Run an opt-in real smoke test with an explicit budget and a disposable directory. Do not require identical text from two real calls, even at temperature zero.
+6. Evaluate fixed tasks with the number of samples, model version, cost, latency, and success rate. Separate model variation from harness regressions.
 
-**Aceite M2:** contrato HTTP gravado passa, teste real identificado funciona e custos estão visíveis. Isso comprova apenas a integração selecionada.
+**M2 acceptance:** the recorded HTTP contract passes, an identified real test works, and costs are visible. This proves only the selected integration.
 
-### Passo 10 — Docker (M3) e expansão controlada (M4)
+### Step 10 — Docker (M3) and controlled expansion (M4)
 
-Docker tem contrato próprio em `spec/docker.md`: imagem por digest, criação, cwd, `env` versus `forward_env`, argumentos, interpretador (`bash -lc` na referência), timeout de pull/exec, output e limpeza. Testar indisponibilidade do daemon, startup parcial, comando com filho, timeout, interrupção e remoção do container. Um timeout do cliente `docker exec` não prova que o processo dentro do container foi encerrado.
+Docker has its own contract in `spec/docker.md`: image by digest, creation, cwd, `env` versus `forward_env`, arguments, interpreter (`bash -lc` in the reference), pull/exec timeout, output, and cleanup. Test an unavailable daemon, partial startup, a command with a child, timeout, interruption, and container removal. A `docker exec` client timeout does not prove that the process inside the container was terminated.
 
-Separar testes do comando Docker roteirizado dos testes reais de isolamento. Verificar mounts, acesso a host/socket, rede, usuário e limites de recursos; um container com mounts amplos não é isolamento suficiente por si só. Perfis mais restritos são decisões de segurança documentadas, não paridade presumida. Limpeza explícita e verificável deve ser a via principal; `Drop` apenas fallback, sem panic nem dependência de async no destrutor.
+Keep tests of the scripted Docker command separate from real isolation tests. Check mounts, access to the host/socket, network, user, and resource limits; a container with broad mounts is not enough isolation on its own. Stricter profiles are documented security decisions, not assumed parity. Explicit, verifiable cleanup must be the main path; `Drop` is only a fallback, with no panic and no dependency on async in the destructor.
 
-Só depois ampliar provedores, ambientes, interface interativa e benchmarks. Para cada item: contrato → fixture Python → adaptação Rust → testes diferenciais → teste integrado → relatório. Execução em lote exige limites de concorrência, isolamento por tarefa, escrita coordenada de resultados e retomada. Tool-calling/multimodal permanecem excluídos até mudança de escopo.
+Only then extend providers, environments, the interactive interface, and benchmarks. For each item: contract → Python fixture → Rust adaptation → differential tests → integration test → report. Batch runs need concurrency limits, per-task isolation, coordinated writing of results, and resumption. Tool-calling/multimodal stay excluded until the scope changes.
 
-### Passo 11 — Qualidade, CI e evidências do estudo
+### Step 11 — Quality, CI, and study evidence
 
-Pipeline proposto:
+Proposed pipeline:
 
 ```bash
 cargo fmt --manifest-path rust-mini-swe-agent/Cargo.toml --check
@@ -315,41 +315,41 @@ cargo test --manifest-path rust-mini-swe-agent/Cargo.toml --locked
 cargo doc --manifest-path rust-mini-swe-agent/Cargo.toml --no-deps
 ```
 
-Adicionar jobs de Python/oráculo e comparação offline, BDD, Linux/macOS e MSRV. Docker e provedores reais ficam em jobs separados com pré-requisitos explícitos. Uma suíte pulada por falta de credenciais/daemon é **não verificada**, não aprovada. Publicar os diffs de paridade como artefatos de CI, com segredos removidos.
+Add jobs for Python/the oracle and offline comparison, BDD, Linux/macOS, and MSRV. Docker and real providers go in separate jobs with explicit prerequisites. A suite skipped for lack of credentials/daemon is **unverified**, not passed. Publish the parity diffs as CI artifacts, with secrets removed.
 
-Medir startup, memória e throughput do loop com modelo/ambiente simulados em release; medir latência ponta a ponta e custos separadamente com API real. Fixar hardware, versões, workload e repetições. Não prometer que Rust acelera uma execução dominada pelo tempo do LLM.
+Measure startup, memory, and loop throughput with a simulated model/environment in release mode; measure end-to-end latency and costs separately with a real API. Pin the hardware, versions, workload, and repetitions. Do not promise that Rust speeds up a run dominated by LLM time.
 
-## 5. Aplicação de rust-skills
+## 5. Applying rust-skills
 
-A skill foi consultada para este plano. Aplicar regras por necessidade, não todas as otimizações de forma automática:
+The skill was consulted for this plan. Apply rules as needed, not every optimization automatically:
 
-| Regras | Aplicação neste projeto |
+| Rules | Application in this project |
 |---|---|
-| `own-borrow-over-clone`, `own-slice-over-vec` | Emprestar histórico; mover mensagens novas; sem clones grandes por conveniência |
-| `err-result-over-panic`, `err-thiserror-lib`, `err-context-chain` | Falhas de processo/rede/config com Result e causa preservada |
-| `type-no-stringly`, `pat-exhaustive-enum` | Estados e términos tipados, conversão explícita para JSON de compatibilidade |
-| `serde-default-compat`, `serde-flatten` | Preservar extras e distinções do schema; defaults só onde há contrato |
-| `proj-lib-main-split`, `proj-flat-small`, `proj-msrv-declare` | Um pacote simples, lib testável, main fino e toolchain reproduzível |
-| `test-mock-traits`, `test-integration-dir` | Dependências roteirizadas e cenários de ponta a ponta |
-| `obs-structured-fields`, `obs-no-sensitive-data` | Run ID, fase, duração e custo em logs estruturados sem segredos |
-| `perf-profile-first`, `anti-premature-optimize` | Medir antes de Arc, pools, cache ou coleções especializadas |
+| `own-borrow-over-clone`, `own-slice-over-vec` | Borrow the history; move new messages; no large clones for convenience |
+| `err-result-over-panic`, `err-thiserror-lib`, `err-context-chain` | Process/network/config failures with Result and the cause preserved |
+| `type-no-stringly`, `pat-exhaustive-enum` | Typed states and terminations, explicit conversion to compatibility JSON |
+| `serde-default-compat`, `serde-flatten` | Preserve the schema's extras and distinctions; defaults only where there is a contract |
+| `proj-lib-main-split`, `proj-flat-small`, `proj-msrv-declare` | One simple package, testable lib, thin main, and reproducible toolchain |
+| `test-mock-traits`, `test-integration-dir` | Scripted dependencies and end-to-end scenarios |
+| `obs-structured-fields`, `obs-no-sensitive-data` | Run ID, phase, duration, and cost in structured logs, without secrets |
+| `perf-profile-first`, `anti-premature-optimize` | Measure before Arc, pools, caches, or specialized collections |
 
-Evitar `unwrap`/`expect` em caminhos normais; preferir APIs seguras para processos. Não introduzir `unsafe`, generics excessivos ou async apenas para demonstrar domínio técnico. Se async entrar depois, garantir cancelamento, limites de concorrência e ausência de locks mantidos através de await.
+Avoid `unwrap`/`expect` on normal paths; prefer safe process APIs. Do not introduce `unsafe`, excessive generics, or async just to show technical skill. If async comes in later, ensure cancellation, concurrency limits, and no locks held across await.
 
-## 6. Critério de conclusão e checklist
+## 6. Completion criteria and checklist
 
-- [ ] Referência e ambiente Python reproduzíveis, origem identificada.
-- [ ] Escopo e contratos aprovados no repositório; exclusões transparentes.
-- [ ] Pacote Rust criado, build e verificações de qualidade passando.
-- [ ] LocalEnvironment correto, incluindo timeout e descendentes.
-- [ ] Loop, templates, parsing, custos e limites equivalentes.
-- [ ] Comparador testado contra diferenças reais; normalizações restritas.
-- [ ] Trajetórias e snapshots intermediários equivalentes nas fixtures.
-- [ ] Cenários Cucumber passando junto com testes Rust/Python.
-- [ ] CLI mínima e instruções reproduzíveis publicadas (M1).
-- [ ] Provedor real escolhido validado com contrato e smoke test (M2).
-- [ ] Docker validado separadamente ou explicitamente pendente (M3).
-- [ ] Expansões com cobertura por componente, sem alegar paridade integral (M4).
-- [ ] README atualizado com comandos executados, resultados, limitações e links para evidências.
+- [ ] Python reference and environment reproducible, origin identified.
+- [ ] Scope and contracts approved in the repository; exclusions transparent.
+- [ ] Rust package created, build and quality checks passing.
+- [ ] LocalEnvironment correct, including timeout and descendants.
+- [ ] Loop, templates, parsing, costs, and limits equivalent.
+- [ ] Comparator tested against real differences; normalizations restricted.
+- [ ] Trajectories and intermediate snapshots equivalent in the fixtures.
+- [ ] Cucumber scenarios passing along with the Rust/Python tests.
+- [ ] Minimal CLI and reproducible instructions published (M1).
+- [ ] Chosen real provider validated with a contract and a smoke test (M2).
+- [ ] Docker validated separately or explicitly pending (M3).
+- [ ] Expansions with per-component coverage, without claiming full parity (M4).
+- [ ] README updated with the commands run, results, limitations, and links to evidence.
 
-Cada etapa pode ser um PR pequeno. A descrição deve explicar mudança de comportamento, referência Python e validação. O portfólio demonstra engenharia pelo vínculo entre requisito, decisão, teste e evidência; não pelo número de dependências ou por resultados ainda não medidos.
+Each step can be a small PR. The description must explain the behavior change, the Python reference, and the validation. The portfolio shows engineering through the link between requirement, decision, test, and evidence; not through the number of dependencies or through results not yet measured.

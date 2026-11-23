@@ -18,10 +18,10 @@ use clap::Args;
 use serde::{Serialize, Serializer};
 use tokio::process::Command;
 
-use crate::classifier::decisao::float_de_texto;
-use crate::classifier::estado::montar_estado;
-use crate::classifier::provedor::{ADAPTER_VERSION, PROVIDER};
-use crate::classifier::texto::strip;
+use crate::classifier::decision::float_de_texto;
+use crate::classifier::provider::{ADAPTER_VERSION, PROVIDER};
+use crate::classifier::state::montar_estado;
+use crate::classifier::text::strip;
 use crate::classifier::{
     Categoria, Classificacao, EntradaClassificacao, ErroCategoria, EstadoClassificacao,
     EstadoEnviado, MASCARAMENTO_VERSAO_PORTE, MotivoCli, MotivoCodigo, OrigemTexto,
@@ -879,8 +879,8 @@ impl Fonte for FontePoppler {
         ];
         let figuras = saida_de("pdfimages", &lista).await;
         let info = saida_de("pdfinfo", &tamanho).await;
-        // A failed inspection is visual: "é mais barato renderizar à toa do que perder
-        // conteúdo" (TP `pdf_extract._is_visual`).
+        // A failed inspection is visual: "rendering for nothing is cheaper than losing
+        // content" (TP `pdf_extract._is_visual`).
         let (Some(figuras), Some(info)) = (figuras, info) else {
             return true;
         };
@@ -935,7 +935,7 @@ fn ler_env(itens: dotenvy::Result<dotenvy::Iter<std::fs::File>>) -> HashMap<Stri
 
 /// The environment of the binary: process variables, then the `.env` found from the
 /// current directory up, then the crate root's `.env` (spec/CLASSIFIER.md §12), so that
-/// `anonimizador batch --classifier`, run from another directory, finds the key too.
+/// `anonymizer batch --classifier`, run from another directory, finds the key too.
 /// Neither file changes the process environment.
 fn ambiente_do_processo() -> impl Fn(&str) -> Option<String> {
     let raiz = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");

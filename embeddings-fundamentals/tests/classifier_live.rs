@@ -17,8 +17,8 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
-use embeddings_fundamentals::classifier::estado::montar_estado;
 use embeddings_fundamentals::classifier::jev::{Chave, ClienteJev, modelo_fixo};
+use embeddings_fundamentals::classifier::state::montar_estado;
 use embeddings_fundamentals::classifier::{
     Avaliador, EntradaClassificacao, Envio, EstadoClassificacao, MODELO_PADRAO, OrigemTexto,
     Pagina, PaginasModo, classificar,

@@ -64,11 +64,11 @@ CLASSIFIER_REMOTE_ALLOWED=1 target/release/embeddings-fundamentals classify --js
 RUN_JEV_LIVE=1 CLASSIFIER_REMOTE_ALLOWED=1 cargo test --features classifier-jev --test classifier_live -- --ignored --nocapture
 ```
 
-**The `classify` command can send to Jev only from a binary built with `--features classifier-jev`.** The feature is off by default, like the engine features. A binary built without it refuses authorized sending: with `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`, the result is `erro`, exit 5 (`configuracao_invalida`), and nothing is sent. Without `--enviar` both builds behave the same (`preparado`). The same holds for the binary passed to `anonimizador batch --classifier`: build it with the feature before a `--classify-remote` run.
+**The `classify` command can send to Jev only from a binary built with `--features classifier-jev`.** The feature is off by default, like the engine features. A binary built without it refuses authorized sending: with `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`, the result is `erro`, exit 5 (`configuracao_invalida`), and nothing is sent. Without `--enviar` both builds behave the same (`preparado`). The same holds for the binary passed to `anonymizer batch --classifier`: build it with the feature before a `--classify-remote` run.
 
 The key goes in `.env` as `TYPESAFE_API_KEY` (see `.env.example`). The binary reads the process environment first, then the `.env` from the working directory up, then this crate's `.env`. `CLASSIFIER_REMOTE_ALLOWED` is read from the process only, never from a `.env`, so every sending run sets it explicitly.
 
-The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonimizador verify` tool, is the job of the sibling project `../anonimizador`.
+The full reproduction of the final report is in `reports/README.md`. Building the owner corpus (`draft-manifest`, `draft-labels`) is described in `TESTS.md`. Anonymizing real documents, with the `anonymizer verify` tool, is the job of the sibling project `../anonymizer`.
 
 Feature files are **generated**: edit the Gherkin in `spec/PRD.md`, bump `config/acceptance.toml`, and run `scripts/sync-features.py`. Never hand-edit `us*.feature` or `rel*.feature`; only `harness.feature` is hand-written. BDD never shells out: `FixtureExtractor` replays `tests/fixtures/extraction/` (captured tool output), and the deterministic adapter supplies vectors. Use `with_keyword_vector` when a scenario needs a ranking that can be derived by hand.
 
@@ -85,10 +85,10 @@ The owner keeps **real medical exams, with patient names in file names and conte
 - **No commits.** Never commit, push, or upload these files, or anything derived from them: extracted text, OCR output, images, renders, records, vectors, file names, or per-document numbers that identify a file. Stage only explicit paths (`git add <path>`), never `git add -A` or `git add .`, and check `git diff --cached --name-only` before every commit.
 - **No external services.** Never send these files or their content to reviewers (Grok, Codex, Antigravity) or to any remote engine (`remote_allowed` stays false for them). Run reviewers from a clean worktree of the committed branch (`git worktree add --detach <dir> <commit>`), which does not contain the directory.
   - **One exception (owner decision, 2026-10-31; `spec/CLASSIFIER.md` §3.1):**
-    - **What may be sent:** the exam-type classifier may send to TypeSafe's Jev the *masked* text of an **anonymized copy** that passed the `anonimizador` re-verification (`verify` ok).
+    - **What may be sent:** the exam-type classifier may send to TypeSafe's Jev the *masked* text of an **anonymized copy** that passed the `anonymizer` re-verification (`verify` ok).
     - **When:** only with both `--enviar` and `CLASSIFIER_REMOTE_ALLOWED=1`.
     - **Still forbidden:** sending text of the originals, sending to reviewers, and committing any classifier output for these files.
-  - **A second exception (owner decision, 2026-10-31):** the owner stores the originals in a private Cloudflare R2 bucket (`sample-exams`). `../anonimizador/scripts/anonymize-r2.py` uploads the anonymized copies whose re-verification is `ok` to the private bucket `anonymized`. Indexes, logs and the ledger stay local.
+  - **A second exception (owner decision, 2026-10-31):** the owner stores the originals in a private Cloudflare R2 bucket (`sample-exams`). `../anonymizer/scripts/anonymize-r2.py` uploads the anonymized copies whose re-verification is `ok` to the private bucket `anonymized`. Indexes, logs and the ledger stay local.
 - **Local tests only.**
   - Tests that use them are `#[ignore]`d and opt-in (`RUN_SAMPLE_EXAMS=1`, `tests/sample_exams.rs`).
   - They work on temporary copies only and never persist outputs in the repository.

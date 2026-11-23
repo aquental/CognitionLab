@@ -12,7 +12,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use embeddings_fundamentals::classifier::pyre::{Flags, PyRegex};
-use embeddings_fundamentals::classifier::texto::MapaOffsets;
+use embeddings_fundamentals::classifier::text::MapaOffsets;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -21,12 +21,12 @@ use serde_json::{Value, json};
 #[expect(clippy::expect_used, reason = "test helper")]
 fn vectors() -> Value {
     let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/classifier/vetores.json");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/classifier/vectors.json");
     serde_json::from_slice(&std::fs::read(path).expect("read the vectors")).expect("parse")
 }
 
 /// Every regex of the vectors' `regexes` section, with StealthApp's flags
-/// (`mascaramento.py`; spec §6.4, "Inventário").
+/// (`mascaramento.py`; spec §6.4, "Inventory of the N1 regexes").
 #[expect(clippy::expect_used, reason = "test helper")]
 fn tv_regexes() -> Vec<(String, String, Flags)> {
     let v = vectors();
