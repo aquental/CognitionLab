@@ -26,3 +26,5 @@ rustc-ice-*.txt
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 /embeddings-fundamentals/tests/sample-exams/
+# macOS Finder metadata
+.DS_Store
