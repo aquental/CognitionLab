@@ -87,7 +87,7 @@ embeddings-fundamentals/
 │   ├── sync-features.py        # Generates tests/features/*.feature from spec/PRD.md for acceptance.toml
 │   ├── precompute-metrics.py   # Independently precomputes expected evaluation metrics
 │   └── review-package.sh       # Builds adversarial review packages
-├── TESTS.md                    # Owner-corpus construction (anonymization lives in ../anonimizador)
+├── TESTS.md                    # Owner-corpus construction (anonymization lives in ../anonymizer)
 └── reports/                    # Progress log, phase comparison reports, spikes, and adversarial reviews
 ```
 

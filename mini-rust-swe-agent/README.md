@@ -1,176 +1,176 @@
-# Mini Rust SWE Agent — estudo de engenharia de agentes
+# Mini Rust SWE Agent — a study in agent engineering
 
-Este projeto estuda a reimplementação do harness do **mini-swe-agent em Rust**, usando a implementação Python como referência executável. O foco é demonstrar engenharia de sistemas de IA: compreender o ciclo de um agente, definir contratos, controlar efeitos de execução, medir comportamento e justificar decisões com testes reproduzíveis.
+This project studies a reimplementation of the **mini-swe-agent harness in Rust**, using the Python implementation as an executable reference. The focus is on AI systems engineering: understand an agent's loop, define contracts, control execution side effects, measure behavior, and justify decisions with reproducible tests.
 
-**Status em 28/10/2026:** análise da referência e plano de migração documentados. O pacote Rust ainda não foi criado nesta entrega; não há paridade, integração com provedor ou ganho de desempenho comprovados. O roteiro executável de trabalho está em [spec/PLAN.md](spec/PLAN.md).
+**Status on 2026-10-28:** the reference analysis and the migration plan are documented. The Rust package has not been created in this delivery. Parity, provider integration, and performance gains are not proven. The working roadmap is in [spec/PLAN.md](spec/PLAN.md).
 
-A contribuição deste estudo é a análise, o desenho da migração e, nas próximas etapas, a implementação e validação em Rust. O harness original, seus prompts e testes pertencem ao projeto [mini-swe-agent](mini-swe-agent/README.md), de Kilian Lieret, Carlos E. Jimenez e contribuidores. Preservar a [licença original](mini-swe-agent/LICENSE.md) nas adaptações pertinentes.
+This study contributes the analysis, the migration design and, in later stages, the Rust implementation and its validation. The original harness, its prompts, and its tests belong to the [mini-swe-agent](mini-swe-agent/README.md) project, by Kilian Lieret, Carlos E. Jimenez, and contributors. Keep the [original license](mini-swe-agent/LICENSE.md) in any adaptation where it applies.
 
-## O que está sendo construído
+## What is being built
 
-Um harness é o software que conecta o modelo ao mundo: monta o contexto, consulta o LLM, interpreta sua ação, executa a ação, devolve a observação e decide quando parar. O modelo propõe comandos; o harness determina como esses comandos são interpretados, executados e registrados.
+A harness is the software that connects the model to the world: it builds the context, queries the LLM, interprets its action, executes the action, returns the observation, and decides when to stop. The model proposes commands; the harness decides how those commands are interpreted, executed, and recorded.
 
-O recorte inicial deste projeto mantém histórico linear e ações textuais de shell, sem tool-calling nativo ou sessão de shell persistente, conforme [o enunciado local](spec/prompt/migrate.md). A referência Python atual declara **versão 2.4.6** e contém capacidades adicionais. Elas estão catalogadas abaixo para mostrar o sistema completo, mas não são automaticamente entregáveis do primeiro marco.
+The initial scope of this project keeps a linear history and textual shell actions, with no native tool-calling and no persistent shell session, as set by [the local task statement](spec/prompt/migrate.md). The current Python reference declares **version 2.4.6** and has more capabilities. They are listed below to show the full system, but they are not automatically deliverables of the first milestone.
 
-A migração seguirá: contratos e referência reproduzível → traits → ambiente local → loop → modelo determinístico → trajetória → CLI → provedor real → Docker e expansões. Dependências simuladas permitem verificar o núcleo antes de ligar shell e rede. O plano inclui BDD com Cucumber e testes diferenciais Python/Rust.
+The migration will follow this order: contracts and a reproducible reference → traits → local environment → loop → deterministic model → trajectory → CLI → real provider → Docker and expansions. Simulated dependencies let us verify the core before wiring up the shell and the network. The plan includes BDD with Cucumber and differential Python/Rust tests.
 
-## Como o harness funciona
+## How the harness works
 
 ```mermaid
 flowchart TD
-    CLI[Runner e configuração] --> COMP[Compor Agent + Model + Environment]
-    COMP --> PROMPT[Renderizar mensagens system e user]
-    PROMPT --> LIMIT[Verificar limites]
-    LIMIT --> MODEL[Model: consultar e interpretar resposta]
-    MODEL --> HIST[Adicionar resposta ao histórico]
-    HIST --> ENV[Environment: executar ação]
-    ENV --> OBS[Model: formatar observação]
-    OBS --> SAVE[Salvar trajetória]
+    CLI[Runner and configuration] --> COMP[Compose Agent + Model + Environment]
+    COMP --> PROMPT[Render system and user messages]
+    PROMPT --> LIMIT[Check limits]
+    LIMIT --> MODEL[Model: query and interpret response]
+    MODEL --> HIST[Append response to history]
+    HIST --> ENV[Environment: execute action]
+    ENV --> OBS[Model: format observation]
+    OBS --> SAVE[Save trajectory]
     SAVE --> LIMIT
-    LIMIT -->|limite atingido| EXIT[Mensagem exit]
-    ENV -->|marcador de submissão| EXIT
-    MODEL -->|FormatError| ERR[Registrar erro e contabilizar custo]
+    LIMIT -->|limit reached| EXIT[exit message]
+    ENV -->|submission marker| EXIT
+    MODEL -->|FormatError| ERR[Record error and add cost]
     ERR --> SAVE
-    EXIT --> END[Salvar e encerrar]
+    EXIT --> END[Save and finish]
 ```
 
-O diagrama resume o caminho principal. O código também distingue falhas inesperadas, erros de formato repetidos e interrupções interativas. Um erro inesperado durante o passo registra diagnóstico, salva e é propagado.
+The diagram shows the main path. The code also distinguishes unexpected failures, repeated format errors, and interactive interruptions. An unexpected error during a step records a diagnostic, saves, and is propagated.
 
-Três interfaces em [minisweagent/__init__.py](mini-swe-agent/src/minisweagent/__init__.py) organizam o sistema:
+Three interfaces in [minisweagent/__init__.py](mini-swe-agent/src/minisweagent/__init__.py) organize the system:
 
-| Interface | Responsabilidade | Por que importa |
+| Interface | Responsibility | Why it matters |
 |---|---|---|
-| `Agent` | Executar tarefa e salvar estado | Separa política de controle de transporte e execução |
-| `Model` | Consultar, formatar mensagens/observações, expor configuração e variáveis | A adaptação inclui o protocolo de interação, não apenas HTTP |
-| `Environment` | Executar ação e expor contexto/serialização | Permite trocar máquina local por container ou backend remoto |
+| `Agent` | Run the task and save state | Separates control policy from transport and execution |
+| `Model` | Query, format messages/observations, expose configuration and variables | Adapting it includes the interaction protocol, not just HTTP |
+| `Environment` | Execute an action and expose context/serialization | Lets you swap the local machine for a container or a remote backend |
 
-No caminho textual, uma resposta contém exatamente um bloco `mswea_bash_command`. O adaptador extrai o comando, o ambiente executa e o modelo formata o resultado como uma nova mensagem `user`. O agente acumula o histórico e o envia na consulta seguinte. Não há necessidade de memória vetorial ou planejador adicional para reproduzir esse desenho.
+On the textual path, a response contains exactly one `mswea_bash_command` block. The adapter extracts the command, the environment executes it, and the model formats the result as a new `user` message. The agent accumulates the history and sends it with the next query. Reproducing this design needs no vector memory and no extra planner.
 
-## Catálogo dos módulos Python
+## Catalog of the Python modules
 
-Os caminhos das tabelas são relativos a [`mini-swe-agent/src/minisweagent/`](mini-swe-agent/src/minisweagent/). O catálogo cobre os módulos `.py` encontrados na cópia local, incluindo utilitários, runners e inicializadores; arquivos de configuração e testes estão descritos depois.
+Paths in the tables are relative to [`mini-swe-agent/src/minisweagent/`](mini-swe-agent/src/minisweagent/). The catalog covers the `.py` modules found in the local copy, including utilities, runners, and initializers; configuration files and tests are described afterwards.
 
-### Pacote, controle e interação
+### Package, control, and interaction
 
-| Módulo | Papel no harness | Implicação para o port |
+| Module | Role in the harness | Implication for the port |
 |---|---|---|
-| [`__init__.py`](mini-swe-agent/src/minisweagent/__init__.py) | Define versão, diretórios globais, protocols; cria diretório, mostra startup e carrega `.env` | Separar interfaces dos efeitos de inicialização; isolar configuração durante testes |
-| [`__main__.py`](mini-swe-agent/src/minisweagent/__main__.py) | Entrada de `python -m minisweagent` | Equivalente conceitual ao binário Rust |
-| [`exceptions.py`](mini-swe-agent/src/minisweagent/exceptions.py) | `InterruptAgentFlow` carrega mensagens; subclasses incluem Submitted, LimitsExceeded, TimeExceeded, UserInterruption e FormatError | Resultados/enums de controle preservam mensagens sem panic |
-| [`agents/__init__.py`](mini-swe-agent/src/minisweagent/agents/__init__.py) | Factories de classe e instância de agente | Registro explícito de implementações Rust substitui imports dinâmicos |
-| [`agents/default.py`](mini-swe-agent/src/minisweagent/agents/default.py) | `AgentConfig` e `DefaultAgent`: templates, loop, limites, custos, execução, serialização e save | Centro da paridade de estado e sequência de efeitos |
-| [`agents/interactive.py`](mini-swe-agent/src/minisweagent/agents/interactive.py) | Estende o agente com modos human, confirm e yolo; participação do usuário | Adiado; não confundir seus defaults com a CLI mínima não interativa |
-| [`agents/utils/prompt_user.py`](mini-swe-agent/src/minisweagent/agents/utils/prompt_user.py) | Entrada multilinha do usuário | Adaptador de terminal, separado do núcleo |
+| [`__init__.py`](mini-swe-agent/src/minisweagent/__init__.py) | Defines the version, global directories, and protocols; creates a directory, shows the startup message, and loads `.env` | Separate the interfaces from the initialization side effects; isolate configuration during tests |
+| [`__main__.py`](mini-swe-agent/src/minisweagent/__main__.py) | Entry point for `python -m minisweagent` | Conceptual equivalent of the Rust binary |
+| [`exceptions.py`](mini-swe-agent/src/minisweagent/exceptions.py) | `InterruptAgentFlow` carries messages; subclasses include Submitted, LimitsExceeded, TimeExceeded, UserInterruption, and FormatError | Control results/enums keep the messages without panicking |
+| [`agents/__init__.py`](mini-swe-agent/src/minisweagent/agents/__init__.py) | Agent class and instance factories | An explicit registry of Rust implementations replaces dynamic imports |
+| [`agents/default.py`](mini-swe-agent/src/minisweagent/agents/default.py) | `AgentConfig` and `DefaultAgent`: templates, loop, limits, costs, execution, serialization, and save | Center of state parity and of the order of side effects |
+| [`agents/interactive.py`](mini-swe-agent/src/minisweagent/agents/interactive.py) | Extends the agent with human, confirm, and yolo modes; user participation | Deferred; do not confuse its defaults with the minimal non-interactive CLI |
+| [`agents/utils/prompt_user.py`](mini-swe-agent/src/minisweagent/agents/utils/prompt_user.py) | Multi-line user input | Terminal adapter, separate from the core |
 
-### Modelos e roteamento
+### Models and routing
 
-| Módulo | Papel no harness | Implicação para o port |
+| Module | Role in the harness | Implication for the port |
 |---|---|---|
-| [`models/__init__.py`](mini-swe-agent/src/minisweagent/models/__init__.py) | Escolhe nome/classe/modelo e mantém `GlobalModelStats` com limites opcionais | Separar custo por execução e estatísticas globais; evitar estado global nos testes |
-| [`models/litellm_model.py`](mini-swe-agent/src/minisweagent/models/litellm_model.py) | Adaptador LiteLLM com tool-calling, preparação de mensagens, retries, custo e observações | LiteLLM é uma camada de compatibilidade ampla; não há substituição automática por um cliente Rust |
-| [`models/litellm_textbased_model.py`](mini-swe-agent/src/minisweagent/models/litellm_textbased_model.py) | Especializa LiteLLM para ações extraídas de texto por regex | Principal referência do caminho textual selecionado |
-| [`models/litellm_response_model.py`](mini-swe-agent/src/minisweagent/models/litellm_response_model.py) | Variante com formato Responses API | Contrato distinto; fora do recorte inicial |
-| [`models/openrouter_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_model.py) | Integra OpenRouter, com erros próprios e formato de tool calls | Validar payload, autenticação, custos e erros por provedor |
-| [`models/openrouter_textbased_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_textbased_model.py) | Variante OpenRouter com parsing textual | Candidata a integração textual posterior |
-| [`models/openrouter_response_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_response_model.py) | Responses API do OpenRouter com histórico completo em cada requisição | Não assumir estado remoto ou equivalência com chat completions |
-| [`models/portkey_model.py`](mini-swe-agent/src/minisweagent/models/portkey_model.py) | Integra Portkey, virtual key/provedor, tool calls, custos e preparação de mensagens | Exige contrato próprio do gateway |
-| [`models/portkey_response_model.py`](mini-swe-agent/src/minisweagent/models/portkey_response_model.py) | Variante Portkey Responses API, também com histórico completo | Cobertura separada da variante de chat |
-| [`models/requesty_model.py`](mini-swe-agent/src/minisweagent/models/requesty_model.py) | Integra Requesty, com tratamento próprio de autenticação e rate limit | Compatibilidade de formato não garante compatibilidade operacional |
-| [`models/test_models.py`](mini-swe-agent/src/minisweagent/models/test_models.py) | Modelos determinísticos para texto, tool calls e Responses; helpers de mensagens e eventos de teste | Oráculo offline; respostas já estruturadas não exercitam sozinhas o parser textual |
-| [`models/extra/roulette.py`](mini-swe-agent/src/minisweagent/models/extra/roulette.py) | `RouletteModel` escolhe aleatoriamente; `InterleavingModel` alterna modelos por sequência | Roteamento experimental; exigir testes de contrato antes de migrar |
+| [`models/__init__.py`](mini-swe-agent/src/minisweagent/models/__init__.py) | Picks name/class/model and keeps `GlobalModelStats` with optional limits | Separate per-run cost from global statistics; avoid global state in tests |
+| [`models/litellm_model.py`](mini-swe-agent/src/minisweagent/models/litellm_model.py) | LiteLLM adapter with tool-calling, message preparation, retries, cost, and observations | LiteLLM is a broad compatibility layer; a Rust client does not replace it automatically |
+| [`models/litellm_textbased_model.py`](mini-swe-agent/src/minisweagent/models/litellm_textbased_model.py) | Specializes LiteLLM for actions extracted from text by regex | Main reference for the selected textual path |
+| [`models/litellm_response_model.py`](mini-swe-agent/src/minisweagent/models/litellm_response_model.py) | Variant using the Responses API format | Different contract; outside the initial scope |
+| [`models/openrouter_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_model.py) | Integrates OpenRouter, with its own errors and tool call format | Validate payload, authentication, costs, and errors per provider |
+| [`models/openrouter_textbased_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_textbased_model.py) | OpenRouter variant with textual parsing | Candidate for a later textual integration |
+| [`models/openrouter_response_model.py`](mini-swe-agent/src/minisweagent/models/openrouter_response_model.py) | OpenRouter Responses API, sending the full history in each request | Do not assume remote state or equivalence with chat completions |
+| [`models/portkey_model.py`](mini-swe-agent/src/minisweagent/models/portkey_model.py) | Integrates Portkey, virtual key/provider, tool calls, costs, and message preparation | Needs its own gateway contract |
+| [`models/portkey_response_model.py`](mini-swe-agent/src/minisweagent/models/portkey_response_model.py) | Portkey Responses API variant, also with the full history | Coverage separate from the chat variant |
+| [`models/requesty_model.py`](mini-swe-agent/src/minisweagent/models/requesty_model.py) | Integrates Requesty, with its own handling of authentication and rate limits | Format compatibility does not guarantee operational compatibility |
+| [`models/test_models.py`](mini-swe-agent/src/minisweagent/models/test_models.py) | Deterministic models for text, tool calls, and Responses; helpers for test messages and events | Offline oracle; responses that are already structured do not exercise the textual parser on their own |
+| [`models/extra/roulette.py`](mini-swe-agent/src/minisweagent/models/extra/roulette.py) | `RouletteModel` picks at random; `InterleavingModel` alternates models in sequence | Experimental routing; require contract tests before migrating |
 
-### Utilitários dos modelos
+### Model utilities
 
-| Módulo | Comportamento |
+| Module | Behavior |
 |---|---|
-| [`models/utils/actions_text.py`](mini-swe-agent/src/minisweagent/models/utils/actions_text.py) | Extrai exatamente uma ação por regex; erros incluem contagem e resposta; renderiza observações com raw_output, retorno, timestamp e extras |
-| [`models/utils/actions_toolcall.py`](mini-swe-agent/src/minisweagent/models/utils/actions_toolcall.py) | Valida nomes/argumentos de tools e associa observações aos IDs de chamadas |
-| [`models/utils/actions_toolcall_response.py`](mini-swe-agent/src/minisweagent/models/utils/actions_toolcall_response.py) | Parsing de function calls e function_call_output; traduz condições de término da Responses API |
-| [`models/utils/anthropic_utils.py`](mini-swe-agent/src/minisweagent/models/utils/anthropic_utils.py) | Reordena blocos de thinking para compatibilidade com o protocolo Anthropic |
-| [`models/utils/cache_control.py`](mini-swe-agent/src/minisweagent/models/utils/cache_control.py) | Ajusta marcadores explícitos de cache nas mensagens, principalmente para Anthropic |
-| [`models/utils/content_string.py`](mini-swe-agent/src/minisweagent/models/utils/content_string.py) | Extrai representação textual de mensagens para exibição, incluindo diferentes formatos |
-| [`models/utils/openai_multimodal.py`](mini-swe-agent/src/minisweagent/models/utils/openai_multimodal.py) | Expande marcações multimodais para conteúdo estruturado sem modificar o original |
-| [`models/utils/retry.py`](mini-swe-agent/src/minisweagent/models/utils/retry.py) | Centraliza retry via Tenacity, configuração e exceções que abortam tentativas |
+| [`models/utils/actions_text.py`](mini-swe-agent/src/minisweagent/models/utils/actions_text.py) | Extracts exactly one action by regex; errors include the count and the response; renders observations with raw_output, return code, timestamp, and extras |
+| [`models/utils/actions_toolcall.py`](mini-swe-agent/src/minisweagent/models/utils/actions_toolcall.py) | Validates tool names/arguments and links observations to call IDs |
+| [`models/utils/actions_toolcall_response.py`](mini-swe-agent/src/minisweagent/models/utils/actions_toolcall_response.py) | Parses function calls and function_call_output; translates Responses API stop conditions |
+| [`models/utils/anthropic_utils.py`](mini-swe-agent/src/minisweagent/models/utils/anthropic_utils.py) | Reorders thinking blocks for compatibility with the Anthropic protocol |
+| [`models/utils/cache_control.py`](mini-swe-agent/src/minisweagent/models/utils/cache_control.py) | Sets explicit cache markers on messages, mainly for Anthropic |
+| [`models/utils/content_string.py`](mini-swe-agent/src/minisweagent/models/utils/content_string.py) | Extracts a text representation of messages for display, across different formats |
+| [`models/utils/openai_multimodal.py`](mini-swe-agent/src/minisweagent/models/utils/openai_multimodal.py) | Expands multimodal markup into structured content without changing the original |
+| [`models/utils/retry.py`](mini-swe-agent/src/minisweagent/models/utils/retry.py) | Centralizes retry through Tenacity, its configuration, and the exceptions that abort retries |
 
-Esses módulos mostram por que “API compatível” é uma hipótese a testar. Cache, thinking, conteúdo nulo, IDs de chamadas, formato de observação e custo podem variar mesmo quando o endpoint parece semelhante.
+These modules show why "compatible API" is a hypothesis to test. Cache, thinking, null content, call IDs, observation format, and cost can differ even when the endpoint looks similar.
 
-### Ambientes de execução
+### Execution environments
 
-| Módulo | Responsabilidade | Validação necessária |
+| Module | Responsibility | Validation needed |
 |---|---|---|
-| [`environments/__init__.py`](mini-swe-agent/src/minisweagent/environments/__init__.py) | Resolve classe e cria ambiente | Configuração e seleção do backend |
-| [`environments/local.py`](mini-swe-agent/src/minisweagent/environments/local.py) | Subprocess local independente, cwd/env, saída mesclada, timeout com grupo de processos e submissão | Shell efetivo, retorno por sinal, UTF-8, filhos e saída parcial |
-| [`environments/docker.py`](mini-swe-agent/src/minisweagent/environments/docker.py) | Cria container, executa via CLI Docker, encaminha env, reconhece submissão e limpa recursos | Ciclo de vida, mounts, rede, timeout real no container e cleanup |
-| [`environments/singularity.py`](mini-swe-agent/src/minisweagent/environments/singularity.py) | Backend de execução Singularity | Testes no runtime correspondente; não inferir a partir de Docker |
-| [`environments/extra/bubblewrap.py`](mini-swe-agent/src/minisweagent/environments/extra/bubblewrap.py) | Execução com Bubblewrap e diretório temporário próprio | Recursos Linux, binds e remoção do diretório |
-| [`environments/extra/contree.py`](mini-swe-agent/src/minisweagent/environments/extra/contree.py) | Integra execução pelo SDK Contree, com resultado/configuração próprios | Dependência opcional e contrato externo |
-| [`environments/extra/swerex_docker.py`](mini-swe-agent/src/minisweagent/environments/extra/swerex_docker.py) | Usa deployment Docker do SWE-ReX | Não confundir com o Docker direto; ciclo de vida do serviço |
-| [`environments/extra/swerex_modal.py`](mini-swe-agent/src/minisweagent/environments/extra/swerex_modal.py) | Usa deployment Modal do SWE-ReX | Provisionamento remoto, credenciais e custos |
+| [`environments/__init__.py`](mini-swe-agent/src/minisweagent/environments/__init__.py) | Resolves the class and creates the environment | Configuration and backend selection |
+| [`environments/local.py`](mini-swe-agent/src/minisweagent/environments/local.py) | Independent local subprocess, cwd/env, merged output, timeout with a process group, and submission | Actual shell, return code from a signal, UTF-8, children, and partial output |
+| [`environments/docker.py`](mini-swe-agent/src/minisweagent/environments/docker.py) | Creates a container, runs through the Docker CLI, forwards env, detects submission, and cleans up resources | Lifecycle, mounts, network, real timeout inside the container, and cleanup |
+| [`environments/singularity.py`](mini-swe-agent/src/minisweagent/environments/singularity.py) | Singularity execution backend | Tests on the matching runtime; do not infer from Docker |
+| [`environments/extra/bubblewrap.py`](mini-swe-agent/src/minisweagent/environments/extra/bubblewrap.py) | Runs with Bubblewrap and its own temporary directory | Linux features, binds, and directory removal |
+| [`environments/extra/contree.py`](mini-swe-agent/src/minisweagent/environments/extra/contree.py) | Runs through the Contree SDK, with its own result/configuration | Optional dependency and external contract |
+| [`environments/extra/swerex_docker.py`](mini-swe-agent/src/minisweagent/environments/extra/swerex_docker.py) | Uses the SWE-ReX Docker deployment | Do not confuse with plain Docker; service lifecycle |
+| [`environments/extra/swerex_modal.py`](mini-swe-agent/src/minisweagent/environments/extra/swerex_modal.py) | Uses the SWE-ReX Modal deployment | Remote provisioning, credentials, and costs |
 
-O ambiente local não é sandbox. Cada teste que executa comandos deve usar workspace descartável. Docker também exige verificação de configuração e isolamento; apenas usar um container não prova que o host está protegido.
+The local environment is not a sandbox. Every test that runs commands must use a disposable workspace. Docker also needs its configuration and isolation verified; using a container alone does not prove the host is protected.
 
-### Configuração, serialização e logs
+### Configuration, serialization, and logs
 
-| Módulo/recurso | Responsabilidade |
+| Module/resource | Responsibility |
 |---|---|
-| [`config/__init__.py`](mini-swe-agent/src/minisweagent/config/__init__.py) | Resolve caminho de YAML e specs `chave.subchave=valor`; tenta JSON para o valor e usa string se não for JSON |
-| [`config/default.yaml`](mini-swe-agent/src/minisweagent/config/default.yaml) | Prompts textuais, ambiente e templates de observação/erro, incluindo truncamento |
-| [`config/mini_textbased.yaml`](mini-swe-agent/src/minisweagent/config/mini_textbased.yaml) | Configuração para execução textual pelo runner mini |
-| [`config/mini.yaml`](mini-swe-agent/src/minisweagent/config/mini.yaml) | Configuração padrão do mini, com caminho de tool-calling |
-| [`config/benchmarks/`](mini-swe-agent/src/minisweagent/config/benchmarks/) | Presets `swebench.yaml`, `swebench_backticks.yaml`, `swebench_xml.yaml`, `swebench_modal.yaml` e `programbench.yaml` |
-| [`config/inspector.tcss`](mini-swe-agent/src/minisweagent/config/inspector.tcss) | Estilo da interface Textual do inspetor |
-| [`utils/serialize.py`](mini-swe-agent/src/minisweagent/utils/serialize.py) | `recursive_merge`: merge de objetos, precedência à direita, sentinela UNSET ignorada |
-| [`utils/log.py`](mini-swe-agent/src/minisweagent/utils/log.py) | Configura logging e handler para arquivo |
+| [`config/__init__.py`](mini-swe-agent/src/minisweagent/config/__init__.py) | Resolves the YAML path and `key.subkey=value` specs; tries to parse the value as JSON and falls back to a string |
+| [`config/default.yaml`](mini-swe-agent/src/minisweagent/config/default.yaml) | Textual prompts, environment, and observation/error templates, including truncation |
+| [`config/mini_textbased.yaml`](mini-swe-agent/src/minisweagent/config/mini_textbased.yaml) | Configuration for textual runs through the mini runner |
+| [`config/mini.yaml`](mini-swe-agent/src/minisweagent/config/mini.yaml) | Default mini configuration, on the tool-calling path |
+| [`config/benchmarks/`](mini-swe-agent/src/minisweagent/config/benchmarks/) | Presets `swebench.yaml`, `swebench_backticks.yaml`, `swebench_xml.yaml`, `swebench_modal.yaml`, and `programbench.yaml` |
+| [`config/inspector.tcss`](mini-swe-agent/src/minisweagent/config/inspector.tcss) | Style for the inspector's Textual UI |
+| [`utils/serialize.py`](mini-swe-agent/src/minisweagent/utils/serialize.py) | `recursive_merge`: merges objects, the right side wins, the UNSET sentinel is ignored |
+| [`utils/log.py`](mini-swe-agent/src/minisweagent/utils/log.py) | Configures logging and a file handler |
 
-A configuração é parte do comportamento. Trocar um motor de templates pode mudar espaços, filtros, slices e variáveis ausentes; isso altera os prompts enviados ao LLM. O port deve comparar os prompts renderizados exatamente, não apenas conferir se o YAML foi carregado.
+Configuration is part of the behavior. Swapping the template engine can change whitespace, filters, slices, and missing variables; that changes the prompts sent to the LLM. The port must compare the rendered prompts exactly, not just check that the YAML was loaded.
 
-### Runners, benchmarks e ferramentas de inspeção
+### Runners, benchmarks, and inspection tools
 
-| Módulo | Responsabilidade |
+| Module | Responsibility |
 |---|---|
-| [`run/hello_world.py`](mini-swe-agent/src/minisweagent/run/hello_world.py) | Exemplo mínimo de composição via Python |
-| [`run/mini.py`](mini-swe-agent/src/minisweagent/run/mini.py) | CLI Typer: configura entrada, mescla specs/flags, cria componentes e executa tarefa; usa agente interativo por padrão |
-| [`run/utilities/mini_extra.py`](mini-swe-agent/src/minisweagent/run/utilities/mini_extra.py) | Despacha subcomandos de configuração, inspeção e benchmarks |
-| [`run/utilities/config.py`](mini-swe-agent/src/minisweagent/run/utilities/config.py) | Setup, set, unset e edição do `.env` global; configuração de primeiro uso |
-| [`run/utilities/inspector.py`](mini-swe-agent/src/minisweagent/run/utilities/inspector.py) | UI Textual que agrupa mensagens em passos, navega trajetórias e exibe conteúdo/reasoning |
-| [`run/benchmarks/swebench.py`](mini-swe-agent/src/minisweagent/run/benchmarks/swebench.py) | Execução em lote SWE-bench: imagens/ambientes, seleção de instâncias, processamento e arquivo de predições |
-| [`run/benchmarks/swebench_single.py`](mini-swe-agent/src/minisweagent/run/benchmarks/swebench_single.py) | Execução de uma instância SWE-bench |
-| [`run/benchmarks/programbench.py`](mini-swe-agent/src/minisweagent/run/benchmarks/programbench.py) | Lote ProgramBench; agente especializado reduz raw_output e exporta workspace como submissão |
-| [`run/benchmarks/utils/common.py`](mini-swe-agent/src/minisweagent/run/benchmarks/utils/common.py) | `ProgressTrackingAgent` reporta progresso por passo |
-| [`run/benchmarks/utils/batch_progress.py`](mini-swe-agent/src/minisweagent/run/benchmarks/utils/batch_progress.py) | Gerencia exibição do progresso de múltiplas instâncias |
+| [`run/hello_world.py`](mini-swe-agent/src/minisweagent/run/hello_world.py) | Minimal example of composition in Python |
+| [`run/mini.py`](mini-swe-agent/src/minisweagent/run/mini.py) | Typer CLI: sets up input, merges specs/flags, creates components, and runs the task; uses the interactive agent by default |
+| [`run/utilities/mini_extra.py`](mini-swe-agent/src/minisweagent/run/utilities/mini_extra.py) | Dispatches configuration, inspection, and benchmark subcommands |
+| [`run/utilities/config.py`](mini-swe-agent/src/minisweagent/run/utilities/config.py) | Setup, set, unset, and editing of the global `.env`; first-run configuration |
+| [`run/utilities/inspector.py`](mini-swe-agent/src/minisweagent/run/utilities/inspector.py) | Textual UI that groups messages into steps, browses trajectories, and shows content/reasoning |
+| [`run/benchmarks/swebench.py`](mini-swe-agent/src/minisweagent/run/benchmarks/swebench.py) | SWE-bench batch runs: images/environments, instance selection, processing, and the predictions file |
+| [`run/benchmarks/swebench_single.py`](mini-swe-agent/src/minisweagent/run/benchmarks/swebench_single.py) | Runs a single SWE-bench instance |
+| [`run/benchmarks/programbench.py`](mini-swe-agent/src/minisweagent/run/benchmarks/programbench.py) | ProgramBench batch; a specialized agent trims raw_output and exports the workspace as the submission |
+| [`run/benchmarks/utils/common.py`](mini-swe-agent/src/minisweagent/run/benchmarks/utils/common.py) | `ProgressTrackingAgent` reports progress per step |
+| [`run/benchmarks/utils/batch_progress.py`](mini-swe-agent/src/minisweagent/run/benchmarks/utils/batch_progress.py) | Manages the progress display for multiple instances |
 
-Os demais `__init__.py` são marcadores/documentação de pacotes, sem loop adicional: `agents/utils`, `config/benchmarks`, `environments/extra`, `models/extra`, `models/utils`, `run`, `run/benchmarks`, `run/benchmarks/utils`, `run/extra`, `run/utilities` e `utils`. O arquivo `py.typed` sinaliza disponibilidade de tipagem do pacote; os READMEs internos explicam suas áreas.
+The other `__init__.py` files are package markers/documentation, with no additional loop: `agents/utils`, `config/benchmarks`, `environments/extra`, `models/extra`, `models/utils`, `run`, `run/benchmarks`, `run/benchmarks/utils`, `run/extra`, `run/utilities`, and `utils`. The `py.typed` file signals that the package ships type information; the internal READMEs explain their areas.
 
-### Testes existentes como especificação executável
+### Existing tests as an executable specification
 
-A suíte em [`mini-swe-agent/tests/`](mini-swe-agent/tests/) cobre agentes, modelos, ambientes, configuração e serialização. Pontos de partida:
+The suite in [`mini-swe-agent/tests/`](mini-swe-agent/tests/) covers agents, models, environments, configuration, and serialization. Starting points:
 
-- `agents/test_default.py`: loop, limites e término; `test_interactive.py` e `test_multimodal.py` cobrem extensões.
-- `environments/test_local.py` e `test_docker.py`: execução e contratos dos backends; `extra/` cobre integrações adicionais.
-- `models/test_actions_text.py`, testes de toolcall/Responses e `test_format_error_response_persistence.py`: parsing e preservação de respostas inválidas.
-- `config/test_init.py`, `test_swebench_template.py` e `utils/test_serialize.py`: configuração, templates e merge.
-- `conftest.py`: isolamento de estatísticas globais, seleção de Docker/Podman e helpers de comparação; `test_fire.py` envolve chamadas reais opt-in.
-- `test_data/`: dados e scripts de atualização. Alguns helpers esperam trajetórias como listas de mensagens; validar a disponibilidade dos arquivos e não assumir que são o mesmo schema do envelope atual.
+- `agents/test_default.py`: loop, limits, and termination; `test_interactive.py` and `test_multimodal.py` cover extensions.
+- `environments/test_local.py` and `test_docker.py`: execution and backend contracts; `extra/` covers additional integrations.
+- `models/test_actions_text.py`, the toolcall/Responses tests, and `test_format_error_response_persistence.py`: parsing and preservation of invalid responses.
+- `config/test_init.py`, `test_swebench_template.py`, and `utils/test_serialize.py`: configuration, templates, and merge.
+- `conftest.py`: isolation of global statistics, Docker/Podman selection, and comparison helpers; `test_fire.py` makes real opt-in calls.
+- `test_data/`: data and update scripts. Some helpers expect trajectories as lists of messages; check that the files are available and do not assume they use the same schema as the current envelope.
 
-Testes herdados orientam o port, mas suas normalizações não devem ser copiadas sem revisão. Remover whitespace ou linhas de output pode esconder diferenças relevantes. A suíte de paridade terá sua própria política restrita, documentada no plano.
+Inherited tests guide the port, but their normalizations must not be copied without review. Stripping whitespace or output lines can hide relevant differences. The parity suite will have its own strict policy, documented in the plan.
 
-## As decisões de engenharia que este estudo exercita
+## The engineering decisions this study exercises
 
-**Equivalência observável.** A referência precisa continuar executável. Comparar apenas a resposta final esconderia comandos diferentes, cobrança incorreta, chamadas adicionais ou observações alteradas. A validação deve incluir o histórico, os pedidos ao modelo, as ações, os estados intermediários e os arquivos produzidos.
+**Observable equivalence.** The reference must stay executable. Comparing only the final answer would hide different commands, wrong billing, extra calls, or altered observations. Validation must cover the history, the requests to the model, the actions, the intermediate states, and the files produced.
 
-**Separação entre determinismo e avaliação de IA.** Com modelo e ambiente roteirizados, é possível exigir equivalência estrutural. Com LLM real, duas chamadas podem divergir: medir taxa de sucesso, custo e latência em tarefas fixas, sem tratar texto diferente como bug automaticamente.
+**Separating determinism from AI evaluation.** With a scripted model and environment, we can require structural equivalence. With a real LLM, two calls can diverge: measure success rate, cost, and latency on fixed tasks, and do not treat different text as a bug by default.
 
-**Modelagem idiomática em Rust.** Traits delimitam modelo/ambiente/agente; enums expressam término e erros de controle; Result preserva falhas; ownership evita copiar todo o histórico. Manter o núcleo simples, síncrono inicialmente, com biblioteca testável e binário fino. A skill `rust-skills` orientou o [plano](spec/PLAN.md#5-aplicação-de-rust-skills).
+**Idiomatic modeling in Rust.** Traits bound the model/environment/agent; enums express termination and control errors; Result preserves failures; ownership avoids copying the whole history. Keep the core simple and synchronous at first, with a testable library and a thin binary. The `rust-skills` skill guided the [plan](spec/PLAN.md#5-applying-rust-skills).
 
-**Compatibilidade sem esconder problemas.** O código chama o ambiente de bash, mas usa `/bin/sh` por padrão em POSIX; mudar para bash explicitamente requer decisão registrada. O Python salva no finally de cada passo, cobra respostas inválidas e verifica limites antes da próxima consulta. Esses detalhes são parte do contrato.
+**Compatibility without hiding problems.** The code calls the environment bash, but uses `/bin/sh` by default on POSIX; switching to bash explicitly needs a recorded decision. Python saves in the finally block of each step, charges for invalid responses, and checks limits before the next query. These details are part of the contract.
 
-**Operação e diagnóstico.** Uma trajetória deve permitir reconstruir a execução; logs estruturados devem apontar etapa, duração e custo sem divulgar credenciais. Limpeza de processos e containers deve ser testada em falhas e interrupções.
+**Operation and diagnostics.** A trajectory must allow the run to be reconstructed; structured logs must show stage, duration, and cost without leaking credentials. Cleanup of processes and containers must be tested under failures and interruptions.
 
-## Como iniciar a implementação
+## How to start the implementation
 
-Ler primeiro [o plano detalhado](spec/PLAN.md). Ele contém preparação do ambiente Python, congelamento da referência, contratos, sequência de implementação e comandos planejados de comparação. O [estudo do código](spec/STUDY.md) detalha o loop, o parser textual, o estado do shell, o protocolo de submissão, os templates, as estatísticas globais e a lista de gates P01–P18 que a paridade precisa cumprir; ele também registra que os YAMLs textuais não selecionam o modelo textual por si sós.
+Read [the detailed plan](spec/PLAN.md) first. It covers setting up the Python environment, freezing the reference, contracts, the implementation order, and the planned comparison commands. The [code study](spec/STUDY.md) details the loop, the textual parser, shell state, the submission protocol, templates, global statistics, and the list of gates P01–P18 that parity must meet; it also records that the textual YAMLs do not select the textual model on their own.
 
-A partir de `mini-rust-swe-agent/`, quando iniciar o trabalho de código:
+From `mini-rust-swe-agent/`, when code work starts:
 
 ```bash
 cargo new --bin --edition 2024 --vcs none --name mini-swe rust-mini-swe-agent
@@ -179,21 +179,21 @@ cargo build
 cargo test
 ```
 
-Esses comandos criam o esqueleto; não implementam o harness. Adicionar `src/lib.rs`, fixar toolchain e dependências e seguir os gates do plano. `cargo new` cria uma pasta nova; se ela já existir, inspecionar antes de escolher `cargo init`, conforme a [documentação do Cargo](https://doc.rust-lang.org/cargo/commands/cargo-init.html).
+These commands create the skeleton; they do not implement the harness. Add `src/lib.rs`, pin the toolchain and dependencies, and follow the plan's gates. `cargo new` creates a new folder; if the folder already exists, inspect it before choosing `cargo init`, as described in the [Cargo documentation](https://doc.rust-lang.org/cargo/commands/cargo-init.html).
 
-A cópia Python está dentro do Git de `CognitionLab`, sem checkout Git próprio detectado. Antes de afirmar que um SHA congela o upstream, verificar a origem. A identificação provisória por hash de conteúdo e o procedimento de fixação estão no plano.
+The Python copy lives inside the `CognitionLab` Git repository, with no Git checkout of its own detected. Before claiming that a SHA freezes the upstream, verify the origin. The provisional content-hash identification and the pinning procedure are in the plan.
 
-## Como apresentar os resultados no portfólio
+## How to present the results in the portfolio
 
-| Evidência a produzir | Competência demonstrada | Situação atual |
+| Evidence to produce | Skill demonstrated | Current state |
 |---|---|---|
-| Inventário de módulos e fluxo | Leitura de arquitetura de agentes | Documentado neste README |
-| Plano, recorte e contratos propostos | Decomposição e análise de compatibilidade | Documentado; contratos executáveis pendentes |
-| Fixtures e relatório diferencial | Testes de sistemas com comportamento probabilístico nas bordas | Planejado |
-| Cenários Cucumber | Requisitos comportamentais ligados à implementação | Planejado |
-| ADRs sobre shell, erros, schemas e templates | Decisões técnicas justificadas | Planejado |
-| Testes de subprocess/container | Controle de efeitos e confiabilidade operacional | Planejado |
-| Integração de provedor e avaliação de tarefas | Engenharia de integração e avaliação de LLMs | Planejado |
-| Benchmarks reproduzíveis | Análise de desempenho baseada em evidência | Planejado |
+| Module and flow inventory | Reading agent architecture | Documented in this README |
+| Plan, scope, and proposed contracts | Decomposition and compatibility analysis | Documented; executable contracts pending |
+| Fixtures and differential report | Testing systems with probabilistic behavior at the edges | Planned |
+| Cucumber scenarios | Behavioral requirements tied to the implementation | Planned |
+| ADRs on shell, errors, schemas, and templates | Justified technical decisions | Planned |
+| Subprocess/container tests | Control of side effects and operational reliability | Planned |
+| Provider integration and task evaluation | Integration engineering and LLM evaluation | Planned |
+| Reproducible benchmarks | Evidence-based performance analysis | Planned |
 
-Atualizar esta tabela conforme cada marco for verificado. Para cada resultado, publicar comando executado, versões, ambiente, quantidade de casos, falhas/skips e limitações. Nenhuma taxa de sucesso ou melhoria de performance está sendo afirmada nesta etapa.
+Update this table as each milestone is verified. For each result, publish the command run, versions, environment, number of cases, failures/skips, and limitations. No success rate or performance improvement is claimed at this stage.

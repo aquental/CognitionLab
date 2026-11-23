@@ -64,4 +64,4 @@ These tests found two defects, both fixed with synthetic regression tests:
 - upper-case and free-form file names were not flagged;
 - a table header that no data row used was dropped from the chunks.
 
-They are not retrieval-quality evidence: the exams have no anonymization review and no relevance labels. [`TESTS.md`](../TESTS.md) describes how to anonymize them and turn them into an evaluable corpus. The steps are anonymization and `anonimizador verify` (sibling project [`../../anonimizador`](../../anonimizador)), `draft-manifest`, the review, `draft-labels`, and the judgments.
+They are not retrieval-quality evidence: the exams have no anonymization review and no relevance labels. [`TESTS.md`](../TESTS.md) describes how to anonymize them and turn them into an evaluable corpus. The steps are anonymization and `anonymizer verify` (sibling project [`../../anonymizer`](../../anonymizer)), `draft-manifest`, the review, `draft-labels`, and the judgments.

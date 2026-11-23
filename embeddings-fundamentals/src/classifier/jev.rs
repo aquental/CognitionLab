@@ -2,7 +2,7 @@
 //!
 //! It speaks TypeSafe's wire format directly, as the SDK 0.7.4 that StealthApp uses does
 //! (`endpoints.prepare_system_one`, `transport.prepare`): one `POST /v1/systemone`, no
-//! retry, no timeout of its own (the deadline is [`super::provedor::Avaliador`]'s). The
+//! retry, no timeout of its own (the deadline is [`super::provider::Avaliador`]'s). The
 //! key never appears in `Debug`, errors or logs, and an error body is never read.
 
 use std::fmt;
@@ -11,12 +11,12 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::categorias::CRITERIO_ID;
-use super::decisao::validar_respostas;
-use super::provedor::{ADAPTER_VERSION, PROVIDER, RequestNeutro, RespostaProvedor, RlcdProvider};
+use super::categories::CRITERIO_ID;
+use super::decision::validar_respostas;
+use super::provider::{ADAPTER_VERSION, PROVIDER, RequestNeutro, RespostaProvedor, RlcdProvider};
 use super::pyre::{ErroPyre, Flags, PyRegex};
-use super::texto::strip;
-use super::tipos::{ErroCategoria, Uso};
+use super::text::strip;
+use super::types::{ErroCategoria, Uso};
 
 /// The default service (StealthApp `BASE_URL_PADRAO`).
 pub const BASE_URL_PADRAO: &str = "https://api.typesafe.ai";
@@ -343,8 +343,8 @@ impl RlcdProvider for ClienteJev {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classifier::provedor::CRITERIO_TIPO_DOCUMENTO;
-    use crate::classifier::tipos::{Arquivo, EstadoEnviado, PaginaEnviada, PaginasModo};
+    use crate::classifier::provider::CRITERIO_TIPO_DOCUMENTO;
+    use crate::classifier::types::{Arquivo, EstadoEnviado, PaginaEnviada, PaginasModo};
     use crate::classifier::{Categoria, MASCARAMENTO_VERSAO_PORTE, PERGUNTA, PERGUNTAS_VERSAO};
 
     #[test]

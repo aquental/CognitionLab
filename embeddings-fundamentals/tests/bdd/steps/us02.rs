@@ -35,7 +35,7 @@ struct Expected {
 
 fn ranking() -> Result<Ranking> {
     let text =
-        std::fs::read_to_string(fixture("rankings/hemoglobina.toml")).context("read ranking")?;
+        std::fs::read_to_string(fixture("rankings/hemoglobin.toml")).context("read ranking")?;
     Ok(toml::from_str(&text)?)
 }
 

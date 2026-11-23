@@ -2,7 +2,7 @@
 
 This guide covers how to turn anonymized real documents into an evaluable corpus: the manifest, the relevance labels, and the fidelity sample.
 
-Anonymizing the documents is the job of the sibling project [`../anonimizador`](../anonimizador), on branch `anonimizador/scaffold` until it merges. It holds the procedure, the `anonimizador verify` tool, and the design of the automatic anonymizer.
+Anonymizing the documents is the job of the sibling project [`../anonymizer`](../anonymizer), on branch `anonymizer/scaffold` until it merges. It holds the procedure, the `anonymizer verify` tool, and the design of the automatic anonymizer.
 
 The commands that run the test suites are in [`reports/README.md`](reports/README.md#tests).
 
@@ -18,13 +18,13 @@ A source is processed only when its manifest entry records four passed checks, p
 - `text`;
 - `pixels`.
 
-The procedure to meet them is in [`../anonimizador/docs/ANONYMIZATION.md`](../anonimizador/docs/ANONYMIZATION.md). It covers what to remove and what to keep, true redaction versus drawn boxes, pixels, and metadata with a PDF rewrite.
+The procedure to meet them is in [`../anonymizer/docs/ANONYMIZATION.md`](../anonymizer/docs/ANONYMIZATION.md). It covers what to remove and what to keep, true redaction versus drawn boxes, pixels, and metadata with a PDF rewrite.
 
 Check every final file with the verifier. It prints counts only:
 
 ```bash
-cd ../anonimizador && uv sync
-uv run anonimizador verify --terms ~/private/terms.txt ../embeddings-fundamentals/corpus/
+cd ../anonymizer && uv sync
+uv run anonymizer verify --terms ~/private/terms.txt ../embeddings-fundamentals/corpus/
 ```
 
 The terms file is itself identifying. Keep it outside the repository; the verifier refuses one that git could commit.
@@ -145,7 +145,7 @@ They name documents by position only. They are not retrieval evidence.
 The tools in this guide are tested on synthetic files only:
 - `tests/drafts.rs` covers both drafts without any external tool.
 - The integration test `the_cli_drafts_the_synthetic_manifest_with_real_tools` (`RUN_INTEGRATION=1`) runs `draft-manifest` with real poppler.
-- The verifier's tests live in `../anonimizador/tests/`.
+- The verifier's tests live in `../anonymizer/tests/`.
 
 ## 4. What may be published
 
@@ -157,6 +157,6 @@ Until the owner decides otherwise:
 
 ## 5. Automatic anonymization
 
-The design and the stages of the automatic anonymizer are in [`../anonimizador/docs/SPEC.md`](../anonimizador/docs/SPEC.md) and [`../anonimizador/docs/PLAN.md`](../anonimizador/docs/PLAN.md). It covers detection, true redaction, metadata removal, independent verification, and a review packet.
+The design and the stages of the automatic anonymizer are in [`../anonymizer/docs/SPEC.md`](../anonymizer/docs/SPEC.md) and [`../anonymizer/docs/PLAN.md`](../anonymizer/docs/PLAN.md). It covers detection, true redaction, metadata removal, independent verification, and a review packet.
 
 The review stays human. No automatic step records `"ok"`.

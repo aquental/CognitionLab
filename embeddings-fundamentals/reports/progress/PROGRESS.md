@@ -78,7 +78,7 @@ None for Phase 0.
 
 ## Phase 1 — Milestone 1: Text baseline (`@m1`)
 
-**Status:** ✅ APPROVED (2026-10-28, with owner waiver). Grok approved after 7 rounds (G1-1..G1-15, last round NO FINDINGS). Codex rounds 1–2 found C1-1..C1-10, all fixed; Codex round 2 closed C1-1..C1-7 and Grok round 6 confirmed C1-8..C1-10. Codex round 3 could not run (ChatGPT plan usage limit, 06:13). The owner waived it at 07:52 ("quando a quota do Codex acabar (caso atual), pode pular ele"); no Codex report was simulated, and C1-8..C1-10 carry Grok-only confirmation. See `reports/reviews/phase-1/FINDINGS.md` § Owner waiver.
+**Status:** ✅ APPROVED (2026-10-28, with owner waiver). Grok approved after 7 rounds (G1-1..G1-15, last round NO FINDINGS). Codex rounds 1–2 found C1-1..C1-10, all fixed; Codex round 2 closed C1-1..C1-7 and Grok round 6 confirmed C1-8..C1-10. Codex round 3 could not run (ChatGPT plan usage limit, 06:13). The owner waived it at 07:52 ("when Codex runs out of quota (the current case), you may skip it"); no Codex report was simulated, and C1-8..C1-10 carry Grok-only confirmation. See `reports/reviews/phase-1/FINDINGS.md` § Owner waiver.
 
 ### Decisions and PLAN changes, with justification
 | Change | Justification |
@@ -99,7 +99,7 @@ None for Phase 0.
 - `pipeline`: validation first (capability, remote permission, experiment id unused). Per source: manifest → extraction (unreadable pages fail the source) → revision (unchanged → skip) → chunking → batched embedding with class-based retries → validation → stage/publish. Run report and exit codes (2 incomplete, 3 validation).
 - `retrieval`: space guard before embedding, exact cosine in f64, `total_cmp` + `record_id` ties, `Active` or `Experiment` scope.
 - `adapters` (single feature-gated factory), `config` (saved experiment TOML), EmbedAnything adapter (pinned revision, HF-cache tokenizer, special tokens reserved, probe-checked dimensions, `spawn_blocking`), `anonymization` (filename patterns, PDF info/XMP keys, EXIF tags), CLI `manifest | anonymization-check | validate | ingest | search | doctor`.
-- BDD: `scripts/sync-features.py` generates `tests/features/{us01,us02,rel01}.feature` verbatim from the PRD for milestone 1. The `LabWorld` gives each scenario its own store, corpus, extractor, adapter, and run history. Steps for 18 scenarios. Frozen ranking `tests/fixtures/rankings/hemoglobina.toml`, derived by hand from keyword axes.
+- BDD: `scripts/sync-features.py` generates `tests/features/{us01,us02,rel01}.feature` verbatim from the PRD for milestone 1. The `LabWorld` gives each scenario its own store, corpus, extractor, adapter, and run history. Steps for 18 scenarios. Frozen ranking `tests/fixtures/rankings/hemoglobin.toml`, derived by hand from keyword axes.
 
 ### Acceptance criteria (PLAN Phase 1 exit)
 | Criterion | Evidence |
@@ -130,7 +130,7 @@ None for Phase 0.
 
 ## Phase 2 — Milestone 2: Engine comparison (`@m2`)
 
-**Status:** ✅ APPROVED (2026-10-28). Implemented and merged to `main` as PR #5 at the owner's explicit request ("pare e mescle os PRs") **before** its adversarial reviews; the review fixes are on branch `phase-2/review-fixes` (from `main` @ `44cf64a`; review diff base `3cdb355`, merge of PR #4). Grok rounds 1–9 and Codex rounds 1–6 are complete; at `e0b873e` the final Grok round (9) and the final Codex round (6) both reported NO FINDINGS. 30 findings (G2-1..G2-9, C2-1..C2-21), all fixed with regression tests; see `reports/reviews/phase-2/FINDINGS.md`.
+**Status:** ✅ APPROVED (2026-10-28). Implemented and merged to `main` as PR #5 at the owner's explicit request ("stop and merge the PRs") **before** its adversarial reviews; the review fixes are on branch `phase-2/review-fixes` (from `main` @ `44cf64a`; review diff base `3cdb355`, merge of PR #4). Grok rounds 1–9 and Codex rounds 1–6 are complete; at `e0b873e` the final Grok round (9) and the final Codex round (6) both reported NO FINDINGS. 30 findings (G2-1..G2-9, C2-1..C2-21), all fixed with regression tests; see `reports/reviews/phase-2/FINDINGS.md`.
 
 **Intermittent `WriterBusy` — fixed (commit `ff4fde9`).** Cause confirmed by reproduction: `flock` belongs to the open file description, so a child spawned concurrently by any thread holds a copy of `.writer.lock` until its `exec` and keeps the lock alive after the writer drops it. A stress loop reproduced it (26 of 4000 opens). Fix: a POSIX record lock (`fcntl F_SETLK`, per-process, never inherited) plus an in-process registry of held roots, claimed before the lock file is opened (record locks do not exclude writers within one process, and closing any descriptor of the file would drop the lock). Regression tests: `writer_lock_is_released_on_drop_while_children_are_spawned` (time-based, 4 spawner threads; against the `main` code it fails 5/5 with 318–426 `WriterBusy`, against the fix it passes 5/5) and `writer_lock_excludes_another_process` (a re-executed lock-holder child; the parent must get `WriterBusy`). Full unit suite: 0 failures in 15 consecutive runs (previously about 1 in 10).
 
@@ -232,7 +232,7 @@ None for Phase 0.
 
 ## Phase 4 — Milestone 4: Combined retrieval & publication (`@m4`)
 
-**Status:** ✅ APPROVED (2026-10-29). Grok rounds 1–7, Codex rounds 1–3, and Antigravity rounds 1–2 (with the `rust-dev` plugin) are complete. The final round of each reviewer (Grok 7 at `d0d99e8`, Codex 3 at `6d42294`, Antigravity 2 at `1349cc5`) reported NO FINDINGS. 14 findings (S4-1, S4-2, G4-1..G4-6, C4-1..C4-5, A4-1): G4-5 moved to `anonimizador` with the verifier and fixed there, the rest fixed here with regression tests; see `reports/reviews/phase-4/FINDINGS.md`. The per-phase review changelog is `REVISION.md`. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
+**Status:** ✅ APPROVED (2026-10-29). Grok rounds 1–7, Codex rounds 1–3, and Antigravity rounds 1–2 (with the `rust-dev` plugin) are complete. The final round of each reviewer (Grok 7 at `d0d99e8`, Codex 3 at `6d42294`, Antigravity 2 at `1349cc5`) reported NO FINDINGS. 14 findings (S4-1, S4-2, G4-1..G4-6, C4-1..C4-5, A4-1): G4-5 moved to `anonymizer` with the verifier and fixed there, the rest fixed here with regression tests; see `reports/reviews/phase-4/FINDINGS.md`. The per-phase review changelog is `REVISION.md`. Branch `phase-4/combined-retrieval` (from `e1abe6f`, `main` after PR #8 merged Phase 3). Review diff base `e1abe6f`.
 
 ### Decisions and PLAN changes, with justification
 | Decision | Justification |
@@ -287,7 +287,7 @@ None for Phase 0.
   - `src/drafts.rs` with the `draft-manifest` and `draft-labels` CLI commands;
   - `scripts/anonymization-verify.py` and `scripts/make-covered-name-pdf.py`, which writes `tests/fixtures/anonymization/covered-name.pdf`.
 
-  At the owner's request, these two scripts and the fixture moved to the sibling Python project `../anonimizador` (branch `anonimizador/scaffold`), where the verifier became `anonimizador verify`. Its integration test moved with it, into `anonimizador/tests/`.
+  At the owner's request, these two scripts and the fixture moved to the sibling Python project `../anonymizer` (branch `anonymizer/scaffold`), where the verifier became `anonymizer verify`. Its integration test moved with it, into `anonymizer/tests/`.
 
   Tests: `tests/drafts.rs` (3), `drafts::tests` (5), and 2 integration tests.
 
@@ -307,7 +307,7 @@ None for Phase 0.
 - Mutants caught (each regression test also fails on its mutant: dropping the snapshot check, building a model before reading the snapshot, summing active instead of pinned revisions):
   - reversing the RRF key tie-break fails 3 fusion unit tests, the BDD combined example and fusion scenario, and the combined run test;
   - dropping the combined corpus check fails `a_combined_run_refuses_legs_that_cannot_be_paired`.
-- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. After the verifier moved to `../anonimizador`, 17 remain here. The OpenAI live test stays outstanding.
+- `RUN_INTEGRATION=1 cargo test --release --features engine-embed-anything,engine-fastembed --test integration -- --include-ignored`: **18 passed**, including the real combined CLI chain, the anonymization verifier on the covered-name fixture, and `draft-manifest` with real poppler. After the verifier moved to `../anonymizer`, 17 remain here. The OpenAI live test stays outstanding.
 - `RUN_SAMPLE_EXAMS=1 cargo test --release --test sample_exams -- --include-ignored` (local only, real exams): **4 passed**.
   - Every unreviewed exam is refused before any processing.
   - Every file name is flagged, and no finding reveals it.
@@ -360,8 +360,8 @@ Branch `embeddings/classifier`, on top of the spec branch (PR #13). The owner as
 
 ### Implementation
 - **Dependencies:** `unicode-normalization` pinned to `=0.1.24`, which has the Unicode 16.0.0 tables of the vectors; 0.1.26 had Unicode 18. `pdf-extract` and `stringprep` accept any `0.1`. Also added: `fancy-regex = "0.19.2"` and the feature `classifier-jev = ["dep:reqwest"]`.
-- **Vectors:** `tests/fixtures/classifier/vetores.json` is StealthApp's file (sha256 `f14676c7…db22e`), with its origin in the README next to it. A count-only check found no word used as a person's name that matches the exam file names.
-- **`src/classifier/`:** `categorias.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `tipos.rs` holds the types of §5.2–§5.5, `Classificacao` included.
+- **Vectors:** `tests/fixtures/classifier/vectors.json` is StealthApp's file (sha256 `f14676c7…db22e`), with its origin in the README next to it. A count-only check found no word used as a person's name that matches the exam file names.
+- **`src/classifier/`:** `categories.rs` holds the nine types, the question and the versioned constants. Its texts were generated from the vectors, not retyped. `types.rs` holds the types of §5.2–§5.5, `Classificacao` included.
 - **`tests/classifier_vectors.rs`:**
   - the sha256 pin;
   - the partition of the vectors' sections into covered, pending (a list that only shrinks) and excluded;
@@ -402,14 +402,14 @@ See `reports/reviews/classifier/classifier-findings.md`.
     - the full `lower`, `upper` and `title` mappings.
   - The file carries the generator's sha256. `tests/classifier_pyclasses.rs` checks it on every run.
   - Two opt-in tests (`RUN_PYTHON_DIFF=1 PYTHON314=…`) regenerate the file and compare it byte for byte, and compare the primitives with Python on 2 000 random strings.
-- **`texto.rs`:**
+- **`text.rs`:**
   - the predicates, and `lower`, `upper`, `title` and `str_isupper` with Python's semantics;
   - `strip` and `split` with Python's whitespace;
   - `compor` (NFC plus every `splitlines` break turned into LF);
   - `dobrar` (per code point: the first code point of its NFD decomposition, lowered when Python's `lower` gives one code point; the same number of code points);
   - `MapaOffsets`.
-- **`canonico.rs`:** `json_canonico`, equal to `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, without NFC; it refuses floats. `digest` is the sha256 of that output.
-- **`listas.rs`:** the 13 lists of the vectors, in their order.
+- **`canonical.rs`:** `json_canonico`, equal to `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, without NFC; it refuses floats. `digest` is the sha256 of that output.
+- **`word_lists.rs`:** the 13 lists of the vectors, in their order.
 - **`mascaramento::partes_de_nome`** and **`estado::termos_permitidos`.**
 - **Vectors:** `listas`, `dobrar`, `compor`, `partes_de_nome`, `termos_permitidos` and `json_canonico` moved to the check registry. A section with no cases, or a list with a value that is not a string, fails.
 - **Spec:**
@@ -443,7 +443,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - under IGNORECASE, `İ`/`ı` are added to every literal `i`/`I` and to every class that holds `i` or `I`, ranges included; `(?i:…)` and `(?-i:…)` are tracked per group.
   - `search(s, pos, endpos)` cuts at `endpos` but not at `pos`, so lookbehind and `\b` see before it. `match` is an anchored search, and `fullmatch` compiles `\A(?:…)\z`.
 - **`mascaramento/`:** the five layers, `_substituir`, the marker collapse, `conferir` and `nomes_dos_rotulos`. Positions are code points: a search on the folded text is mapped back through two `MapaOffsets`. The Python texts of the regexes are built as `mascaramento.py` builds them. A regex failure is an error (`ErroMascaramento`), never a silent pass.
-- **`indicios.rs`:** the `nome` field of `extract_patient_hints`, and `_nomes_dos_indicios`.
+- **`patient_hints.rs`:** the `nome` field of `extract_patient_hints`, and `_nomes_dos_indicios`.
 - **Vectors:** `regexes`, `remover_dados_pessoais` (126), `conferir` (12), `nomes_dos_rotulos` and `nomes_dos_indicios` moved to the check registry. Only `montar_estado`, `decidir_classificacao` and `validar_respostas` are still pending.
 
 ### Validation (local, 2026-10-31)
@@ -470,7 +470,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - The marker property holds on separated pieces (256 cases). A known name glued to a digit escapes, in StealthApp too (F10, a privacy gap reported to the owner).
 
 ### DV10: a known name glued to digits or `_` (owner decision, 2026-10-31)
-- **Owner:** "não seja compatível com o Python, corrija no Rust".
+- **Owner:** "do not be compatible with the Python, fix it in Rust".
 - **The leak, confirmed with StealthApp's own code.** These texts kept the whole name, and `conferir` found nothing:
   - `"Ref 12345Zanoni Prado"`, glued to a number that is not a pattern;
   - `"arquivo_Zanoni_Prado_eco"`, between underscores;
@@ -496,15 +496,15 @@ See `reports/reviews/classifier/classifier-findings.md`.
 ## Classifier — Phase 3: state and decision
 
 ### Implementation
-- **`estado.rs`: `montar_estado`, following TD §6.**
+- **`state.rs`: `montar_estado`, following TD §6.**
   - Pages are composed (NFC) and selected by mode before empty pages are dropped.
   - The known names are `nomes_conhecidos`, then the hint names and the label names of the whole text.
   - Each page is masked, then `conferir` runs on the whole masked page, then the page is cut at the page and total limits, dropping a broken marker. A page left empty by the cut ends the loop.
   - The other strings of the state (file terms, title terms, extension, mode) are checked one by one. Origins are sorted.
-- **`decisao.rs`:**
+- **`decision.rs`:**
   - `validar_respostas` takes the single `tipo_documento` key. Missing or null probabilities become one-hot on the choice. Keys must be options, values finite and in [0, 1], and the sum within 1e-3 of 1. The values are read as Python's `float()` reads them, and the sum is Python's compensated `sum()`.
   - `decidir_classificacao` sorts with `total_cmp`. The margin is the top-two difference, never below 0. A confidence equal to the threshold is `ok`.
-- **`tipos.rs`:** `EstadoEnviado::para_value()` (canonical form, for the digest) and `json_fio()` (wire JSON in StealthApp's key order).
+- **`types.rs`:** `EstadoEnviado::para_value()` (canonical form, for the digest) and `json_fio()` (wire JSON in StealthApp's key order).
 - **Vectors:** `montar_estado` (21), `validar_respostas` (12) and `decidir_classificacao` (7) moved to the check registry. `PENDING` is now empty. Only the two documented exclusions remain (`referencia_pseudonima`, `bloco_tipo_detectado`).
 
 ### Validation (local, 2026-10-31)
@@ -523,7 +523,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
     - `continue` instead of `break` after a page left empty by the cut. StealthApp sends 10 pages and 59 991 code points, with `truncado`.
     - Unsorted origins.
   - In `decidir_classificacao`, replacing `max(0.0, d)` by `d` is equivalent: `d` is never negative after the descending sort.
-- **Timing (§15, `tests/classifier_medicao.rs`, opt-in, release).** Recorded, not gated:
+- **Timing (§15, `tests/classifier_timing.rs`, opt-in, release).** Recorded, not gated:
   - The 21 vector cases take 401 ms, including the one-time regex compile.
   - A synthetic document of 200 pages (627 504 code points) takes 90 ms in mode `1`, 100 ms in mode `2` and 300 ms in mode `todas`. Mode `todas` sends 21 pages and 60 000 code points, cut.
 
@@ -533,7 +533,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
 ## Classifier — Phase 4: Jev adapter and `classificar`
 
 ### Implementation
-- **`provedor.rs`** (always compiled, no I/O):
+- **`provider.rs`** (always compiled, no I/O):
   - the neutral contract: `CriterioEscolha` and `CRITERIO_TIPO_DOCUMENTO`, `RequestNeutro` (`alvo_versao` = first 16 hex digits of the digest, `politica_versao` = `MASCARAMENTO_VERSAO_PORTE`), `RespostaProvedor`, and the `RlcdProvider` trait (native `async fn`, generics, no `dyn`);
   - `Avaliador`: the deadline wraps the wait for a slot and the call, as in StealthApp. There is no retry, and the latency is measured from the start of the wait;
   - `classificar(prep, limiar, envio)` in TD §9.1 order: no content, then privacy block (with the `conferencia_<camada>` counts), then authorization, then the call and the decision. `Envio` has three variants (`NaoPedido`, `NaoAutorizado`, `Autorizado`), and only the authorized one can reach the provider.
@@ -564,7 +564,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
   - the 11 statuses, a server past the deadline, the wait for a slot inside the deadline, a closed port, a cut body, and a `reqwest` timeout mapped to `timeout`;
   - logs: a global subscriber captures every log line of the test binary, and none has the key, the error body or the exam text.
 - **SDK differential** (`classifier_differential.rs` with `--features classifier-jev`): for each of the 3 000 synthetic documents, the request body is compared byte for byte with the one that typesafe-sdk 0.7.4 builds through StealthApp's own path (`minimizar_estado`, `sdk.Choice`, `prepare_system_one`). All match. Nothing is sent.
-- **Mutants:** 30 tried on `provedor.rs` and `jev.rs`.
+- **Mutants:** 30 tried on `provider.rs` and `jev.rs`.
   - 28 are detected by the unit tests or the local server, among them: the order of `criteria`, `state`/`model`, `instructions`/`criteria`; every check of `classificar`; the deadline; one more slot; the latency; each metadata field; each status and transport class; each header; the model `strip()`; the local-only `http`.
   - 2 survived the first run:
     - a `type` other than `choice` with an otherwise valid shape is now detected, by a new case;
@@ -625,10 +625,10 @@ See `reports/reviews/classifier/classifier-findings.md`.
 ### Reviews
 - Suspended by the owner. Phase 5 joins the pending list.
 
-## Classifier — Phase 6: the anonymizer's index (Python, `../anonimizador`)
+## Classifier — Phase 6: the anonymizer's index (Python, `../anonymizer`)
 
 ### Implementation
-- **`anonimizador/classifier.py`:** runs `<binary> classify --json [--enviar] <copy>` as a child process, without a shell. Its stdin is closed, its stderr is discarded, and the timeout is `2 * (RLCD_TIMEOUT_S + 5) + 5` seconds.
+- **`anonymizer/classifier.py`:** runs `<binary> classify --json [--enviar] <copy>` as a child process, without a shell. Its stdin is closed, its stderr is discarded, and the timeout is `2 * (RLCD_TIMEOUT_S + 5) + 5` seconds.
   - **Accepted output:** exactly one UTF-8 JSON object whose state is known and whose `codigo_saida` equals the exit code and fits the state.
   - **Index cells:** as in §11.2. The weights use three decimals, highest first, with ties in the classifier's order. A reason or error category must be a snake_case word.
   - **Failures:** a timeout, a child that cannot start, or anything else is `error: classifier failed`.
@@ -664,7 +664,7 @@ See `reports/reviews/classifier/classifier-findings.md`.
 ### Implementation
 - **The key in `.env`:**
   - `.env.example` now has `TYPESAFE_API_KEY=`, the optional `RLCD_*` settings with their defaults, and a note that the authorization never goes there.
-  - The binary reads the process environment, then the `.env` from the working directory up, then the crate root's `.env` (`classify::ambiente_em_camadas`). As a result, `anonimizador batch --classifier`, run from its own directory, finds the key.
+  - The binary reads the process environment, then the `.env` from the working directory up, then the crate root's `.env` (`classify::ambiente_em_camadas`). As a result, `anonymizer batch --classifier`, run from its own directory, finds the key.
 - **The authorization is per run:** `CLASSIFIER_REMOTE_ALLOWED` is read from the process only, never from a `.env` (`SO_DO_PROCESSO`). Spec §12 records this.
 - **Live test** (`tests/classifier_live.rs`, spec §14.6): it sends three synthetic documents (echocardiogram with strain, Holter, blood test) to the real Jev. It needs `RUN_JEV_LIVE=1` and `CLASSIFIER_REMOTE_ALLOWED=1`, with the key in the environment or `.env`. It checks the shape of each answer, not the exact type:
   - the state is `ok` or `incerto`;

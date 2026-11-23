@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use embeddings_fundamentals::classifier::{canonico, pyclasses, texto};
+use embeddings_fundamentals::classifier::{canonical, pyclasses, text};
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::{Config, TestRunner};
@@ -78,9 +78,9 @@ json.dump(saida, sys.stdout, ensure_ascii=True)
 
 fn rust(s: &str) -> Value {
     json!({
-        "dobrar": texto::dobrar(s), "compor": texto::compor(s), "lower": texto::lower(s),
-        "upper": texto::upper(s), "title": texto::title(s), "isupper": texto::str_isupper(s),
-        "strip": texto::strip(s), "split": texto::split(s).collect::<Vec<_>>(),
+        "dobrar": text::dobrar(s), "compor": text::compor(s), "lower": text::lower(s),
+        "upper": text::upper(s), "title": text::title(s), "isupper": text::str_isupper(s),
+        "strip": text::strip(s), "split": text::split(s).collect::<Vec<_>>(),
     })
 }
 
@@ -191,7 +191,7 @@ fn canonical_floats_match_python() {
     let esperado: Vec<String> = serde_json::from_slice(&out.stdout).expect("parse python output");
     for (x, esperado) in floats.iter().zip(&esperado) {
         assert_eq!(
-            &canonico::json_canonico(&json!({"x": [x]})),
+            &canonical::json_canonico(&json!({"x": [x]})),
             esperado,
             "{x:e}"
         );

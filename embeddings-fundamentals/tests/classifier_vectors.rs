@@ -1,5 +1,5 @@
 //! Conformance of the exam-type classifier port with StealthApp's vectors
-//! (`tests/fixtures/classifier/vetores.json`, spec/CLASSIFIER.md §14.1).
+//! (`tests/fixtures/classifier/vectors.json`, spec/CLASSIFIER.md §14.1).
 //!
 //! The vectors are read directly, never copied into code. Every top-level section is
 //! either covered by a test here, still pending (a later phase covers it), or excluded
@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use embeddings_fundamentals::classifier::{
-    self, Camada, Categoria, EntradaClassificacao, EstadoClassificacao, PaginasModo, canonico,
-    decisao, estado, indicios, listas, mascaramento, texto,
+    self, Camada, Categoria, EntradaClassificacao, EstadoClassificacao, PaginasModo, canonical,
+    decision, masking, patient_hints, state, text, word_lists,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -53,7 +53,7 @@ const PENDING: &[&str] = &[];
 const EXCLUDED: &[&str] = &["referencia_pseudonima", "bloco_tipo_detectado"];
 
 fn vectors_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/classifier/vetores.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/classifier/vectors.json")
 }
 
 #[expect(clippy::expect_used, reason = "test helper")]
@@ -267,12 +267,12 @@ fn strings(value: &Value) -> Vec<&str> {
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_listas(section: &Value) {
     let listas_tv = section.as_object().expect("`listas` is an object");
-    let nomes: Vec<&str> = listas::TODAS.iter().map(|(n, _)| *n).collect();
+    let nomes: Vec<&str> = word_lists::TODAS.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         nomes,
         listas_tv.keys().map(String::as_str).collect::<Vec<_>>()
     );
-    for (nome, lista) in listas::TODAS {
+    for (nome, lista) in word_lists::TODAS {
         assert_eq!(strings(&listas_tv[*nome]), *lista, "list {nome}");
     }
 }
@@ -281,7 +281,7 @@ fn check_dobrar(section: &Value) {
     for case in cases(section) {
         let entrada = text(case, "entrada");
         assert_eq!(
-            texto::dobrar(entrada),
+            text::dobrar(entrada),
             text(case, "saida"),
             "dobrar({entrada:?})"
         );
@@ -292,7 +292,7 @@ fn check_compor(section: &Value) {
     for case in cases(section) {
         let entrada = text(case, "entrada");
         assert_eq!(
-            texto::compor(entrada),
+            text::compor(entrada),
             text(case, "saida"),
             "compor({entrada:?})"
         );
@@ -303,7 +303,7 @@ fn check_partes_de_nome(section: &Value) {
     for case in cases(section) {
         let entrada = text(case, "entrada");
         assert_eq!(
-            mascaramento::partes_de_nome(entrada),
+            masking::partes_de_nome(entrada),
             strings(&case["saida"]),
             "partes_de_nome({entrada:?})"
         );
@@ -314,7 +314,7 @@ fn check_termos_permitidos(section: &Value) {
     for case in cases(section) {
         let entrada = text(case, "entrada");
         assert_eq!(
-            estado::termos_permitidos(entrada),
+            state::termos_permitidos(entrada),
             strings(&case["saida"]),
             "termos_permitidos({entrada:?})"
         );
@@ -323,10 +323,10 @@ fn check_termos_permitidos(section: &Value) {
 
 fn check_json_canonico(section: &Value) {
     for case in cases(section) {
-        let saida = canonico::json_canonico(&case["valor"]);
+        let saida = canonical::json_canonico(&case["valor"]);
         assert_eq!(saida, text(case, "saida"));
         assert_eq!(
-            hex::encode(canonico::digest(&case["valor"])),
+            hex::encode(canonical::digest(&case["valor"])),
             text(case, "sha256_hex")
         );
     }
@@ -349,7 +349,7 @@ fn contagens(mapa: &std::collections::BTreeMap<Camada, u32>) -> Value {
 
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_regexes(section: &Value) {
-    let textos = mascaramento::textos_python();
+    let textos = masking::textos_python();
     let nomes: Vec<&str> = textos.iter().map(|(nome, _)| *nome).collect();
     assert_eq!(
         nomes,
@@ -362,10 +362,10 @@ fn check_regexes(section: &Value) {
     );
     for (nome, texto) in &textos {
         match texto {
-            mascaramento::TextoPython::Um(texto) => {
+            masking::TextoPython::Um(texto) => {
                 assert_eq!(text(section, nome), texto, "{nome}");
             }
-            mascaramento::TextoPython::Lista(lista) => {
+            masking::TextoPython::Lista(lista) => {
                 assert_eq!(strings(&section[*nome]), *lista, "{nome}");
             }
         }
@@ -375,7 +375,7 @@ fn check_regexes(section: &Value) {
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_remover_dados_pessoais(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
-        let saida = mascaramento::remover_dados_pessoais(
+        let saida = masking::remover_dados_pessoais(
             text(case, "texto"),
             &owned(&case["conhecidos"]),
             &owned(&case["preservar"]),
@@ -393,7 +393,7 @@ fn check_remover_dados_pessoais(section: &Value) {
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_conferir(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
-        let achados = mascaramento::conferir(text(case, "texto"), &owned(&case["conhecidos"]))
+        let achados = masking::conferir(text(case, "texto"), &owned(&case["conhecidos"]))
             .expect("the check runs");
         assert_eq!(contagens(&achados), case["saida"], "case {i}");
     }
@@ -402,9 +402,8 @@ fn check_conferir(section: &Value) {
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_nomes_dos_rotulos(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
-        let nomes =
-            mascaramento::nomes_dos_rotulos(text(case, "texto"), &owned(&case["preservar"]))
-                .expect("runs");
+        let nomes = masking::nomes_dos_rotulos(text(case, "texto"), &owned(&case["preservar"]))
+            .expect("runs");
         assert_eq!(nomes, strings(&case["saida"]), "case {i}");
     }
 }
@@ -412,7 +411,7 @@ fn check_nomes_dos_rotulos(section: &Value) {
 #[expect(clippy::expect_used, reason = "a check fails by panicking")]
 fn check_nomes_dos_indicios(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
-        let nomes = indicios::nomes_dos_indicios(text(case, "entrada")).expect("runs");
+        let nomes = patient_hints::nomes_dos_indicios(text(case, "entrada")).expect("runs");
         assert_eq!(nomes, strings(&case["saida"]), "case {i}");
     }
 }
@@ -423,12 +422,12 @@ fn check_montar_estado(section: &Value) {
         let entrada: EntradaClassificacao =
             serde_json::from_value(case["entrada"].clone()).expect("the input deserializes");
         let modo: PaginasModo = text(case, "modo").parse().expect("a pages mode");
-        let prep = estado::montar_estado(&entrada, modo).expect("the state builds");
+        let prep = state::montar_estado(&entrada, modo).expect("the state builds");
         let saida = &case["saida"];
         let valor = prep.estado.para_value();
         assert_eq!(valor, saida["estado"], "case {i}: state");
         assert_eq!(
-            canonico::json_canonico(&valor),
+            canonical::json_canonico(&valor),
             text(saida, "json_canonico"),
             "case {i}"
         );
@@ -489,7 +488,7 @@ fn check_montar_estado(section: &Value) {
 
 fn check_validar_respostas(section: &Value) {
     for (i, case) in cases(section).iter().enumerate() {
-        let saida = decisao::validar_respostas(&case["brutas"]).map(|r| {
+        let saida = decision::validar_respostas(&case["brutas"]).map(|r| {
             let probabilidades: serde_json::Map<String, Value> = Categoria::TODAS
                 .iter()
                 .map(|c| (c.valor().to_owned(), Value::from(r.probabilidades[c.indice()])))
@@ -519,7 +518,7 @@ fn check_decidir_classificacao(section: &Value) {
         }
         let limiar = case["limiar"].as_f64().expect("a number");
         let (estado, confianca, margem) =
-            decisao::decidir_classificacao(escolha, &probabilidades, limiar);
+            decision::decidir_classificacao(escolha, &probabilidades, limiar);
         let saida = &case["saida"];
         let esperado = match saida[0].as_str().expect("a state") {
             "ok" => EstadoClassificacao::Ok,
