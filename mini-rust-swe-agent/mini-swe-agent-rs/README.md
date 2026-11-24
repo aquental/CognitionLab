@@ -16,8 +16,9 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
 | P6 Parity and BDD | Done: 27 JSON scenarios (21 agent, 6 environment) give equal normalized results through `parity/run_python.py` and the Rust library (`tests/parity.rs`); comparator mutation tests (`tests/comparator.rs`); Cucumber features (`tests/bdd.rs`) with one Gherkin scenario per parity scenario and a manifest check; full-suite Linux gate (`parity/Dockerfile`) | stacked on P5 |
 | P7 Config and CLI | Done: `src/config.rs` (key=value and file specs, lookup and suffix rules, embedded built-ins, flags layer, class registries, `TextbasedModelConfig` with env-backed defaults) and `src/main.rs` (clap, global config dir and `.env` overlay, banner, task from `-t`/`run.task`/stdin, exit codes 0/1/2); typed dumps of both shipped YAML files equal pydantic's; Python `mini` and the Rust CLI write equal trajectories for 4 cases; `cli.feature`. **M1 reached** | stacked on P6 |
+| P8 Real model | Done: `src/model/textbased.rs` (`TextbasedModel<B: ChatBackend>`), `openai_compat.rs` (OpenAI-compatible Chat Completions over `ureq`, settings split, error mapping), `retry.rs` (tenacity's schedule), `cost.rs` (LiteLLM-format registry), `examples/hello_world.rs`; canned-backend tests, the fake HTTP server test and the raw-response differential against Python's `LitellmTextbasedModel` pass; the real-endpoint run is opt-in | stacked on main |
 
-Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6) and at the CLI level for the P7 gate cases (`tests/support/cli.rs`). The text-based model and its HTTP adapter are M2 (P8-P9).
+Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6) and at the CLI level for the P7 gate cases (`tests/support/cli.rs`). The text-based model (P8) is proven against Python's `LitellmTextbasedModel` on canned provider responses (`tests/text_parity.rs`) and against a fake HTTP server (`tests/fake_http.rs`); P9 (docs) completes M2.
 
 ## Commands
 
@@ -99,9 +100,27 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | Rust-only Linux gate | Pass; `parity` and `bdd` skipped on purpose |
 | `cargo deny check advisories` | No advisories, after one recorded exception in `deny.toml`: `humantime` (unmaintained, dev-only through `cucumber`, D9) |
 
-## Usage (M1)
+## Usage
 
-The text-based model arrives in P8; until then the CLI runs the deterministic model:
+**Provider (D4).** The text-based model speaks the OpenAI-compatible Chat Completions protocol (`POST
+{api_base}/chat/completions`, bearer auth). That covers OpenAI, OpenRouter, a LiteLLM proxy, vLLM and Ollama.
+`model.model_kwargs` is split: `api_base`/`base_url` (default `https://api.openai.com/v1`), `api_key` (else the
+variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` configure the transport; `drop_params` is
+dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are refused; the rest (`temperature`,
+`max_tokens`, …) is sent in the body.
+
+```bash
+OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased \
+  -c model.litellm_model_registry=registry.json -t "List the files"
+cargo run --example hello_world -- -m gpt-4o-mini -t "List the files"   # MSWEA_COST_TRACKING=ignore_errors
+```
+
+Costs come from a LiteLLM-format registry file (`litellm_model_registry` or `LITELLM_MODEL_REGISTRY_PATH`; no prices
+are bundled), or set `cost_tracking: ignore_errors` (`MSWEA_COST_TRACKING`) to run at cost 0.0. Retries follow
+Python's: up to `MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT` tries (default 10), waits of `clamp(2^(n-1), 4, 60)` seconds,
+and never after HTTP 401, 403, 404, or a 400 that reports a context-window overflow or an unsupported parameter.
+
+The deterministic model needs no network:
 
 ```bash
 cargo run --locked -- --model-class deterministic -m deterministic -c mini_textbased \
@@ -116,6 +135,17 @@ is printed only after a successful run, as Python prints it after `run` returns.
 
 **Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
 shipped YAML files (`parity/config_dumps.py`).
+
+## Evidence (P8, 2026-11-24)
+
+| Check | Result |
+|---|---|
+| `cargo test --locked` on macOS with the reference | Pass: `textbased` 11, `fake_http` 4, `text_parity` 1 (7 raw-response cases equal), everything else as in P7 |
+| Sabotage: the output price replaced by the input price in `cost.rs` | `text_parity` fails on 5 cases |
+| Full-suite Linux gate, including `text_parity` against Python | Pass (exit 0) |
+| Rust-only Linux gate, including `fake_http` | Pass |
+| `cargo deny check advisories` (with `ureq` 3.5.1 and rustls) | No advisories |
+| Real endpoint (`tests/real_endpoint.rs`, `--ignored`) | Not run: needs the owner's API key |
 
 ## Evidence (P7, 2026-11-24)
 
@@ -206,4 +236,14 @@ shipped YAML files (`parity/config_dumps.py`).
   must be a non-empty string; a `null` `model` section is `{}` and a falsy `model_class` is the default; a truthy
   non-string `model_name` is an error, a falsy one falls back to `MSWEA_MODEL_NAME`. The file lookup drops `.`
   components as `pathlib` does and keeps `..`. `-o ""` is "not given". `environment.env` keeps its key order.
+- **Text-based model (P8).** Divergences (plan §2.4): one wire protocol (OpenAI-compatible) instead of LiteLLM's
+  provider routing; cost is the registry formula only (`prompt × input + completion × output`, exact name then
+  without the `provider/` prefix), with no bundled prices; `set_cache_control` is kept in the config (and set for
+  Anthropic names, as `get_model` does) but no cache-control markers are sent, and Anthropic thinking blocks are not
+  reordered; a literal `model_kwargs.api_key` is written as `"<redacted>"` in trajectories and template variables;
+  `api_key_env` is a Rust-only setting. Error exit statuses use LiteLLM's exception names
+  (`AuthenticationError`, `ContextWindowExceededError`, …); a cost error is `RuntimeError`, as in Python. The
+  `response` stored in `extra` is the provider's raw JSON, where Python stores LiteLLM's normalized dump; the
+  raw-response differential therefore compares outcome, content, actions, cost, `extra` keys and global stats.
+  Retry warnings go to stderr as `WARNING:litellm_model:…`; neither the API key nor a request body is ever logged.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

@@ -178,9 +178,23 @@ fn usage_and_config_errors() {
         );
     }
     assert_eq!(sandbox.rust(&["--no-such-flag"]).status.code(), Some(2));
-    let output = sandbox.rust(&["-m", "gpt-x", "-t", "t"]);
+    // The text-based model refuses reserved request keys before any request is sent.
+    let output = sandbox.rust(&[
+        "-m",
+        "gpt-x",
+        "-c",
+        "mini_textbased",
+        "-c",
+        "model.model_kwargs.stream=true",
+        "-t",
+        "t",
+    ]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("P8"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("model_kwargs.stream"),
+        "{}",
+        stderr(&output)
+    );
     // The model is built first, as in Python, so it needs its outputs.
     let output = sandbox.rust(&[
         "-c",

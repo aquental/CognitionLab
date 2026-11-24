@@ -127,11 +127,6 @@ pub enum ConfigError {
         /// The value found.
         found: String,
     },
-    /// A model class planned for a later phase.
-    #[error(
-        "model class `{0}` is available from phase P8 (the text-based model); use --model-class deterministic"
-    )]
-    NotYetAvailable(String),
 }
 
 /// `_key_value_spec_to_nested_dict` (`config/__init__.py:31-53`).
@@ -450,14 +445,20 @@ pub fn environment_config(section: &Value) -> Result<LocalEnvironmentConfig, Con
 pub enum ModelChoice {
     /// `--model-class deterministic`.
     Deterministic(DeterministicModelConfig),
+    /// The text-based model over an OpenAI-compatible endpoint (the default class).
+    Textbased(TextbasedModelConfig),
 }
 
 const MODEL_CLASSES: &str =
-    "deterministic; from P8: textbased (aliases litellm_textbased, openai_textbased)";
+    "textbased (aliases litellm_textbased, openai_textbased), deterministic";
+
+/// Model names that get Anthropic cache control by default (`models/__init__.py:53-57`).
+const ANTHROPIC_HINTS: &[&str] = &["anthropic", "sonnet", "opus", "claude"];
 
 /// `get_model` (`models/__init__.py:43-60`): a `null` section is `{}`; the model name is a
 /// truthy configured value, else `MSWEA_MODEL_NAME`; a falsy class means the default (the
-/// text-based model, P8), a truthy non-string class is unknown.
+/// text-based model), a truthy non-string class is unknown. An Anthropic model name turns on
+/// `set_cache_control: default_end` unless the key is present.
 pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, ConfigError> {
     let empty = Value::Object(Map::new());
     let section = if section.is_null() { &empty } else { section };
@@ -485,6 +486,15 @@ pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, Conf
             .map(str::to_owned)
             .ok_or(ConfigError::NoModelName)?,
     };
+    let lower = name.to_lowercase();
+    if ANTHROPIC_HINTS.iter().any(|hint| lower.contains(hint))
+        && !map.contains_key("set_cache_control")
+    {
+        map.insert(
+            "set_cache_control".to_owned(),
+            Value::String("default_end".to_owned()),
+        );
+    }
     map.insert("model_name".to_owned(), Value::String(name));
     match class.as_deref() {
         Some("deterministic" | "minisweagent.models.test_models.DeterministicModel") => {
@@ -496,9 +506,10 @@ pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, Conf
             | "litellm_textbased"
             | "openai_textbased"
             | "minisweagent.models.litellm_textbased_model.LitellmTextbasedModel",
-        ) => Err(ConfigError::NotYetAvailable(
-            class.unwrap_or_else(|| "textbased".to_owned()),
-        )),
+        ) => Ok(ModelChoice::Textbased(TextbasedModelConfig::from_section(
+            &Value::Object(map),
+            host,
+        )?)),
         Some(other) => Err(ConfigError::UnknownClass {
             kind: "model",
             name: other.to_owned(),

@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mini_swe_agent_rs::config::{
-    self, ConfigError, ConfigSource, CostTracking, ModelChoice, Overrides, TextbasedModelConfig,
+    self, CacheControl, ConfigError, ConfigSource, CostTracking, ModelChoice, Overrides,
+    TextbasedModelConfig,
 };
 use mini_swe_agent_rs::host_env::HostEnv;
 use serde_json::{Value, json};
@@ -283,7 +284,9 @@ fn model_class_and_name_resolution() {
         &env,
     )
     .unwrap();
-    let ModelChoice::Deterministic(config) = choice;
+    let ModelChoice::Deterministic(config) = choice else {
+        panic!("deterministic")
+    };
     assert_eq!(config.model_name, "deterministic");
 
     // MSWEA_MODEL_NAME is the last source of the model name.
@@ -292,7 +295,9 @@ fn model_class_and_name_resolution() {
         &json!({"model_class": "deterministic", "outputs": []}),
         &env_named,
     )
-    .unwrap();
+    .unwrap() else {
+        panic!("deterministic")
+    };
     assert_eq!(config.model_name, "from-env");
 
     assert!(matches!(
@@ -302,18 +307,35 @@ fn model_class_and_name_resolution() {
         ),
         Err(ConfigError::NoModelName)
     ));
-    for class in [None, Some("textbased"), Some("litellm_textbased")] {
+    for class in [
+        None,
+        Some("textbased"),
+        Some("litellm_textbased"),
+        Some("openai_textbased"),
+    ] {
         let mut model = json!({"model_name": "gpt-x"});
         if let Some(class) = class {
             model["model_class"] = json!(class);
         }
-        let error = config::model_choice(&model, &env).unwrap_err();
-        assert!(
-            matches!(error, ConfigError::NotYetAvailable(_)),
-            "{class:?}: {error}"
-        );
-        assert!(error.to_string().contains("P8"), "{error}");
+        let Ok(ModelChoice::Textbased(config)) = config::model_choice(&model, &env) else {
+            panic!("{class:?}: the text-based model")
+        };
+        assert_eq!(config.model_name, "gpt-x");
+        assert_eq!(config.set_cache_control, None);
     }
+    // `get_model` turns on cache control for Anthropic names unless the key is present.
+    let anthropic = |extra: Value| {
+        let mut model = json!({"model_name": "anthropic/claude-sonnet-x"});
+        for (k, v) in extra.as_object().unwrap() {
+            model[k] = v.clone();
+        }
+        match config::model_choice(&model, &env) {
+            Ok(ModelChoice::Textbased(config)) => config.set_cache_control,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(anthropic(json!({})), Some(CacheControl::DefaultEnd));
+    assert_eq!(anthropic(json!({"set_cache_control": null})), None);
     assert!(matches!(
         config::model_choice(&json!({"model_name": "m", "model_class": "litellm"}), &env),
         Err(ConfigError::UnknownClass { .. })
@@ -452,7 +474,7 @@ fn sections_and_class_selectors_follow_the_python_factories() {
         assert!(
             matches!(
                 config::model_choice(&section, &env),
-                Err(ConfigError::NotYetAvailable(_))
+                Ok(ModelChoice::Textbased(_))
             ),
             "{section}"
         );
@@ -464,7 +486,7 @@ fn sections_and_class_selectors_follow_the_python_factories() {
     assert!(config::model_choice(&json!([]), &env).is_err());
     assert!(matches!(
         config::model_choice(&json!({"model_class": "openai_textbased"}), &env),
-        Err(ConfigError::NotYetAvailable(_))
+        Ok(ModelChoice::Textbased(_))
     ));
     // A truthy configured name wins over the environment; a non-string one is an error.
     assert!(

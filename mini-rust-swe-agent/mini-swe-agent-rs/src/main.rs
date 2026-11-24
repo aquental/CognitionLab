@@ -16,13 +16,17 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use clap::Parser;
 use clap::builder::TypedValueParser as _;
-use mini_swe_agent_rs::agent::{Agent, DefaultAgent};
+use mini_swe_agent_rs::agent::{Agent, AgentConfig, DefaultAgent};
 use mini_swe_agent_rs::clock::{Clock, SystemClock};
 use mini_swe_agent_rs::config::{self, ModelChoice, Overrides};
 use mini_swe_agent_rs::environment::local::LocalEnvironment;
 use mini_swe_agent_rs::host_env::HostEnv;
+use mini_swe_agent_rs::message::ExitInfo;
+use mini_swe_agent_rs::model::Model;
 use mini_swe_agent_rs::model::deterministic::DeterministicModel;
+use mini_swe_agent_rs::model::openai_compat::{OpenAiCompatBackend, Settings};
 use mini_swe_agent_rs::model::stats::GlobalModelStats;
+use mini_swe_agent_rs::model::textbased::TextbasedModel;
 use serde_json::Map;
 
 /// Run mini-swe-agent-rs in your local environment.
@@ -32,7 +36,7 @@ struct Cli {
     /// Model to use.
     #[arg(short = 'm', long = "model")]
     model: Option<String>,
-    /// Model class: `deterministic` (the text-based model arrives in P8).
+    /// Model class: `textbased` (the default; OpenAI-compatible endpoint) or `deterministic`.
     #[arg(long = "model-class")]
     model_class: Option<String>,
     /// Agent class: only `default`.
@@ -183,11 +187,17 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let env = LocalEnvironment::new(env_config, host.clone());
     let output_path = agent_config.output_path.clone();
+    // One generic run per model type (plan §3.3: static dispatch).
     let result = match model_choice {
         ModelChoice::Deterministic(model_config) => {
             let model = DeterministicModel::new(model_config, stats, clock.clone())?;
-            let mut agent = DefaultAgent::new(agent_config, model, env, clock)?;
-            agent.run(&task, Map::new())?
+            run_agent(agent_config, model, env, clock, &task)?
+        }
+        ModelChoice::Textbased(model_config) => {
+            let settings = Settings::from_model_kwargs(&model_config.model_kwargs, &host)?;
+            let backend = OpenAiCompatBackend::new(settings.transport);
+            let model = TextbasedModel::new(model_config, backend, stats, clock.clone(), &host)?;
+            run_agent(agent_config, model, env, clock, &task)?
         }
     };
     // Python prints this only after `run` returned.
@@ -196,4 +206,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     }
     say(&format!("Exit status: {}", result.exit_status));
     Ok(())
+}
+
+fn run_agent<M: Model>(
+    config: AgentConfig,
+    model: M,
+    env: LocalEnvironment,
+    clock: Arc<dyn Clock>,
+    task: &str,
+) -> anyhow::Result<ExitInfo> {
+    let mut agent = DefaultAgent::new(config, model, env, clock)?;
+    Ok(agent.run(task, Map::new())?)
 }

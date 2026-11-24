@@ -28,6 +28,8 @@ dirs = "=7.0.0"
 # Top-level error report of the binary only (plan §3.5).
 anyhow = "=1.0.105"
 regex-syntax = { version = "=0.8.12", default-features = false, features = ["std", "unicode"] }
+# Blocking HTTP for the OpenAI-compatible backend (plan §3.6; rustls, no tokio).
+ureq = { version = "=3.5.1", default-features = false, features = ["rustls"] }
 
 [lints.rust]
 unsafe_code = "forbid"

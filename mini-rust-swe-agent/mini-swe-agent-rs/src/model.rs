@@ -1,8 +1,12 @@
 //! The `Model` protocol (`__init__.py:43-55`, plan §3.3).
 
 pub mod actions_text;
+pub mod cost;
 pub mod deterministic;
+pub mod openai_compat;
+pub mod retry;
 pub mod stats;
+pub mod textbased;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
