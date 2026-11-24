@@ -9,7 +9,8 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | Phase | State | Pull request |
 |---|---|---|
 | P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
-| P1–P7 | Not started | — |
+| P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
+| P2–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
 
@@ -60,4 +61,10 @@ uv run --frozen --project ../mini-swe-agent python parity/yaml_dump.py
   block scalar that ends the file without a final newline, which the shipped `default.yaml` does; `src/yaml.rs`
   removes it, and the `eof_*` goldens pin PyYAML's result. `yaml-rust2` and `saphyr` behave the same, so the
   fallback would not help.
+- **Actions** are decoded by key presence (`src/message.rs`): a `raise` key always means a scripted raise and its
+  payload must be valid, as Python checks `"raise" in action` first. An untagged serde enum would read
+  `{"raise": …}` as an empty command.
+- **Interrupts** hold at least one message by construction; the first one is boxed so `Result<_, StepError>`
+  stays small.
+- **`HostEnv`** keeps every entry for child processes, and only the UTF-8 entries for templates.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).
