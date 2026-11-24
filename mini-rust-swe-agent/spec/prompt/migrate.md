@@ -4,7 +4,7 @@ There is a Python reference project in mini-rust-swe-agent/mini-swe-agent/ (the 
 
 Your task:
 
-1. Create a new Rust project in mini-rust-swe-agent/rust-mini-swe-agent/ with `cargo new --bin`.
+1. Create a new Rust project in mini-rust-swe-agent/mini-swe-agent-rs/ with `cargo new --bin`.
 2. Follow Rust best practices (clear ownership, Result instead of panic, tests, no unnecessary unsafe). Use the /rust-skills skill as a reference.
 3. Use the Python code as a living specification. Do not copy blindly; preserve the radical simplicity of the original.
 4. Implement in this order:
@@ -14,7 +14,7 @@ Your task:
    - Mock model for parity tests
    - Trajectory serialization (serde_json)
    - Minimal CLI
-5. Create or update spec/PLAN.md with the detailed plan (an initial version already exists; refine it as needed).
+5. Keep the detailed plan in mini-swe-agent-rs/spec/migration-plan.md (it replaced the earlier spec/PLAN.md and spec/STUDY.md; refine it as needed).
 6. Keep README.md up to date, describing the status and the design decisions.
 
 Success criteria:

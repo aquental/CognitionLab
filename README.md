@@ -89,7 +89,7 @@ Tools that build the anonymized corpus the lab evaluates. Everything runs on the
 
 A study of the [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) harness: the software between an LLM and a shell. It covers the agent loop, how actions are parsed, limits, control flow driven by exceptions, sandboxing the environment, and the trajectory format. It ends with a plan to port the harness to Rust with traits, enums, and structural parity tests against the Python reference.
 
-**Status:** analysis and migration plan are written; the Rust crate does not exist yet. → [Study](mini-rust-swe-agent/spec/STUDY.md) · [Plan](mini-rust-swe-agent/spec/PLAN.md) (in Portuguese)
+**Status:** analysis and migration plan are written; the Rust crate does not exist yet. → [Migration plan](mini-rust-swe-agent/mini-swe-agent-rs/spec/migration-plan.md)
 
 ---
 
