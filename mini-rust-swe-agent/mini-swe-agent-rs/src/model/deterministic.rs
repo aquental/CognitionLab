@@ -65,6 +65,11 @@ impl DeterministicModel {
         stats: Arc<GlobalModelStats>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, AgentError> {
+        if !config.multimodal_regex.is_empty() {
+            return Err(AgentError::Config(
+                crate::model::textbased::MULTIMODAL_UNSUPPORTED.to_owned(),
+            ));
+        }
         let observations = Observations::new(&config.observation_template)?;
         Ok(Self {
             config,

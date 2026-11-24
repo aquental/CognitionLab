@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A port of [mini-swe-agent](mini-swe-agent/README.md) (Python) to Rust. The task statement is `spec/prompt/migrate.md` (in Portuguese); read it before starting phase work.
+A port of [mini-swe-agent](mini-swe-agent/README.md) (Python) to Rust. The task statement is `spec/prompt/migrate.md`; read it before starting phase work.
 
 - `mini-swe-agent/` is the **Python reference implementation and the living spec**. Treat it as read-only. It has its own `AGENTS.md` (style rules for the Python code) that does not apply to the Rust crate.
-- `mini-swe-agent-rs/` is where the Rust crate goes. **So far it holds only `spec/`**: `spec/migration-plan.md` (**the only plan**: Python analysis, architecture, phases P0-P9, parity gates P01-P18, decisions) and `spec/reviews/` (adversarial review rounds). The crate is not scaffolded yet. Check what exists before assuming a module, test, or command is there.
+- `mini-swe-agent-rs/` is the Rust crate. Phases P0-P9 are done and merged (milestones M1, offline parity, and M2, a usable agent); its `README.md` has the status, usage, every divergence and decision, and the evidence. `spec/migration-plan.md` is **the only plan** (Python analysis, architecture, phases P0-P9, parity gates P01-P18, decisions); `spec/reviews/` holds the plan review rounds and one `pN/FINDINGS.md` per phase review. Check what exists before assuming a module, test, or command is there.
 - Owner decisions (see the plan's section 5.2): the directory is `mini-swe-agent-rs/` (D1); BDD with Cucumber is in scope (D9); `LocalEnvironment` runs `/bin/bash -c`, a documented divergence from Python's `/bin/sh` (D11). The YAML crate is `serde-saphyr` 2.2.x (D5), with `strict_booleans` and last-wins duplicate keys.
 - `mini-swe-agent-rs/spec/migration-plan.md` replaced the old `spec/PLAN.md` and `spec/STUDY.md` (merged and removed). `spec/` now holds only the task statement in `spec/prompt/migrate.md`. Keep the plan and `README.md` (status and design decisions) current as work lands.
 - The git root is the parent directory `CognitionLab/`. Sibling crate `../embeddings-fundamentals/` shows the user's Rust conventions (Rust 2024, toolchain pinned in `rust-toolchain.toml`, `clippy.toml` allowing unwrap/expect/panic only in tests).
@@ -21,15 +21,18 @@ A port of [mini-swe-agent](mini-swe-agent/README.md) (Python) to Rust. The task 
 
 ## Commands
 
-Rust (run inside `mini-swe-agent-rs/` once it exists; toolchain is cargo 1.99.1):
+Rust (run inside `mini-swe-agent-rs/`; the toolchain is pinned to 1.99.1):
 
 ```bash
-cargo build
-cargo test
-cargo test <name_filter>                 # single test
+cargo build --locked
+cargo test --locked
+cargo test --locked <name_filter>        # single test
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
+cargo deny check advisories
 ```
+
+The parity, BDD, CLI and text-model differential tests run the Python reference through `uv`. They need the reference's git-ignored `uv.lock`, so from a git worktree point them at a checkout that has it with `MSWEA_RS_REFERENCE_DIR=/path/to/mini-rust-swe-agent/mini-swe-agent`, or set `MSWEA_RS_NO_REFERENCE=1` to skip them on purpose. The Linux gates (Rust-only and the full suite in `parity/Dockerfile`) are in the crate's `README.md`. The real-endpoint test is opt-in: `cargo test --test real_endpoint -- --ignored` with `OPENAI_API_KEY` and `MSWEA_RS_REAL_MODEL` exported.
 
 Python reference (run inside `mini-swe-agent/`), useful to confirm original behavior or regenerate expected trajectories:
 
