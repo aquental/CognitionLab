@@ -1258,3 +1258,32 @@ fn an_empty_output_path_is_an_error() {
         Err(AgentError::Io { .. })
     ));
 }
+
+#[test]
+fn fatal_traceback_is_the_error_source_chain() {
+    // Plan §2.4: `extra.traceback` is the error's `source()` chain, not a Python traceback.
+    let clock = system_clock();
+    let config: DeterministicModelConfig = serde_json::from_value(json!({
+        "outputs": [output("x", &["echo hi"])],
+        "observation_template": "{{ no_such_variable }}"
+    }))
+    .unwrap();
+    let model = DeterministicModel::new(config, stats(), clock.clone()).unwrap();
+    let mut agent = DefaultAgent::new(agent_config(json!({})), model, local(30), clock).unwrap();
+    let error = agent.run("t", Map::new()).unwrap_err();
+    assert!(matches!(error, AgentError::Template(_)), "{error}");
+    let last = agent.messages().last().unwrap();
+    let traceback = last.extra_value("traceback").unwrap().as_str().unwrap();
+    let exception = last.extra_value("exception_str").unwrap().as_str().unwrap();
+    assert!(traceback.starts_with(exception), "{traceback}");
+    assert!(traceback.contains("\ncaused by: "), "{traceback}");
+}
+
+#[test]
+fn a_multimodal_regex_is_refused() {
+    // Multimodal content is out of scope (plan §2.3); a non-empty pattern would be ignored.
+    let config: DeterministicModelConfig =
+        serde_json::from_value(json!({"outputs": [], "multimodal_regex": "<img>"})).unwrap();
+    let built = DeterministicModel::new(config, stats(), system_clock());
+    assert!(matches!(built, Err(AgentError::Config(_))), "{built:?}");
+}

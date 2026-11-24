@@ -9,7 +9,7 @@ This project studies a reimplementation of the **mini-swe-agent harness in Rust*
 
 Performance gains and success rates on real tasks are not measured.
 
-This study contributes the analysis, the migration design and, in later stages, the Rust implementation and its validation. The original harness, its prompts, and its tests belong to the [mini-swe-agent](mini-swe-agent/README.md) project, by Kilian Lieret, Carlos E. Jimenez, and contributors. Keep the [original license](mini-swe-agent/LICENSE.md) in any adaptation where it applies.
+This study contributes the analysis, the migration design, the Rust implementation and its validation. The original harness, its prompts, and its tests belong to the [mini-swe-agent](mini-swe-agent/README.md) project, by Kilian Lieret, Carlos E. Jimenez, and contributors. Keep the [original license](mini-swe-agent/LICENSE.md) in any adaptation where it applies.
 
 ## What is being built
 
@@ -157,7 +157,7 @@ The suite in [`mini-swe-agent/tests/`](mini-swe-agent/tests/) covers agents, mod
 - `conftest.py`: isolation of global statistics, Docker/Podman selection, and comparison helpers; `test_fire.py` makes real opt-in calls.
 - `test_data/`: data and update scripts. Some helpers expect trajectories as lists of messages; check that the files are available and do not assume they use the same schema as the current envelope.
 
-Inherited tests guide the port, but their normalizations must not be copied without review. Stripping whitespace or output lines can hide relevant differences. The parity suite will have its own strict policy, documented in the plan.
+Inherited tests guide the port, but their normalizations must not be copied without review. Stripping whitespace or output lines can hide relevant differences. The port's parity suite has its own strict policy instead: [the comparator](mini-swe-agent-rs/tests/support/compare.rs) normalizes only the fields listed in the plan (timestamps, type paths, the version, fatal exit texts) and compares everything else exactly.
 
 ## The engineering decisions this study exercises
 

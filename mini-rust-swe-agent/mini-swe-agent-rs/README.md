@@ -32,8 +32,10 @@ variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` (second
 configure the transport; `drop_params` is dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are
 refused; the rest (`temperature`, `max_tokens`, …) is sent in the body. `api_base` must be `http(s)://host…`,
 without credentials or a fragment; its query string is kept after `/chat/completions`. Redirects are not followed
-(the history never goes to another host). The proxy comes from `ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` (minus
-`NO_PROXY`) in the same environment the run sees, including the global `.env`.
+(the history never goes to another host). The proxy is the first of `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (each
+also in lower case) that is set, unless `NO_PROXY` or `no_proxy` matches the host; it is read from the same
+environment the run sees, including the global `.env`. A non-empty `multimodal_regex` is refused, since multimodal
+content is out of scope (plan §2.3).
 
 **API key.** Put `OPENAI_API_KEY=...` in the global `.env` (macOS: `~/Library/Application Support/mini-swe-agent/.env`;
 Linux: `~/.config/mini-swe-agent/.env`; or the directory in `MSWEA_GLOBAL_CONFIG_DIR`), the file Python's
@@ -42,7 +44,7 @@ Linux: `~/.config/mini-swe-agent/.env`; or the directory in `MSWEA_GLOBAL_CONFIG
 ```bash
 OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased \
   -c model.litellm_model_registry=registry.json -t "List the files"
-cargo run --example hello_world -- -m gpt-4o-mini -t "List the files"   # MSWEA_COST_TRACKING=ignore_errors
+OPENAI_API_KEY=... MSWEA_COST_TRACKING=ignore_errors cargo run --locked --example hello_world -- -m gpt-4o-mini -t "List the files"
 ```
 
 Costs come from a LiteLLM-format registry file (`litellm_model_registry` or `LITELLM_MODEL_REGISTRY_PATH`; no prices
@@ -58,10 +60,12 @@ cargo run --locked -- --model-class deterministic -m deterministic -c mini_textb
   -t "Say hello" -o /tmp/traj.json
 ```
 
-Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a fatal or
-config error (the trajectory is saved first when the run had started), 2 for usage errors and for the
+Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a config
+error, a fatal error or a failed save, 2 for usage errors and for the
 interactive-only flags `-y/--yolo` and `--exit-immediately` (D7). `--help` and `--version` exit 0. "Saved trajectory"
-is printed only after a successful run, as Python prints it after `run` returns.
+is printed only after a successful run, as Python prints it after `run` returns. The CLI always has an output path
+(`-o`, else `last_mini_run.traj.json` in the global config directory) and the agent saves after every step, so a
+fatal error during the run is in the saved trajectory, unless the save itself is what failed.
 
 **Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
 shipped YAML files (`parity/config_dumps.py`).
@@ -86,7 +90,9 @@ docker run --rm -e MSWEA_RS_NO_REFERENCE=1 -e CARGO_TARGET_DIR=/tmp/target -v "$
   sh -c 'rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked'
 ```
 
-The parity (`tests/parity.rs`) and BDD (`tests/bdd.rs`) targets print that they were skipped on purpose there.
+The checks that need the Python reference or the parent directory print that they were skipped on purpose there:
+`tests/parity.rs`, `tests/bdd.rs`, `tests/text_parity.rs`, the CLI comparison in `tests/cli.rs`, the `config/`
+identity check in `tests/yaml.rs`, and the parent-document checks in `tests/docs.rs`.
 
 **Parity and BDD (P6).** Both targets run every scenario of `parity/scenarios/` through the Python reference and
 the Rust library and compare the normalized results. They need `uv` and the reference's `uv.lock`, which the
@@ -150,32 +156,32 @@ pass.
 
 ## Divergences from Python
 
-Every deliberate divergence of the plan (§2.4), with the test that pins it. `tests/docs.rs` fails if a row of
-§2.4 is missing here.
+Every deliberate divergence of the plan (§2.4), with the test that pins it. The first three columns are copied from
+the plan; `tests/docs.rs` fails if a row is missing or differs, or if a cited test, scenario or file does not exist.
 
 | Divergence | Python | Rust | Checked by |
 |---|---|---|---|
-| `info.config.*_type` | `minisweagent.agents.default.DefaultAgent` | `type_name()` strings such as `mini_swe_agent_rs::DefaultAgent` | Normalized by the comparator (`tests/support/compare.rs`); `tests/comparator.rs` |
-| `info.mini_version` | `2.4.6` | The crate version | Normalized by the comparator; `tests/comparator.rs` |
+| `info.config.*_type` | `minisweagent.agents.default.DefaultAgent` | Rust type paths: `mini_swe_agent_rs::agent::default::DefaultAgent` for the agent, `std::any::type_name` (with type parameters) for the model and the environment | Normalized by the comparator ([`tests/support/compare.rs`](tests/support/compare.rs)); `authorized_changes_pass` (`tests/comparator.rs`); `save_includes_types_and_extra_dicts` (`tests/agent.rs`) |
+| `info.mini_version` | `2.4.6` | The crate version | Normalized by the comparator; `authorized_changes_pass` (`tests/comparator.rs`) |
 | Default model class | Tool-calling `LitellmModel` | Text-based model | `model_class_and_name_resolution` (`tests/config.rs`) |
 | Fatal `exit_status`, `content`, `exception_str` | Python class name and `str(e)` (`RuntimeError`, `IndexError`) | A stable name per error variant and its `Display` (D6) | `fatal_exits_map_python_names_and_drop_texts` (`tests/comparator.rs`); scenarios `outputs_exhausted`, `injected_runtime_error` |
-| `extra.traceback` | Python traceback | The error's `source()` chain | Normalized for fatal exits; `fatal_exit_status_names_are_stable` (`tests/core_types.rs`) |
-| JSON encoding | `ensure_ascii=True` | Raw UTF-8 | Scenarios compare parsed JSON; `non_ascii_and_crlf_output`, `env_unicode_output` |
-| `extra.response` | `litellm` `ModelResponse.model_dump()` | The provider's raw JSON | Left out of the raw-response projection (`tests/text_parity.rs`); the raw JSON is asserted in `tests/textbased.rs` |
+| `extra.traceback` | Python traceback | The error's `source()` chain | `fatal_traceback_is_the_error_source_chain` (`tests/agent.rs`) |
+| JSON encoding | `ensure_ascii=True` | Raw UTF-8 | Scenarios compare parsed JSON: `non_ascii_and_crlf_output`, `env_unicode_output` |
+| `extra.response` | `litellm` `ModelResponse.model_dump()` | The provider's raw JSON | `tests/text_parity.rs` compares only its `choices[0].message.content`; `success_builds_the_assistant_message` (`tests/textbased.rs`) asserts the raw JSON |
 | Child process session | `setsid` (no controlling terminal), stdin inherited | New process group (`process_group(0)`), **stdin `/dev/null`** | `stdin_is_at_eof`, `timeout_kills_child_process` (`tests/local_env.rs`) |
-| Hang after kill when a grandchild escaped the group | `communicate()` blocks | Bounded grace period, then partial output | `background_child_with_redirected_output_survives`, `child_that_closes_stdout_and_keeps_running_is_killed` (`tests/local_env.rs`) |
-| Cost | `litellm.completion_cost` (tiers, cache tokens, provider cost) | Flat per-token input and output prices from a registry file (3.8) | `cost_tracking_errors_and_ignore_errors`, `registry_prices_must_be_nonnegative` (`tests/textbased.rs`); `tests/text_parity.rs` |
+| Hang after kill when a grandchild escaped the group | `communicate()` blocks | Bounded grace period, then partial output | `timeout_returns_while_an_escaped_grandchild_holds_the_pipe` (`tests/local_env.rs`) |
+| Cost | `litellm.completion_cost` (tiers, cache tokens, provider cost) | Flat per-token input and output prices from a registry file (3.8) | `cost_tracking_errors_and_ignore_errors`, `registry_prices_must_be_nonnegative` (`tests/textbased.rs`); [`tests/text_parity.rs`](tests/text_parity.rs) |
 | Authentication error hint | Mentions `mini-extra config set` | Mentions the API-key environment variable | `an_unreadable_abort_body_still_aborts_with_a_key_hint` (`tests/fake_http.rs`) |
-| YAML 1.1 booleans (`yes`/`no`/`on`/`off` unquoted) and pydantic lax coercion | Booleans; `"3"` → 3 | YAML 1.2 (strings); strict serde types | `tests/yaml.rs`; `textbased_literals_are_checked` (`tests/config.rs`) |
+| YAML 1.1 booleans (`yes`/`no`/`on`/`off` unquoted) and pydantic lax coercion | Booleans; `"3"` → 3 | YAML 1.2 (strings); strict serde types | `yaml_1_1_booleans_stay_strings` (`tests/yaml.rs`); `lax_coercion_is_refused` (`tests/config.rs`) |
 | Built-in configs | All YAML in `config/`, `extra/`, `benchmarks/` | Only the text-based ones embedded; lookup order unchanged | `builtin_configs_are_findable_by_name`, `lookup_order_and_suffix_rule` (`tests/config.rs`) |
-| Shell (D11) | `shell=True`: `/bin/sh -c` (bash in POSIX mode on macOS, `dash` on Debian/Ubuntu) | `/bin/bash -c` on every OS | `runs_bash` (`tests/local_env.rs`); scenarios avoid `sh`/`bash` differences |
+| Shell (D11) | `shell=True`: `/bin/sh -c` (bash in POSIX mode on macOS, `dash` on Debian/Ubuntu) | `/bin/bash -c` on every OS | `runs_bash` (`tests/local_env.rs`); the scenarios avoid commands whose output differs between the two shells |
 | Startup file `BASH_ENV` (D11) | Ignored by `/bin/sh`; passed on to children | Inherited `BASH_ENV` removed from the child environment; kept if set in `config.env` | `inherited_bash_env_is_not_sourced` (`tests/local_env.rs`) |
-| Default config with no `-c` | `mini.yaml` (tool-calling, `run/mini.py:22`) | Embedded `mini_textbased.yaml` | `explicit_specs_replace_the_default_and_flags_come_last` (`tests/config.rs`); parity cases always pass `-c` |
+| Default config with no `-c` | `mini.yaml` (tool-calling, `run/mini.py:22`) | Embedded `mini_textbased.yaml` | `explicit_specs_replace_the_default_and_flags_come_last` (`tests/config.rs`); the parity cases always pass `-c` |
 | Task when neither `-t` nor `run.task` is given | `_multiline_prompt()` (prompt_toolkit), after the setup wizard if `MSWEA_CONFIGURED` is unset | Read stdin to EOF; never a wizard | `task_order_flag_then_config_then_stdin` (`tests/cli.rs`) |
 | `examples/hello_world.rs` | `hello_world.py` uses the tool-calling `LitellmModel` | `TextbasedModel` | Built and linted by `cargo clippy --all-targets` |
 | Literal `model_kwargs.api_key` in the trajectory | Dumped as given | `"<redacted>"` | `a_literal_api_key_is_redacted_in_the_trajectory` (`tests/fake_http.rs`), `settings_split_and_secrets` (`tests/textbased.rs`) |
 | Non-UTF-8 environment entries | Decoded with `surrogateescape`, visible to templates | Passed to the child unchanged; left out of template vars | `host_env_keeps_non_utf8_entries_for_children_only` (`tests/core_types.rs`) |
-| Timeout when the shell left its process group | `communicate()` hangs after `killpg` | `child.kill()` after `killpg` | `timeout_kills_a_shell_that_left_its_process_group` (`tests/local_env.rs`) |
+| Timeout when the shell left its process group | Cannot happen: the shell is a session leader (`start_new_session=True`, `local.py:84`) | The shell only leads a process group, so it can join another group of its session; `child.kill()` after `killpg` still kills it | `timeout_kills_a_shell_that_left_its_process_group` (`tests/local_env.rs`) |
 
 The phases also recorded smaller divergences, each in its design note below: the bounded drain and error texts of
 `LocalEnvironment` (P3), the regex patterns refused at load (P4), the agent's raw-UTF-8 atomic save and stable
@@ -184,22 +190,22 @@ one wire protocol, no redirects, the proxy from the run's environment, invalid r
 
 ## Decisions
 
-The outcome of each decision of the plan (§5.2), as implemented. `tests/docs.rs` fails if one is missing.
+The outcome of each decision of the plan (§5.2), as implemented. The decision and its options are copied from the plan; `tests/docs.rs` fails if a row is missing or differs.
 
-| Decision | Question | Outcome |
-|---|---|---|
-| D1 | Crate directory name | `mini-swe-agent-rs/` (decided). The crate lives there; `../CLAUDE.md`, `../README.md` and `../spec/prompt/migrate.md` use that name (`tests/docs.rs`) |
-| D2 | Which plan is authoritative | One plan (decided): `spec/migration-plan.md`; the old `spec/PLAN.md` and `spec/STUDY.md` were merged and removed |
-| D3 | Text-based only, or also tool-calling with a single `bash` tool | Text only, as implemented: `TextbasedModel` parses one `mswea_bash_command` block; no tool-calling model exists |
-| D4 | First real provider | OpenAI-compatible Chat Completions (`src/model/openai_compat.rs`); run against OpenAI with `gpt-4o-mini` on 2026-11-24. Native Anthropic is later work |
-| D5 | YAML crate (survey of crates.io and RustSec, 2026-11-23) | `serde-saphyr` 2.2.0 (decided), `strict_booleans` and last-wins duplicate keys (`src/yaml.rs`, `tests/yaml.rs`) |
-| D6 | Fatal `exit_status` names | Stable Rust variant names (`OutputsExhausted`, `GlobalLimitExceeded`, …) with the comparator's mapping table (`IndexError` → `OutputsExhausted`); provider errors use LiteLLM's names; a cost error is `RuntimeError` |
-| D7 | CLI compatibility for interactive flags (`-y`, `--exit-immediately`) and an alias `mini` | Rejected: `-y/--yolo` and `--exit-immediately` exit 2 with a message; no `mini` alias (`usage_and_config_errors`, `tests/cli.rs`) |
-| D8 | Ctrl-C handling | Default handling: no `SIGINT` handler; the trajectory is saved after every step, so at most the current step is lost |
-| D9 | BDD with Cucumber (required by `../spec/prompt/migrate.md`) | In scope (decided): `tests/bdd.rs` with three features, one Gherkin scenario per parity scenario plus the CLI cases, and a manifest check |
-| D10 | Generic vs `dyn` composition | Generics: `DefaultAgent<M, E>` and one generic `run_agent` in `main.rs` per model type; no `dyn Model` |
-| D11 | Shell binary | `/bin/bash -c` (decided), recorded as a divergence; an inherited `BASH_ENV` is dropped |
-| D12 | Clock for limits and timestamps | Wall clock behind the injected `Clock` (`SystemClock`, `ManualClock`); limits and timestamps use it |
+| # | Decision | Options | Outcome |
+|---|---|---|---|
+| D1 | Crate directory name | `mini-swe-agent-rs/` (this request) or `rust-mini-swe-agent/` (old name in `../CLAUDE.md`, `../README.md`, `../spec/prompt/migrate.md` and the old plan) | `mini-swe-agent-rs/` (decided). The crate lives there, and `../CLAUDE.md`, `../README.md` and `../spec/prompt/migrate.md` use that name (checked by `tests/docs.rs`) |
+| D2 | Which plan is authoritative | This file, or the old `spec/PLAN.md` + `spec/STUDY.md` | One plan (decided): `spec/migration-plan.md`. The old roadmap and study were merged into it and removed |
+| D3 | Text-based only, or also tool-calling with a single `bash` tool | Text only; both | Text only, as implemented: `TextbasedModel` parses one `mswea_bash_command` block; no tool-calling model exists |
+| D4 | First real provider | OpenAI-compatible; native Anthropic Messages | OpenAI-compatible Chat Completions (`src/model/openai_compat.rs`); run against OpenAI with `gpt-4o-mini` on 2026-11-24. Native Anthropic is later work |
+| D5 | YAML crate (survey of crates.io and RustSec, 2026-11-23) | **`serde-saphyr` 2.2.0** (pure Rust, no `unsafe-libyaml`, serde deserializer, released 2026-11-18, MSRV 1.89, no advisories); **`yaml-rust2` 0.13.2** or **`saphyr` 0.4.0** (pure-Rust parsers, active, no serde: manual mapping to `serde_json::Value`); **`serde_yaml_ng` 0.10.0** and **`serde_norway` 0.9.42** (forks of `serde_yaml` over `unsafe-libyaml`, last released 2024-05 and 2024-12). Excluded: `serde_yaml` (deprecated and archived, 2024-03), `serde_yml` (RUSTSEC-2025-0068, unsound and archived), `yaml-rust` (RUSTSEC-2024-0320, unmaintained) | `serde-saphyr` 2.2.0 (decided), `strict_booleans` and last-wins duplicate keys (`src/yaml.rs`, `tests/yaml.rs`) |
+| D6 | Fatal `exit_status` names | Python names; Rust variant names | Stable Rust variant names (`OutputsExhausted`, `GlobalLimitExceeded`, …) with the comparator's mapping table (`IndexError` → `OutputsExhausted`); provider errors use LiteLLM's names; a cost error is `RuntimeError` |
+| D7 | CLI compatibility for interactive flags (`-y`, `--exit-immediately`) and an alias `mini` | Accept and ignore; reject | Rejected: `-y/--yolo` and `--exit-immediately` exit 2 with a message; no `mini` alias (`usage_and_config_errors`, `tests/cli.rs`) |
+| D8 | Ctrl-C handling | Default (the process dies; the last saved step stays on disk); handle `SIGINT` to append an exit message and save | Default handling: no `SIGINT` handler. The trajectory is saved after every step, so at most the current step is lost. Commands run in their own process group, so a command still running at Ctrl-C keeps running, as in Python |
+| D9 | BDD with Cucumber (required by `../spec/prompt/migrate.md`) | `cucumber` driving the parity scenarios; plain Rust tests only | In scope (decided): `tests/bdd.rs` with three features, one Gherkin scenario per parity scenario plus the CLI cases, and a manifest check |
+| D10 | Generic vs `dyn` composition | Generics (3.3); `Box<dyn Model>` | Generics: `DefaultAgent<M, E>` and one generic `run_agent` in `main.rs` per model type; no `dyn Model` |
+| D11 | Shell binary | `/bin/sh` (Python parity); `/bin/bash` | `/bin/bash -c` (decided), recorded as a divergence; an inherited `BASH_ENV` is dropped |
+| D12 | Clock for limits and timestamps | Wall clock (`time.time()` semantics); monotonic `Instant` | Wall clock behind the injected `Clock` (`SystemClock`, `ManualClock`); limits and timestamps use it |
 
 ## Evidence
 
@@ -208,22 +214,28 @@ The outcome of each decision of the plan (§5.2), as implemented. `tests/docs.rs
 | Command | Result |
 |---|---|
 | `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo build --locked` | Pass |
-| `cargo test --locked` on macOS (27.2.1) with the reference (`MSWEA_RS_REFERENCE_DIR`) | Pass: 267 tests in 23 targets (plus doc tests), 1 ignored (`real_endpoint`, opt-in); BDD 3 features, 36 scenarios, 163 steps; 27 parity scenarios, 4 CLI cases and 7 raw-response cases equal to Python |
+| `cargo test --locked` on macOS (27.2.1) with the reference (`MSWEA_RS_REFERENCE_DIR`) | Pass. The libtest harnesses (library, binary and integration tests): 275 passed, 1 ignored (`real_endpoint`, opt-in); there are no doc tests. The BDD runner (`harness = false`): 3 features, 36 scenarios, 163 steps. Equal to Python: 27 parity scenarios, 4 CLI cases, 7 raw-response cases |
 | Full-suite Linux gate (`parity/Dockerfile`: `rust:1.99.1`, uv 0.13.9, Python 3.15.2) | Pass (exit 0) |
 | Rust-only Linux gate (`MSWEA_RS_NO_REFERENCE=1`) | Pass; the reference-dependent checks print that they were skipped on purpose |
 | `cargo deny check advisories` | No advisories (one recorded exception in `deny.toml`: `humantime`, dev-only through `cucumber`) |
-| `cargo test --test real_endpoint -- --ignored` against OpenAI | Pass (see P8) |
+| `OPENAI_API_KEY=… MSWEA_RS_REAL_MODEL=gpt-4o-mini MSWEA_RS_REAL_REGISTRY=<registry.json> cargo test --locked --test real_endpoint -- --ignored` against OpenAI | Pass (see P8 and [its findings](spec/reviews/p8/FINDINGS.md)) |
 
 Where the parity evidence lives:
-- Library parity: the JSON scripts in `parity/scenarios/`, run by `parity/run_python.py` and `tests/parity.rs`
-  through the comparator in `tests/support/compare.rs` (whose mutation tests are `tests/comparator.rs`).
-- BDD: `tests/bdd.rs` over `tests/features/`.
-- CLI parity: the cases in `tests/support/cli.rs`, compared by `tests/cli.rs` and `cli.feature`.
-- Text-based model: the raw-response differential `tests/text_parity.rs` over `parity/text_model_cases.json`.
-- Goldens from the reference: `tests/goldens/` (YAML, templates, actions, typed configs), with the scripts in
-  `parity/` that regenerate them.
-- Reviews: `spec/reviews/p0/` to `spec/reviews/p8/`; each `FINDINGS.md` records every finding, its disposition
-  and the test that covers the fix.
+- Library parity: the JSON scripts in [`parity/scenarios/`](parity/scenarios/), run by
+  [`parity/run_python.py`](parity/run_python.py) and [`tests/parity.rs`](tests/parity.rs) through the comparator in
+  [`tests/support/compare.rs`](tests/support/compare.rs), whose mutation tests are
+  [`tests/comparator.rs`](tests/comparator.rs).
+- BDD: [`tests/bdd.rs`](tests/bdd.rs) over [`tests/features/`](tests/features/).
+- CLI parity: the cases in [`tests/support/cli.rs`](tests/support/cli.rs), compared by [`tests/cli.rs`](tests/cli.rs)
+  and `cli.feature`.
+- Text-based model: the raw-response differential [`tests/text_parity.rs`](tests/text_parity.rs) over
+  [`parity/text_model_cases.json`](parity/text_model_cases.json), and the fake HTTP server in
+  [`tests/fake_http.rs`](tests/fake_http.rs).
+- Goldens from the reference: [`tests/goldens/`](tests/goldens/) (YAML, templates, actions, typed configs), with the
+  scripts in [`parity/`](parity/) that regenerate them.
+- Reviews: [`spec/reviews/`](spec/reviews/), one directory per phase (`p0/` to `p9/`); each `FINDINGS.md` records
+  every finding, its disposition and the test that covers the fix. The real-endpoint run is recorded in
+  [the P8 findings](spec/reviews/p8/FINDINGS.md) (C8).
 
 ### P0 (2026-11-24)
 
@@ -294,10 +306,10 @@ Where the parity evidence lives:
   fails at load; an unknown filter fails at the first render, which is when Python builds its `Template` too.
 - **LocalEnvironment (P3).** `src/environment/local.rs`. Divergences from Python (plan §2.4): `/bin/bash`
   instead of `/bin/sh` (D11), an inherited `BASH_ENV` is dropped (bash would source it), stdin is `/dev/null`, a
-  process group instead of a new session, `child.kill()` after `killpg` (Python hangs if the shell left its
-  group), and a 1 s bounded drain after a kill. Error texts follow CPython (`[Errno 2] No such file or directory:
+  process group instead of a new session (so `child.kill()` follows `killpg`, for a shell that joined another group
+  of its session), and a 1 s bounded drain after a kill (Python's second `communicate()` has no timeout). Error texts follow CPython (`[Errno 2] No such file or directory:
   '/x'`, `Command '…' timed out after N seconds`), with the platform `strerror` text. The module is over the
-  plan's 250-line budget (§2.6), at about 430 lines of code: Python gets the pipe, the deadline, the process-group
+  plan's 250-line budget (§2.6), at about 460 lines of code: Python gets the pipe, the deadline, the process-group
   kill and the OS error texts from `subprocess`; the port writes them out (the `poll` loop, `killpg`, and CPython's
   error formatting).
 - **Text actions (P4).** `action_regex` is compiled by the `regex` crate after a small rewrite: `\s` and `\S`
@@ -313,7 +325,7 @@ Where the parity evidence lives:
   `OutputsExhausted` for Python's `IndexError`), the agent's templates compile at construction, and the
   trajectory is written as raw UTF-8 through a temporary file and a rename. Without an `output_path`, nothing is
   serialized after a step (Python builds the dict and drops it). `run` returns the exit message's whole `extra`
-  (`ExitInfo::extra`). `src/agent/default.rs` is over the plan's 250-line budget (§2.6), at about 350 lines of code:
+  (`ExitInfo::extra`). `src/agent/default.rs` is over the plan's 250-line budget (§2.6), at about 310 lines of code:
   Python's `finally` save, its exception-to-exit-message handler and the trajectory writer are spelled out with
   explicit error paths (save replacing a fatal error, an invalid cost inside the format-error handler, the
   atomic write).
@@ -360,4 +372,13 @@ Where the parity evidence lives:
   first choice, with a non-assistant role or with non-text content is an invalid response: it is retried and never
   billed (LiteLLM fails while parsing such a reply, before any cost). As in Python, commands and templates see the
   whole process environment, the API key variable included (`local.py:29`, `:59`).
+- **Size (plan §2.6).** The library is about 3,400 lines of code (non-blank lines without comments, tests and
+  `main.rs`), against a budget of 1,800. Python gets most of the difference from its libraries: `config.rs` (about
+  500 lines) does what pydantic and the Python factories do (typed defaults, env-backed fields, class registries,
+  spec lookup); `openai_compat.rs` (about 480) is the part of LiteLLM the port needs (settings split, error mapping,
+  URL and proxy rules, response checks); `local.rs` (about 460) is `subprocess`; `actions_text.rs` (about 250) maps
+  Python's `re` onto the `regex` crate and refuses what it cannot map. The agent loop itself stays near Python's
+  size.
+- **Multimodal.** Both models refuse a non-empty `multimodal_regex` when they are built; Python passes it to
+  `format_observation_messages`, and the port has no multimodal content (plan §2.3).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

@@ -600,3 +600,17 @@ fn invalid_value_messages_truncate_on_a_char_boundary() {
         "{result:?}"
     );
 }
+
+#[test]
+fn lax_coercion_is_refused() {
+    // Plan §2.4: pydantic turns "3" into 3; strict serde types refuse it.
+    use mini_swe_agent_rs::environment::local::LocalEnvironmentConfig;
+    use mini_swe_agent_rs::model::deterministic::DeterministicModelConfig;
+    assert!(serde_json::from_value::<LocalEnvironmentConfig>(json!({"timeout": "3"})).is_err());
+    assert!(serde_json::from_value::<LocalEnvironmentConfig>(json!({"timeout": 3})).is_ok());
+    let cost = json!({"outputs": [], "cost_per_call": "1.5"});
+    assert!(serde_json::from_value::<DeterministicModelConfig>(cost).is_err());
+    let env = HostEnv::from_vars(std::iter::empty());
+    let section = json!({"model_name": "m", "model_kwargs": {}, "action_regex": 3});
+    assert!(TextbasedModelConfig::from_section(&section, &env).is_err());
+}

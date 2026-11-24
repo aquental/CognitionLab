@@ -826,27 +826,93 @@ fn independent_workspace_copies_do_not_share_files() {
     );
 }
 
+/// The process-group tests need `perl` with `POSIX` (bash cannot change a process's group). It
+/// is on macOS and in the `rust` image of the Linux gates.
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::panic)]
+fn require_perl() {
+    let ok = std::process::Command::new("perl")
+        .args(["-MPOSIX", "-e", "1"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !ok {
+        panic!("this test needs perl with the POSIX module on PATH");
+    }
+}
+
+/// The number after `prefix` in `output`.
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::panic)]
+fn number_after(output: &str, prefix: &str) -> i32 {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .and_then(|rest| rest.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no {prefix:?} line in {output:?}"))
+}
+
 #[test]
 fn timeout_kills_a_shell_that_left_its_process_group() {
-    // Plan §2.4: after `killpg`, Python's `communicate()` hangs when the shell moved to another
-    // process group. Here the shell's process becomes a `perl` that joins the test runner's
-    // group, so `killpg` of the child's own group misses it; the port also kills the child.
+    // Python's shell is a session leader (`start_new_session=True`, `local.py:84`), so it cannot
+    // change its process group. The port's shell only leads a group (`process_group(0)`), so it
+    // can join another group of its session; `killpg` of its own group then misses it, and the
+    // `child.kill()` after `killpg` covers that. The shell's process becomes a `perl` that joins
+    // the test runner's group and says so once it has moved.
+    require_perl();
     let dir = tempfile::tempdir().unwrap();
     let shell_file = dir.path().join("shell.pid");
-    let config = with_pid_files(1, &[("SHELL_PID", &shell_file)]);
-    let command = "echo $$ > \"$SHELL_PID\"; exec perl -MPOSIX -e 'POSIX::setpgid(0, getpgrp(getppid())) or die qq(setpgid: $!); sleep 30'";
+    let config = with_pid_files(2, &[("SHELL_PID", &shell_file)]);
+    let command = "echo $$ > \"$SHELL_PID\"; exec perl -MPOSIX -e '$|=1; POSIX::setpgid(0, getpgrp(getppid())) or die qq(setpgid: $!); print qq(moved to ), getpgrp(), qq(\\n); sleep 30'";
     let start = Instant::now();
     let result = run(&env_with(config), command);
+    let elapsed = start.elapsed();
+    let shell = read_pid(&shell_file);
+    let dead = dead_after_wait(shell);
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    assert_eq!(result.returncode, -1, "{}", result.output);
+    assert_eq!(result.extra.unwrap()["exception_type"], "TimeoutExpired");
+    let group = number_after(&result.output, "moved to ");
+    assert_ne!(
+        group, shell,
+        "the shell's process left its own group before the deadline"
+    );
+    assert!(dead, "the shell {shell} survived the timeout");
+}
+
+#[test]
+fn timeout_returns_while_an_escaped_grandchild_holds_the_pipe() {
+    // Python's second `communicate()` after `killpg` has no timeout (`local.py:88-89`): a
+    // descendant that moved to its own group and keeps stdout open blocks it until that
+    // descendant exits. The port drains for a bounded grace period and returns the partial
+    // output. Like Python's `killpg`, it does not kill the escaped descendant.
+    require_perl();
+    let dir = tempfile::tempdir().unwrap();
+    let grand_file = dir.path().join("grand.pid");
+    let config = with_pid_files(2, &[("GRAND_PID", &grand_file)]);
+    let command = "echo before; perl -MPOSIX -e '$|=1; POSIX::setpgid(0, 0) or die qq(setpgid: $!); open(my $f, q(>), $ENV{GRAND_PID}) or die; print $f $$; close $f; print qq(escaped to ), getpgrp(), qq(\\n); sleep 30' & wait";
+    let start = Instant::now();
+    let result = run(&env_with(config), command);
+    let elapsed = start.elapsed();
+    let grand = read_pid(&grand_file);
+    let alive = proc_state(grand) == ProcState::Running;
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(grand),
+        nix::sys::signal::Signal::SIGKILL,
+    );
     assert!(
-        start.elapsed() < Duration::from_secs(10),
-        "{:?}",
-        start.elapsed()
+        elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(8),
+        "{elapsed:?}: the timeout plus the bounded grace period"
     );
     assert_eq!(result.returncode, -1, "{}", result.output);
-    assert!(!result.output.contains("setpgid:"), "{}", result.output);
-    let shell = read_pid(&shell_file);
+    assert_eq!(result.extra.unwrap()["exception_type"], "TimeoutExpired");
+    assert!(result.output.starts_with("before\n"), "{}", result.output);
+    assert_eq!(
+        number_after(&result.output, "escaped to "),
+        grand,
+        "its own group"
+    );
     assert!(
-        dead_after_wait(shell),
-        "the shell {shell} survived the timeout"
+        alive,
+        "the escaped grandchild {grand} is outside the killed group"
     );
 }

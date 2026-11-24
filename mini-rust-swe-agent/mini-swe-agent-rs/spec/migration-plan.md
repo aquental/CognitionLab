@@ -299,7 +299,7 @@ These are the parity contract. A deterministic run must produce a trajectory tha
 | Excluded | Why | Where it would go |
 |---|---|---|
 | Native tool-calling, Responses API (`mini.yaml`, `actions_toolcall*.py`, `*_response_model.py`) | The local task asks for the text path only | A second parser behind the same `Model` trait |
-| Multimodal content, Anthropic cache control and thinking-block reordering, `set_cache_control` auto-selection for Anthropic-like names (`models/__init__.py:55-60`) | Provider-specific | Inside a provider adapter |
+| Multimodal content (a non-empty `multimodal_regex` is refused), Anthropic cache-control markers and thinking-block reordering. The `set_cache_control` default for Anthropic-like names (`models/__init__.py:55-60`) is kept in the config, but no markers are sent | Provider-specific | Inside a provider adapter |
 | `InteractiveAgent` (human, confirm, yolo), `prompt_user`, inspector TUI | Terminal UX, not the harness | v2, by composition (3.3) |
 | Docker, Singularity, Bubblewrap, SWE-ReX, Modal, Contree | Each backend needs its own contract | New `Environment` impls |
 | OpenRouter, Portkey, Requesty adapters; Roulette and Interleaving models | One provider first | New `ChatBackend` impls |
@@ -314,7 +314,7 @@ These are the parity contract. A deterministic run must produce a trajectory tha
 
 | Field or behavior | Python | Rust | Parity rule |
 |---|---|---|---|
-| `info.config.*_type` | `minisweagent.agents.default.DefaultAgent` | `type_name()` strings such as `mini_swe_agent_rs::DefaultAgent` | Ignored |
+| `info.config.*_type` | `minisweagent.agents.default.DefaultAgent` | Rust type paths: `mini_swe_agent_rs::agent::default::DefaultAgent` for the agent, `std::any::type_name` (with type parameters) for the model and the environment | Ignored |
 | `info.mini_version` | `2.4.6` | The crate version | Ignored |
 | Default model class | Tool-calling `LitellmModel` | Text-based model | Documented |
 | Fatal `exit_status`, `content`, `exception_str` | Python class name and `str(e)` (`RuntimeError`, `IndexError`) | A stable name per error variant and its `Display` (D6) | `exit_status` compared through the D6 table; `content`, `exception_str` ignored for fatal exits |
@@ -334,7 +334,7 @@ These are the parity contract. A deterministic run must produce a trajectory tha
 | `examples/hello_world.rs` | `hello_world.py` uses the tool-calling `LitellmModel` | `TextbasedModel` | Documented |
 | Literal `model_kwargs.api_key` in the trajectory | Dumped as given | `"<redacted>"` | Parity scenarios never set it |
 | Non-UTF-8 environment entries | Decoded with `surrogateescape`, visible to templates | Passed to the child unchanged; left out of template vars | Documented |
-| Timeout when the shell left its process group | `communicate()` hangs after `killpg` | `child.kill()` after `killpg` | Documented |
+| Timeout when the shell left its process group | Cannot happen: the shell is a session leader (`start_new_session=True`, `local.py:84`) | The shell only leads a process group, so it can join another group of its session; `child.kill()` after `killpg` still kills it | Documented |
 
 ### 2.5 Essential versus accidental
 
@@ -594,7 +594,7 @@ Port of `local.py:24-92`, with `std::process::Command`:
    - The reader is set non-blocking (`nix::fcntl`, safe API). Loop: compute `remaining = deadline.saturating_duration_since(now)`; stop if it is zero; `nix::poll::poll` on the reader's `BorrowedFd` with `remaining` (converted with a checked, clamped `PollTimeout`); read what is available into the buffer, treating `WouldBlock` and `Interrupted` as "poll again". The deadline is checked on **every** iteration, so a continuously readable pipe cannot extend it.
    - Read `Ok(0)` is EOF. Any other read or poll error is a runner error (item 7), distinct from EOF. The child is **not** reaped during this phase, so its pid and process group stay valid for `killpg`.
    - After EOF, poll `try_wait` with short sleeps until the same deadline (covers a child that closes stdout and keeps running).
-   - On deadline: `killpg(pgid, SIGKILL)` (treat `ESRCH` as success; any other error is logged), then `child.kill()` (covers a shell that left its group; Python would hang here), then `wait()` to reap. Then drain what is already readable for a short grace period (for example 1 s, same poll loop) and **drop the reader**, which closes our end even if an escaped grandchild still holds the write end (2.2).
+   - On deadline: `killpg(pgid, SIGKILL)` (treat `ESRCH` as success; any other error is logged), then `child.kill()` (covers a shell that joined another group of its session, which Python's session-leader shell cannot do), then `wait()` to reap. Then drain what is already readable for a short grace period (for example 1 s, same poll loop) and **drop the reader**, which closes our end even if an escaped grandchild still holds the write end (2.2).
    - Build the timeout output: partial text, `returncode: -1`, `exception_info: "An error occurred while executing the command: Command '<cmd>' timed out after <n> seconds"`, `extra: {exception_type: "TimeoutExpired", exception: "Command '<cmd>' timed out after <n> seconds"}`.
    - The buffer is unbounded, as in Python. A command that floods output under a long timeout uses memory like `communicate()` does.
 5. **Return code:** `status.code()`, else `-status.signal()` (`ExitStatusExt`), else `-1`; no `unwrap`.
@@ -1002,9 +1002,9 @@ Single-reviewer findings that changed the design:
 - `dirs` instead of `directories` for the `platformdirs` layout (Grok; verified path).
 - Number normalization in the comparator (Grok).
 
-### 6.1 Implementation reviews (P0–P8)
+### 6.1 Implementation reviews (P0–P9)
 
-After each implementation phase, Codex, Grok and Antigravity reviewed the delivered code in parallel, read-only, from a detached worktree, with the same prompt (`reviews/pN/review-prompt.md`). Every finding was checked against the Python code before it was accepted; accepted findings were fixed test-first, and refuted ones were answered with the Python line that shows the behavior is parity. Each `reviews/pN/FINDINGS.md` records the run, every finding, its disposition and the test that covers the fix. P9 changes only documentation and the checks in `tests/docs.rs`.
+After each implementation phase, Codex, Grok and Antigravity reviewed the delivered code in parallel, read-only, from a detached worktree, with the same prompt (`reviews/pN/review-prompt.md`). Every finding was checked against the Python code before it was accepted; accepted findings were fixed test-first, and refuted ones were answered with the Python line that shows the behavior is parity. Each `reviews/pN/FINDINGS.md` records the run, every finding, its disposition and the test that covers the fix. P9 changed documentation, added the checks in `tests/docs.rs`, and added tests for divergences that had none (`tests/local_env.rs`, `tests/agent.rs`, `tests/config.rs`); its review also fixed two P8 issues (a `null` provider role, an ignored `multimodal_regex`).
 
 | Phase | Codex | Grok | Antigravity | Findings |
 |---|---:|---:|---:|---:|
@@ -1017,4 +1017,5 @@ After each implementation phase, Codex, Grok and Antigravity reviewed the delive
 | P6 Parity and BDD | 9 | 8 | 7 | 24 |
 | P7 Config and CLI | 11 | 11 | 11 | 33 |
 | P8 Real model | 11 | 10 | 12 | 33 |
-| **Total** | **70** | **57** | **74** | **201** |
+| P9 Docs | 9 | 12 | 8 | 29 |
+| **Total** | **79** | **69** | **82** | **230** |

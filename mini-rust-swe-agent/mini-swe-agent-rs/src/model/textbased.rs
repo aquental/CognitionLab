@@ -19,6 +19,10 @@ use crate::model::openai_compat::{ChatBackend, ChatRequest, ChatResponse, Settin
 use crate::model::retry::{attempts_from_env, retry};
 use crate::model::stats::GlobalModelStats;
 
+/// Multimodal content is out of scope (plan §2.3): a pattern would be accepted and ignored.
+pub const MULTIMODAL_UNSUPPORTED: &str =
+    "multimodal_regex is not supported (multimodal content is out of scope); leave it empty";
+
 /// What replaces a literal `model_kwargs.api_key` wherever the config is written (plan §2.4).
 pub const REDACTED: &str = "<redacted>";
 
@@ -52,6 +56,9 @@ impl<B: ChatBackend> TextbasedModel<B> {
         clock: Arc<dyn Clock>,
         host: &HostEnv,
     ) -> Result<Self, ModelError> {
+        if !config.multimodal_regex.is_empty() {
+            return Err(ModelError::Settings(MULTIMODAL_UNSUPPORTED.to_owned()));
+        }
         let params = Settings::from_model_kwargs(&config.model_kwargs, host)?.params;
         let actions = TextActions::new(
             &config.action_regex,
@@ -164,10 +171,10 @@ impl<B: ChatBackend> Model for TextbasedModel<B> {
             Err(other) => return Err(other),
         };
         let mut message = response.message().cloned().unwrap_or_default();
-        // LiteLLM's `Message` defaults the role to `assistant`.
-        message
-            .entry("role")
-            .or_insert_with(|| Value::String("assistant".to_owned()));
+        // LiteLLM's `Message` defaults a missing or null role to `assistant`.
+        if message.get("role").is_none_or(Value::is_null) {
+            message.insert("role".to_owned(), Value::String("assistant".to_owned()));
+        }
         message.insert("content".to_owned(), Value::String(content.to_owned()));
         let timestamp = serde_json::Number::from_f64(self.clock.now()).ok_or_else(|| {
             AgentError::Internal("the clock returned a non-finite time".to_owned())

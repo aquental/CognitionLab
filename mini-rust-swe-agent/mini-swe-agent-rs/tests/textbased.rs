@@ -575,3 +575,30 @@ fn the_agent_charges_a_billed_format_error() {
     assert!((agent.cost() - 0.04).abs() < 1e-12, "{}", agent.cost());
     assert_eq!(s.stats.n_calls(), 2);
 }
+
+#[test]
+fn a_null_role_means_assistant_and_is_billed_once() {
+    let mut raw = reply(action("ls"), "stop");
+    raw["choices"][0]["message"]["role"] = Value::Null;
+    let mut s = setup(
+        vec![Ok(raw)],
+        json!({"cost_tracking": "ignore_errors"}),
+        &host(&[]),
+    );
+    assert_eq!(s.model.query(&history()).unwrap().role, Role::Assistant);
+    assert_eq!(s.stats.n_calls(), 1);
+}
+
+#[test]
+fn a_multimodal_regex_is_refused() {
+    let env = host(&[]);
+    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(0.0));
+    let built = TextbasedModel::new(
+        config(json!({"multimodal_regex": "<img>"}), &env),
+        Canned::new(vec![]),
+        Arc::new(GlobalModelStats::new(0.0, 0)),
+        clock,
+        &env,
+    );
+    assert!(matches!(built, Err(ModelError::Settings(_))));
+}
