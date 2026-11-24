@@ -41,8 +41,10 @@ impl HostEnv {
     }
 
     /// Every entry, for a child process environment.
-    pub fn child_vars(&self) -> impl Iterator<Item = (&OsString, &OsString)> {
-        self.vars.iter()
+    pub fn child_vars(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+        self.vars
+            .iter()
+            .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
     }
 
     /// The UTF-8 entries as a JSON object, for template variables.

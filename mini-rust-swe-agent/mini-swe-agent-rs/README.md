@@ -23,7 +23,8 @@ Run inside this directory. The toolchain is pinned in `rust-toolchain.toml` (1.9
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+cargo build --locked
+cargo test --locked        # unit, integration and doc tests
 cargo deny check advisories
 ```
 
@@ -32,7 +33,7 @@ is skipped on purpose through `MSWEA_RS_NO_REFERENCE=1`:
 
 ```bash
 docker run --rm -e MSWEA_RS_NO_REFERENCE=1 -e CARGO_TARGET_DIR=/tmp/target -v "$PWD":/src -w /src rust:1.99.1 \
-  sh -c 'rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked'
+  sh -c 'rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked'
 ```
 
 **YAML goldens.** `tests/goldens/yaml/*.json` are PyYAML `safe_load` dumps of `config/*.yaml` and
@@ -54,21 +55,24 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | Check | Result |
 |---|---|
 | Python baseline: `uv run --frozen pytest tests/agents/test_default.py tests/environments/test_local.py tests/config/test_init.py tests/utils/test_serialize.py tests/run/test_local.py` in `../mini-swe-agent`, with `MSWEA_SILENT_STARTUP=1` and a temporary `MSWEA_GLOBAL_CONFIG_DIR` | 124 passed (uv 0.13.9, Python 3.15.2, macOS 27.2.1) |
-| `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` on macOS | Pass |
-| Rust-only Linux gate (`rust:1.99.1` image) | Pass |
+| `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo build --locked`, `cargo test --locked` on macOS | Pass |
+| Rust-only Linux gate (`rust:1.99.1` image): fmt, clippy, build, test | Pass |
 | `cargo deny check advisories` | No advisories |
 | Reference provenance (plan §1.0) | Text path identical to upstream tag `v2.4.6` (commit `a83fcae`) |
 
 ## Design notes
 
-- **Lints.** `unsafe_code` is forbidden; `unwrap`, `expect`, `panic!`, indexing, `todo!` and `unimplemented!` are
-  denied for every target in `Cargo.toml`. `clippy.toml` allows them in `#[test]` functions. Integration-test
-  files add one crate-level `#![allow(...)]` for their helpers, since clippy's test exemption covers only
-  `#[test]` functions.
+- **Lints.** `unsafe_code` is forbidden; `unwrap`, `expect`, `panic!`, indexing, `todo!`, `unimplemented!` and
+  `dbg!` are denied for every target in `Cargo.toml`. `clippy.toml` exempts `#[test]` functions from the first
+  four only (`todo!`, `unimplemented!` and `dbg!` stay denied). A test helper outside a `#[test]` function that
+  needs one of them carries its own `#[allow(...)]`.
 - **YAML (D5).** `serde-saphyr` 2.2.0 with `strict_booleans` (YAML 1.2: `yes`/`no`/`on`/`off` stay strings, a
   documented divergence from PyYAML) and last-wins duplicate keys (as PyYAML). Its parser family adds a `\n` to a
-  block scalar that ends the file without a final newline, which the shipped `default.yaml` does; `src/yaml.rs`
-  removes it, and the `eof_*` goldens pin PyYAML's result. `yaml-rust2` and `saphyr` behave the same, so the
+  block scalar that ends the file without a final newline, which both shipped configs do. `src/yaml.rs` finds
+  that scalar by parsing the text again with a sentinel appended (no text heuristics) and removes the break;
+  the `eof_*` goldens pin PyYAML's result, including trailing comments, aliases, folded scalars, trailing
+  spaces and duplicate keys. Plain scalar keys (`42: a`) load as their JSON key text (`"42"`), which is what
+  PyYAML plus `json.dumps` produce; sequence and mapping keys are an error. `yaml-rust2` and `saphyr` behave the same, so the
   fallback would not help.
 - **Actions** are decoded by key presence (`src/message.rs`): a `raise` key always means a scripted raise and its
   payload must be valid, as Python checks `"raise" in action` first. An untagged serde enum would read

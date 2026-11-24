@@ -2,14 +2,6 @@
 //!
 //! Goldens in `tests/goldens/yaml/` come from PyYAML's `safe_load` through `parity/yaml_dump.py`.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures (clippy.toml covers only `#[test]`).
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +12,8 @@ fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// clippy.toml exempts only `#[test]` functions; this helper may fail on a broken fixture.
+#[allow(clippy::unwrap_used, clippy::panic)]
 fn assert_matches_golden(source: &Path) {
     let stem = source.file_stem().unwrap().to_str().unwrap();
     let golden_path = crate_dir()
@@ -40,21 +34,16 @@ fn shipped_configs_match_pyyaml() {
 
 #[test]
 fn subset_cases_match_pyyaml() {
-    for name in [
-        "scalars.yaml",
-        "block_scalars.yaml",
-        "duplicates.yaml",
-        "aliases.yaml",
-        "empty.yaml",
-        "comment_only.yaml",
-        "eof_clip.yaml",
-        "eof_keep.yaml",
-        "eof_strip.yaml",
-        "eof_quoted.yaml",
-        "eof_nested.yaml",
-        "eof_plain.yaml",
-    ] {
-        assert_matches_golden(&crate_dir().join("parity/yaml_cases").join(name));
+    // Every fixture in parity/yaml_cases/ has a golden; a new fixture cannot be left untested.
+    let mut cases: Vec<PathBuf> = fs::read_dir(crate_dir().join("parity/yaml_cases"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect();
+    cases.sort();
+    assert!(cases.len() >= 20, "{} cases", cases.len());
+    for case in cases {
+        assert_matches_golden(&case);
     }
 }
 
@@ -93,6 +82,44 @@ fn invalid_yaml_is_an_error() {
 #[test]
 fn non_scalar_keys_are_an_error() {
     assert!(load_str("? [a, b]\n: c\n").is_err());
+    assert!(load_str("? {a: b}\n: c\n").is_err());
+}
+
+#[test]
+fn plain_scalar_keys_load_as_their_json_key_text() {
+    // PyYAML loads `42`, `true` and `null` keys as int, bool and None, and `json.dumps` writes
+    // them as "42", "true" and "null"; the Rust loader yields the same JSON object.
+    let value = load_str("42: a\ntrue: b\n1.5: c\n").unwrap();
+    assert_eq!(value, json!({"42": "a", "true": "b", "1.5": "c"}));
+    assert_eq!(load_str("'42': a\n").unwrap(), json!({"42": "a"}));
+}
+
+#[test]
+fn parse_errors_keep_their_source() {
+    let error = load_str("a: [unclosed\n").unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
+fn multi_document_streams_are_an_error() {
+    assert!(load_str("a: 1\n---\nb: 2\n").is_err());
+}
+
+#[test]
+fn deep_nesting_is_bounded() {
+    let text = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
+    assert!(load_str(&text).is_err());
+}
+
+#[test]
+fn eof_fix_leaves_unrelated_documents_alone() {
+    assert_eq!(load_str("a: x").unwrap(), json!({"a": "x"}));
+    assert_eq!(load_str("a: |-\n  x").unwrap(), json!({"a": "x"}));
+    assert_eq!(
+        load_str("a:\n  - b\n  - 'c'").unwrap(),
+        json!({"a": ["b", "c"]})
+    );
+    assert_eq!(load_str("x").unwrap(), json!("x"));
 }
 
 #[test]
@@ -105,7 +132,8 @@ fn alias_expansion_is_bounded() {
             "a{i}: &a{i} [*a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}, *a{prev}]\n"
         ));
     }
-    assert!(load_str(&text).is_err());
+    let error = load_str(&text).unwrap_err().to_string();
+    assert!(error.contains("budget"), "{error}");
 }
 
 /// The copies in `config/` must stay byte-identical to the Python reference.
@@ -130,5 +158,14 @@ fn shipped_configs_are_identical_to_the_reference() {
             fs::read(reference.join(name)).unwrap(),
             "config/{name} differs from the reference"
         );
+    }
+}
+
+#[test]
+fn control_characters_are_an_error() {
+    // PyYAML's reader rejects them (ReaderError); the removed blank-document shortcut used to
+    // read "\x0c" as an empty document.
+    for text in ["\x0c", "a: 1\x0c", "\x0b"] {
+        assert!(load_str(text).is_err(), "{text:?}");
     }
 }

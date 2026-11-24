@@ -4,7 +4,7 @@
 //! (`tool_calls`, …). Whether `extra` is present matters for trajectory parity, so it is an
 //! `Option` that is skipped when absent and kept when empty.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::error::{Interrupt, InterruptKind};
@@ -34,9 +34,25 @@ pub struct Message {
     #[serde(flatten)]
     provider: Map<String, Value>,
     /// Metadata: actions, cost, timestamps, exit status, …
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// An explicit `"extra": null` is refused: Python would fail on it later (`None.get`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_object"
+    )]
     pub extra: Option<Map<String, Value>>,
 }
+
+fn present_object<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Map<String, Value>>, D::Error> {
+    Map::deserialize(deserializer).map(Some)
+}
+
+/// `extra.cost` is present but is not a number.
+#[derive(Debug, thiserror::Error)]
+#[error("extra.cost is not a number: {0}")]
+pub struct InvalidCost(pub Value);
 
 /// Rejected provider field name.
 #[derive(Debug, thiserror::Error)]
@@ -91,11 +107,13 @@ impl Message {
         &self.provider
     }
 
-    /// `extra.cost`, or `0.0` when missing (`default.py:150`).
-    pub fn cost(&self) -> f64 {
-        self.extra_value("cost")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
+    /// `extra.cost`, or `0.0` when the key is missing (`default.py:102`, `:150`). A present
+    /// value that is not a number is an error, as Python's `+=` fails on it.
+    pub fn cost(&self) -> Result<f64, InvalidCost> {
+        match self.extra_value("cost") {
+            None => Ok(0.0),
+            Some(value) => value.as_f64().ok_or_else(|| InvalidCost(value.clone())),
+        }
     }
 
     /// One `extra` field.
@@ -103,17 +121,30 @@ impl Message {
         self.extra.as_ref().and_then(|extra| extra.get(key))
     }
 
-    /// Decodes `extra.actions`; missing means no actions (`default.py:156`).
+    /// Decodes `extra.actions` one entry at a time, in order, as Python iterates them
+    /// (`default.py:156`, `test_models.py:77`): a caller stops at the first entry that ends the
+    /// step, before a later malformed entry is seen. Missing means no actions; a value that is
+    /// not a list yields one `NotAList` error.
+    pub fn action_iter(&self) -> impl Iterator<Item = Result<Action, ActionError>> + '_ {
+        let (items, not_a_list): (&[Value], bool) = match self.extra_value("actions") {
+            None => (&[], false),
+            Some(Value::Array(items)) => (items, false),
+            Some(_) => (&[], true),
+        };
+        not_a_list
+            .then_some(Err(ActionError::NotAList))
+            .into_iter()
+            .chain(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| Action::decode(index, item)),
+            )
+    }
+
+    /// All actions, or the first decoding error.
     pub fn actions(&self) -> Result<Vec<Action>, ActionError> {
-        match self.extra_value("actions") {
-            None => Ok(Vec::new()),
-            Some(Value::Array(items)) => items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| Action::decode(index, item))
-                .collect(),
-            Some(_) => Err(ActionError::NotAList),
-        }
+        self.action_iter().collect()
     }
 
     /// `exit_status` and `submission` of an `exit` message; missing fields read as `""`.
@@ -229,8 +260,10 @@ impl RaiseSpec {
         let Value::Object(map) = value else {
             return Err("`raise` is not an object".to_owned());
         };
-        let Some(kind) = map.get("kind").and_then(Value::as_str) else {
-            return Err("`raise.kind` is missing".to_owned());
+        let kind = match map.get("kind") {
+            Some(Value::String(kind)) if !kind.is_empty() => kind.as_str(),
+            Some(_) => return Err("`raise.kind` must be a non-empty string".to_owned()),
+            None => return Err("`raise.kind` is missing".to_owned()),
         };
         if let Some(interrupt_kind) = InterruptKind::from_name(kind) {
             let messages: Vec<Message> = match map.get("messages") {
@@ -242,11 +275,11 @@ impl RaiseSpec {
                 .map(RaiseSpec::Interrupt)
                 .ok_or_else(|| format!("{kind} needs at least one message"));
         }
-        let message = map
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
+        let message = match map.get("message") {
+            None => String::new(),
+            Some(Value::String(message)) => message.clone(),
+            Some(_) => return Err("`raise.message` must be a string".to_owned()),
+        };
         Ok(RaiseSpec::Fatal {
             kind: kind.to_owned(),
             message,

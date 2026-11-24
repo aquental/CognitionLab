@@ -45,7 +45,8 @@ fn merge_into(target: &mut Map<String, Value>, layer: &Map<String, Value>) {
             (Some(Value::Object(existing)), Value::Object(incoming)) => {
                 merge_into(existing, incoming)
             }
-            _ => {
+            (Some(existing), _) => *existing = value.clone(),
+            (None, _) => {
                 target.insert(key.clone(), value.clone());
             }
         }
