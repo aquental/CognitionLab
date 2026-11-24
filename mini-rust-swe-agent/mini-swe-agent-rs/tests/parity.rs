@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 #[test]
 fn scenario_files_are_well_formed() {
     let scenarios = support::load_scenarios();
-    assert!(scenarios.len() >= 20, "{} scenarios", scenarios.len());
     let mut ids = BTreeSet::new();
     for scenario in &scenarios {
         let id = scenario["id"].as_str().unwrap();
@@ -25,7 +24,40 @@ fn scenario_files_are_well_formed() {
             other => panic!("{id}: unknown kind {other:?}"),
         }
     }
+    // The required set (plan §3.15 items 4-5), so a scenario cannot disappear with its Gherkin.
+    let required: BTreeSet<String> = REQUIRED.iter().map(|id| (*id).to_owned()).collect();
+    assert_eq!(ids, required);
 }
+
+const REQUIRED: &[&str] = &[
+    "command_timeout_partial_output",
+    "cost_limit",
+    "env_missing_cwd",
+    "env_signal_exit",
+    "env_stateless_shell",
+    "env_submission_marker",
+    "env_timeout_background_child",
+    "env_unicode_output",
+    "failing_command",
+    "format_errors_count_against_cost_limit",
+    "format_errors_then_recovery",
+    "global_call_limit",
+    "injected_runtime_error",
+    "invalid_template",
+    "local_traj_seed",
+    "long_output",
+    "non_ascii_and_crlf_output",
+    "outputs_exhausted",
+    "repeated_format_errors",
+    "save_on_failure",
+    "save_with_extra_dicts",
+    "signal_exit",
+    "sleep_and_warning",
+    "step_limit",
+    "submit_after_steps",
+    "submit_step1",
+    "wall_time_limit",
+];
 
 #[test]
 fn python_and_rust_agree_on_every_scenario() {

@@ -23,7 +23,7 @@ use serde_json::Value;
 /// A step result: the message is what Cucumber reports.
 type Step = Result<(), String>;
 
-/// Scenario ids run by the features, for the manifest check.
+/// Scenario ids whose comparison passed, for the manifest check.
 static EXECUTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// CLI gate cases that ran and matched, for the same check.
@@ -81,7 +81,7 @@ fn command(result: &Value, index: usize) -> Result<&Value, String> {
 #[given(expr = "the scenario {string}")]
 fn given_scenario(world: &mut ParityWorld, id: String) -> Step {
     world.scenario = Some(support::scenario(&id));
-    record(&EXECUTED, id)
+    Ok(())
 }
 
 #[when("I run it in the Python and Rust harnesses")]
@@ -166,8 +166,26 @@ fn command_submitted(world: &mut ParityWorld, index: usize, text: String) -> Ste
 fn results_equal(world: &mut ParityWorld) -> Step {
     let scenario = world.scenario()?.clone();
     let [(_, python), (_, rust)] = world.results()?;
+    let id = scenario
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     support::check(&scenario, python.clone(), rust.clone())
-        .map_err(|problem| format!("{}:\n{problem}", scenario.get("id").unwrap_or(&Value::Null)))
+        .map_err(|problem| format!("{id}:\n{problem}"))?;
+    // Recorded only after the comparison passed.
+    record(&EXECUTED, id.to_owned())
+}
+
+#[then(expr = "{word} trajectory file was saved")]
+fn trajectory_saved(world: &mut ParityWorld, which: String) -> Step {
+    let expected = which == "a";
+    for (side, result) in world.results()? {
+        let saved = result.get("saved");
+        ensure(saved.is_some_and(Value::is_object) == expected, || {
+            format!("{side}: saved {saved:?}")
+        })?;
+    }
+    Ok(())
 }
 
 // ---- cli.feature (P7) ----------------------------------------------------------------------
@@ -329,7 +347,8 @@ fn main() -> std::process::ExitCode {
     let features = support::crate_dir().join("tests/features");
     let writer = futures::executor::block_on(
         ParityWorld::cucumber()
-            .max_concurrent_scenarios(4)
+            // Steps block, so scenarios run one at a time anyway; say so.
+            .max_concurrent_scenarios(1)
             .fail_on_skipped()
             .run(features),
     );

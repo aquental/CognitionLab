@@ -9,7 +9,9 @@ environment (`uv run --frozen --project ../mini-swe-agent`) and one explicit, cr
 environment. Each scenario runs in a fresh workspace at `<base_dir>/<id>/work`; the Rust side later
 recreates the same path, so paths in outputs and configs are equal without rewriting.
 
-Output: a JSON object {scenario_id: result}, with the same shape the Rust harness builds.
+Output: {"oracle": <path of the imported minisweagent package>, "results": {scenario_id: result}},
+each result with the same shape the Rust harness builds. The default config is the reference
+package's own `config/default.yaml`.
 """
 
 import builtins
@@ -22,14 +24,15 @@ from pathlib import Path
 
 import yaml
 
+import minisweagent
 import minisweagent.models.test_models as test_models
 from minisweagent import exceptions
 from minisweagent.agents.default import DefaultAgent
+from minisweagent.config import builtin_config_dir
 from minisweagent.environments.local import LocalEnvironment
 from minisweagent.models import GlobalModelStats
 from minisweagent.utils.serialize import recursive_merge
 
-ROOT = Path(__file__).resolve().parent.parent
 INTERRUPTS = {
     name: getattr(exceptions, name)
     for name in ["Submitted", "LimitsExceeded", "TimeExceeded", "UserInterruption", "FormatError"]
@@ -99,15 +102,30 @@ class RecordingEnvironment:
 
 
 def snapshot(workspace: Path) -> dict:
+    """Every entry under the workspace: directories (empty ones too), symlinks and file bytes."""
     files = {}
     for path in sorted(workspace.rglob("*")):
-        if path.is_file() and not path.is_symlink():
+        rel = path.relative_to(workspace).as_posix()
+        if path.is_symlink():
+            files[rel] = {"symlink": os.readlink(path)}
+        elif path.is_dir():
+            files[rel] = {"dir": True}
+        elif path.is_file():
             data = path.read_bytes()
             try:
-                files[path.relative_to(workspace).as_posix()] = {"text": data.decode("utf-8")}
+                files[rel] = {"text": data.decode("utf-8")}
             except UnicodeDecodeError:
-                files[path.relative_to(workspace).as_posix()] = {"hex": data.hex()}
+                files[rel] = {"hex": data.hex()}
     return files
+
+
+def reset_dirs(base_env: dict) -> None:
+    """Fresh HOME, TMPDIR and global config dir for each scenario (the Rust side does the same)."""
+    for name in ["HOME", "TMPDIR", "MSWEA_GLOBAL_CONFIG_DIR"]:
+        directory = Path(base_env[name])
+        if directory.exists():
+            shutil.rmtree(directory)
+        directory.mkdir(parents=True)
 
 
 def fresh_workspace(base: Path, scenario: dict) -> Path:
@@ -130,6 +148,10 @@ def set_environment(base_env: dict, scenario: dict) -> None:
 
 def run_agent(scenario: dict, workspace: Path, defaults: dict) -> dict:
     config = recursive_merge(defaults, scenario.get("config", {}))
+    # The trajectory file sits next to the workspace, at the same path on both sides.
+    output_path = workspace.parent / "traj.json" if scenario.get("output_path") else None
+    if output_path is not None:
+        config["agent"]["output_path"] = str(output_path)
     stats = GlobalModelStats()
     test_models.GLOBAL_MODEL_STATS = stats
     model = JsonRaiseDeterministicModel(outputs=scenario["outputs"], **config.get("model", {}))
@@ -142,7 +164,7 @@ def run_agent(scenario: dict, workspace: Path, defaults: dict) -> dict:
     except Exception as e:  # the fatal path re-raises after the exit message
         error = type(e).__name__
     trajectory = agent.save(None, *scenario.get("save_extra", []))
-    return {
+    result = {
         "trajectory": trajectory,
         "queries": queries,
         "actions": actions,
@@ -157,6 +179,10 @@ def run_agent(scenario: dict, workspace: Path, defaults: dict) -> dict:
         },
         "artifacts": snapshot(workspace),
     }
+    if output_path is not None:
+        result["saved"] = json.loads(output_path.read_text(encoding="utf-8")) if output_path.exists() else None
+        output_path.unlink(missing_ok=True)
+    return result
 
 
 def run_environment(scenario: dict, workspace: Path) -> dict:
@@ -173,13 +199,14 @@ def run_environment(scenario: dict, workspace: Path) -> dict:
 def main() -> int:
     scenarios_dir, base, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
     wanted = set(sys.argv[4:])
-    defaults = yaml.safe_load((ROOT / "config" / "default.yaml").read_text(encoding="utf-8"))
+    defaults = yaml.safe_load((builtin_config_dir / "default.yaml").read_text(encoding="utf-8"))
     base_env = dict(os.environ)
     results = {}
     for path in sorted(scenarios_dir.glob("*.json")):
         scenario = json.loads(path.read_text(encoding="utf-8"))
         if wanted and scenario["id"] not in wanted:
             continue
+        reset_dirs(base_env)
         set_environment(base_env, scenario)
         workspace = fresh_workspace(base, scenario)
         if scenario["kind"] == "agent":
@@ -188,7 +215,8 @@ def main() -> int:
             results[scenario["id"]] = run_environment(scenario, workspace)
         shutil.rmtree(workspace)
     set_environment(base_env, {})
-    out.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
+    report = {"oracle": str(Path(minisweagent.__file__).resolve()), "results": results}
+    out.write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
     return 0
 
 

@@ -16,6 +16,9 @@ ENV UV_PYTHON=3.15.2 \
     UV_CACHE_DIR=/opt/uv-cache \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     CARGO_TARGET_DIR=/tmp/target
+# The pinned interpreter is part of the image; only the reference's packages are synced at run
+# time, because the reference (with its git-ignored uv.lock) is mounted then.
+RUN uv python install 3.15.2
 # The read-only reference is copied (without its host virtualenv) so the build backend can write
 # its metadata; MSWEA_RS_REFERENCE_DIR points the parity harness at the copy.
 ENV MSWEA_RS_REFERENCE_DIR=/tmp/ref

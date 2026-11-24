@@ -29,6 +29,7 @@
   ],
   "expect": {
     "exit_status": "Submitted",
-    "queries": 2
+    "queries": 2,
+    "observation_contains": "The output of your last command was too long."
   }
 }

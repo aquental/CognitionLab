@@ -1,7 +1,7 @@
 {
   "id": "failing_command",
   "kind": "agent",
-  "description": "A failing command and a missing command are observed, not fatal",
+  "description": "A command that fails on a missing file and a nonzero exit are observed, not fatal",
   "task": "Fix the bug.",
   "outputs": [
     {

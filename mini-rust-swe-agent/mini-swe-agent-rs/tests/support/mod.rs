@@ -161,10 +161,12 @@ impl Harness {
         python(&self.reference).parent().unwrap().to_path_buf()
     }
 
-    /// Runs the given scenarios (all when empty) through the Python reference.
+    /// Runs the given scenarios (all when empty) through the Python reference, under an outer
+    /// deadline, and checks that the imported `minisweagent` is the reference's own package.
     pub fn run_python(&self, ids: &[&str]) -> Map<String, Value> {
+        const DEADLINE: std::time::Duration = std::time::Duration::from_secs(900);
         let out = self.base.join("python-results.json");
-        let status = Command::new(python(&self.reference))
+        let mut child = Command::new(python(&self.reference))
             .arg("-I")
             .arg(crate_dir().join("parity/run_python.py"))
             .arg(scenarios_dir())
@@ -174,19 +176,51 @@ impl Harness {
             .env_clear()
             .envs(&self.env)
             .current_dir(&self.base)
-            .status()
+            .spawn()
             .unwrap();
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if start.elapsed() > DEADLINE {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("parity/run_python.py did not finish within {DEADLINE:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
         assert!(status.success(), "parity/run_python.py failed: {status}");
-        let results: Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+        let report: Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
         fs::remove_file(&out).unwrap();
-        match results {
+        let oracle = PathBuf::from(report["oracle"].as_str().unwrap());
+        let reference = self.reference.canonicalize().unwrap();
+        assert!(
+            oracle.starts_with(&reference),
+            "the Python side imported {} instead of the reference at {}",
+            oracle.display(),
+            reference.display()
+        );
+        match report["results"].clone() {
             Value::Object(map) => map,
             other => panic!("unexpected Python results: {other}"),
         }
     }
 
+    /// Fresh `HOME`, `TMPDIR` and global config dir, as the Python runner makes per scenario.
+    fn reset_dirs(&self) {
+        for name in ["HOME", "TMPDIR", "MSWEA_GLOBAL_CONFIG_DIR"] {
+            let dir = PathBuf::from(&self.env[name]);
+            if dir.exists() {
+                fs::remove_dir_all(&dir).unwrap();
+            }
+            fs::create_dir_all(&dir).unwrap();
+        }
+    }
+
     /// Runs one scenario through the Rust library, in a fresh workspace at the same path.
     pub fn run_rust(&self, scenario: &Value) -> Value {
+        self.reset_dirs();
         let workspace = fresh_workspace(&self.base, scenario);
         let mut vars = self.env.clone();
         for (key, value) in scenario["host_env"].as_object().into_iter().flatten() {
@@ -221,6 +255,7 @@ fn fresh_workspace(base: &Path, scenario: &Value) -> PathBuf {
     workspace
 }
 
+/// Every entry under the workspace: directories (empty ones too), symlinks and file bytes.
 pub fn snapshot_dir(workspace: &Path) -> Value {
     fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, Value>) {
         let mut entries: Vec<PathBuf> = fs::read_dir(dir)
@@ -230,15 +265,19 @@ pub fn snapshot_dir(workspace: &Path) -> Value {
         entries.sort();
         for path in entries {
             let meta = fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            if meta.is_symlink() {
+                let target = fs::read_link(&path).unwrap();
+                files.insert(rel, json!({"symlink": target.to_str().unwrap()}));
+            } else if meta.is_dir() {
+                files.insert(rel, json!({"dir": true}));
                 walk(root, &path, files);
             } else if meta.is_file() {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_owned();
                 let bytes = fs::read(&path).unwrap();
                 let entry = match String::from_utf8(bytes) {
                     Ok(text) => json!({"text": text}),
@@ -349,6 +388,9 @@ fn run_agent(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
 
     let mut env_config = config["environment"].clone();
     env_config["cwd"] = json!(workspace.to_str().unwrap());
+    // The trajectory file sits next to the workspace, at the same path on both sides.
+    let output_path =
+        (scenario["output_path"] == true).then(|| workspace.parent().unwrap().join("traj.json"));
     let env = LocalEnvironment::new(
         serde_json::from_value::<LocalEnvironmentConfig>(env_config).unwrap(),
         host,
@@ -356,7 +398,11 @@ fn run_agent(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
 
     let queries = Rc::new(RefCell::new(Vec::new()));
     let actions = Rc::new(RefCell::new(Vec::new()));
-    let agent_config: AgentConfig = serde_json::from_value(config["agent"].clone()).unwrap();
+    let mut agent_config = config["agent"].clone();
+    if let Some(path) = &output_path {
+        agent_config["output_path"] = json!(path.to_str().unwrap());
+    }
+    let agent_config: AgentConfig = serde_json::from_value(agent_config).unwrap();
     let mut agent = DefaultAgent::new(
         agent_config,
         RecordingModel {
@@ -386,7 +432,7 @@ fn run_agent(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
         i64::try_from(n_outputs).unwrap() - i64::try_from(model.inner.outputs_consumed()).unwrap();
     let queries = queries.borrow().clone();
     let actions = actions.borrow().clone();
-    json!({
+    let mut result = json!({
         "trajectory": trajectory,
         "queries": queries,
         "actions": actions,
@@ -399,7 +445,15 @@ fn run_agent(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
             "global_calls": stats.n_calls(),
             "remaining_outputs": remaining,
         },
-    })
+    });
+    if let Some(path) = output_path {
+        result["saved"] = match fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => Value::Null,
+        };
+        let _ = fs::remove_file(&path);
+    }
+    result
 }
 
 fn run_environment(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
@@ -451,7 +505,11 @@ pub fn check(scenario: &Value, mut python: Value, mut rust: Value) -> Result<(),
     normalize_result(&mut python, Side::Python, &map);
     normalize_result(&mut rust, Side::Rust, &map);
     let mut problems = Vec::new();
-    if let Err(diff) = compare_layers(&python, &rust) {
+    if let Err(diff) = compare_layers(
+        scenario["kind"].as_str().unwrap_or_default(),
+        &python,
+        &rust,
+    ) {
         problems.push(diff);
     }
     if scenario["kind"] == "agent" {
@@ -471,10 +529,44 @@ pub fn check(scenario: &Value, mut python: Value, mut rust: Value) -> Result<(),
                     expect["queries"]
                 ));
             }
-            let remaining = result
+            let Some(remaining) = result
                 .pointer("/state/remaining_outputs")
                 .and_then(Value::as_i64)
-                .unwrap_or(0);
+            else {
+                problems.push(format!("{side}: no remaining_outputs count"));
+                continue;
+            };
+            let fatal = result.pointer("/state/error").is_some_and(|e| !e.is_null());
+            let returned = result
+                .pointer("/state/returned")
+                .is_some_and(|r| !r.is_null());
+            let expect_fatal = expect["fatal"] == true;
+            if fatal != expect_fatal || returned == expect_fatal {
+                problems.push(format!(
+                    "{side}: fatal {fatal}, returned {returned}, expected fatal {expect_fatal}"
+                ));
+            }
+            if let Some(saved) = expect["saved"].as_bool() {
+                match result.get("saved") {
+                    Some(file) if file.is_object() == saved => {}
+                    other => problems.push(format!(
+                        "{side}: saved trajectory {other:?}, expected {saved}"
+                    )),
+                }
+            }
+            if let Some(text) = expect["observation_contains"].as_str() {
+                let found = result
+                    .pointer("/trajectory/messages")
+                    .and_then(Value::as_array)
+                    .is_some_and(|messages| {
+                        messages
+                            .iter()
+                            .any(|m| m["content"].as_str().is_some_and(|c| c.contains(text)))
+                    });
+                if !found {
+                    problems.push(format!("{side}: no message contains {text:?}"));
+                }
+            }
             let exhausted = expect["exit_status"] == "OutputsExhausted";
             let allowed = if exhausted {
                 remaining == -1
