@@ -13,7 +13,8 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | stacked on P1 |
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
 | P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
-| P5–P7 | Not started | — |
+| P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
+| P6–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
 
@@ -109,4 +110,15 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   inside a class, lookaround and backreferences, more than one group, and any pattern that can match the empty
   string (the engines restart differently after an empty match). `\w`, `\d` and `\b` keep the `regex` crate's
   Unicode classes (risk R6). The shipped pattern is unaffected.
+- **Agent loop (P5).** `src/agent/default.rs`. `query` appends and charges the assistant message before
+  `step` decodes its actions, as Python does. The deterministic model iterates `extra.actions` before charging, so
+  malformed actions fail inside the model. Divergences (plan §2.4): `mini_version` is the crate version,
+  `traceback` is the error's `source()` chain, the exit status of a fatal error is a stable name (D6, such as
+  `OutputsExhausted` for Python's `IndexError`), the agent's templates compile at construction, and the
+  trajectory is written as raw UTF-8 through a temporary file and a rename. Without an `output_path`, nothing is
+  serialized after a step (Python builds the dict and drops it). `run` returns the exit message's whole `extra`
+  (`ExitInfo::extra`). `src/agent/default.rs` is over the plan's 250-line budget (§2.6), at about 350 lines of code:
+  Python's `finally` save, its exception-to-exit-message handler and the trajectory writer are spelled out with
+  explicit error paths (save replacing a fatal error, an invalid cost inside the format-error handler, the
+  atomic write).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

@@ -197,6 +197,9 @@ pub enum AgentError {
     /// A template failed to compile or render.
     #[error(transparent)]
     Template(#[from] TemplateError),
+    /// An invalid configuration value.
+    #[error("invalid configuration: {0}")]
+    Config(String),
     /// A config merge failed.
     #[error(transparent)]
     Merge(#[from] MergeError),
@@ -229,6 +232,7 @@ impl AgentError {
         match self {
             AgentError::Model(error) => error.exit_status(),
             AgentError::Template(_) => "TemplateError",
+            AgentError::Config(_) => "ConfigError",
             AgentError::Merge(_) => "MergeError",
             AgentError::Action(_) => "ActionError",
             AgentError::Cost(_) => "InvalidCost",

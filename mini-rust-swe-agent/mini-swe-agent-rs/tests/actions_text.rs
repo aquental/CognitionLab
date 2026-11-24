@@ -25,6 +25,7 @@ fn golden(name: &str) -> Vec<Value> {
 const OBSERVATION: &str = "{{ output.output }}";
 
 /// A clock that reads `start`, `start + 1`, … (the golden's patched `time.time`).
+#[derive(Debug)]
 struct StepClock(Mutex<f64>);
 
 impl Clock for StepClock {

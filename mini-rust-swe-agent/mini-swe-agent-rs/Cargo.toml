@@ -21,6 +21,7 @@ thiserror = "=2.0.21"
 minijinja = { version = "=3.1.0", default-features = false, features = ["builtins", "multi_template", "serde", "std_collections", "preserve_order"] }
 nix = { version = "=0.31.3", default-features = false, features = ["signal", "process", "poll", "fs", "feature"] }
 regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode", "perf"] }
+tempfile = "=3.27.0"
 regex-syntax = { version = "=0.8.12", default-features = false, features = ["std", "unicode"] }
 
 [lints.rust]
@@ -36,4 +37,3 @@ unimplemented = "deny"
 dbg_macro = "deny"
 
 [dev-dependencies]
-tempfile = "3.27.0"

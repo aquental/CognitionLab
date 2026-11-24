@@ -161,17 +161,22 @@ impl Message {
         Some(ExitInfo {
             exit_status: text("exit_status"),
             submission: text("submission"),
+            extra: self.extra.clone().unwrap_or_default(),
         })
     }
 }
 
-/// What `run` returns: the last message's status and submission.
+/// What `run` returns: the last message's `extra` (Python returns the whole dict), with its
+/// status and submission as typed fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExitInfo {
     /// For example `Submitted` or `LimitsExceeded`.
     pub exit_status: String,
     /// The submitted text, or `""`.
     pub submission: String,
+    /// Every key of the exit message's `extra`, including the two above.
+    #[serde(default)]
+    pub extra: Map<String, Value>,
 }
 
 /// One action of an assistant message.
