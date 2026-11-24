@@ -1,0 +1,45 @@
+{
+  "id": "failing_command",
+  "kind": "agent",
+  "description": "A command that fails on a missing file and a nonzero exit are observed, not fatal",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nf\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "ls does-not-exist-12345"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nx\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "exit 3"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 3
+  }
+}

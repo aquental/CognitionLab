@@ -1,0 +1,39 @@
+{
+  "id": "command_timeout_partial_output",
+  "kind": "agent",
+  "description": "A command timeout keeps the partial output, then the agent recovers",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nslow\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo $((111*9)); sleep 5"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\necho recovered"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 2
+  },
+  "config": {
+    "environment": {
+      "timeout": 1
+    }
+  }
+}

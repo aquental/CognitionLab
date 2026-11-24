@@ -1,0 +1,9 @@
+# cargo-deny configuration (`cargo deny check advisories` is a quality gate from P0).
+
+[advisories]
+ignore = [
+    # humantime is "unmaintained" (not a vulnerability). It enters only through the dev-dependency
+    # cucumber 0.23, which needs it unconditionally; Cucumber BDD is in scope by owner decision D9.
+    # Neither the library nor the binary links it (`cargo tree -i humantime -e normal` is empty).
+    { id = "RUSTSEC-2026-0542", reason = "unmaintained, dev-only via cucumber (D9)" },
+]

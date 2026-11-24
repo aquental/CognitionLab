@@ -1,0 +1,35 @@
+{
+  "id": "invalid_template",
+  "kind": "agent",
+  "description": "An undefined variable in the instance template fails before the loop: no query, no exit message, no saved trajectory (UndefinedError in Python)",
+  "task": "Fix the bug.",
+  "config": {
+    "agent": {
+      "instance_template": "Task: {{ task }} {{ undefined_name }}"
+    }
+  },
+  "output_path": true,
+  "exit_status_map": {
+    "UndefinedError": "TemplateError"
+  },
+  "allow_leftover": true,
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: done.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "TemplateError",
+    "queries": 0,
+    "fatal": true,
+    "saved": false
+  }
+}

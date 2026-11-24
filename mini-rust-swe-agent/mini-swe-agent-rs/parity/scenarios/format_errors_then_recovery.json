@@ -1,0 +1,100 @@
+{
+  "id": "format_errors_then_recovery",
+  "kind": "agent",
+  "description": "Two format errors, then a clean step resets the counter, then submit",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Please always provide EXACTLY ONE action.",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Still no action.",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nok\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo ok"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Again.",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 5
+  }
+}

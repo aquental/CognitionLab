@@ -1,0 +1,24 @@
+{
+  "id": "outputs_exhausted",
+  "kind": "agent",
+  "description": "Running past the scripted outputs is fatal (IndexError in Python)",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n1\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo one"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "OutputsExhausted",
+    "queries": 2,
+    "fatal": true
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "injected_runtime_error",
+  "kind": "agent",
+  "description": "A scripted RuntimeError is fatal and keeps its class name",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "boom",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "RuntimeError",
+              "message": "scripted failure"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "RuntimeError",
+    "queries": 1,
+    "fatal": true
+  }
+}

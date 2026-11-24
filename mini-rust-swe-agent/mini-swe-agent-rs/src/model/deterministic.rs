@@ -75,6 +75,12 @@ impl DeterministicModel {
         })
     }
 
+    /// How many outputs `query` has taken, including a failed read past the end: Python's
+    /// `current_index + 1`, so `outputs.len() - outputs_consumed()` is `-1` after exhaustion.
+    pub fn outputs_consumed(&self) -> usize {
+        self.next
+    }
+
     /// `_process_test_actions` (`test_models.py:75-87`): `Ok(true)` when the output was a
     /// `/sleep` or `/warning` step and the next output should be used.
     /// Actions are decoded one at a time, so a `raise` wins over a later malformed entry.

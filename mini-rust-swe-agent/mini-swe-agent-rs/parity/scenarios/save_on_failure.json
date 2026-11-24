@@ -1,0 +1,26 @@
+{
+  "id": "save_on_failure",
+  "kind": "agent",
+  "description": "A fatal error inside the loop still writes the trajectory file, with the exit message (IndexError in Python)",
+  "task": "Fix the bug.",
+  "output_path": true,
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: write it.\n\n```mswea_bash_command\nw\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo saved > note.txt"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "OutputsExhausted",
+    "queries": 2,
+    "fatal": true,
+    "saved": true
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "env_signal_exit",
+  "kind": "environment",
+  "description": "A signal exit is negative",
+  "commands": [
+    "kill -9 $$",
+    "kill -TERM $$"
+  ]
+}

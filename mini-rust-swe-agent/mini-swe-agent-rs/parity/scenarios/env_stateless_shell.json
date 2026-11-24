@@ -1,0 +1,9 @@
+{
+  "id": "env_stateless_shell",
+  "kind": "environment",
+  "description": "cd and export do not persist between commands, files do",
+  "commands": [
+    "mkdir -p sub && cd sub && export STUDY_X=abc && printf x > f",
+    "pwd; printf '%s\\n' \"${STUDY_X-unset}\"; cat sub/f"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "env_unicode_output",
+  "kind": "environment",
+  "description": "UTF-8 output and invalid bytes",
+  "commands": [
+    "printf 'ol\\303\\241 \\342\\234\\223\\n'",
+    "printf 'bad\\377end\\n'"
+  ]
+}

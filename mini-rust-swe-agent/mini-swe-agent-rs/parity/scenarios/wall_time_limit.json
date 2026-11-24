@@ -1,0 +1,40 @@
+{
+  "id": "wall_time_limit",
+  "kind": "agent",
+  "description": "Wall-time limit on real clocks: sleep 2 with a 1 s limit; the second reply is never consumed",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nsleep\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "sleep 2"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nnever\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo unreachable"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "TimeExceeded",
+    "queries": 1
+  },
+  "config": {
+    "agent": {
+      "wall_time_limit_seconds": 1
+    }
+  },
+  "allow_leftover": true
+}

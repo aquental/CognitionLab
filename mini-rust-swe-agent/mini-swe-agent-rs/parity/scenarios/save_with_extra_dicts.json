@@ -1,0 +1,40 @@
+{
+  "id": "save_with_extra_dicts",
+  "kind": "agent",
+  "description": "save() merges extra dicts last",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 1
+  },
+  "save_extra": [
+    {
+      "info": {
+        "exit_status": "Overridden",
+        "custom": {
+          "run": 7
+        }
+      }
+    },
+    {
+      "info": {
+        "custom": {
+          "note": "second"
+        }
+      }
+    }
+  ]
+}

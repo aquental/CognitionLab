@@ -1,0 +1,45 @@
+{
+  "id": "sleep_and_warning",
+  "kind": "agent",
+  "description": "Scripted /sleep and /warning outputs are skipped without a query or a charge",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "pause",
+      "extra": {
+        "actions": [
+          {
+            "command": "/sleep 0.2"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "note",
+      "extra": {
+        "actions": [
+          {
+            "command": "/warning careful"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 1
+  }
+}

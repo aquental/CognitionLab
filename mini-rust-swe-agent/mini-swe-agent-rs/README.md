@@ -14,9 +14,10 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
 | P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
 | P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
-| P6–P7 | Not started | — |
+| P6 Parity and BDD | Done: 27 JSON scenarios (21 agent, 6 environment) give equal normalized results through `parity/run_python.py` and the Rust library (`tests/parity.rs`); comparator mutation tests (`tests/comparator.rs`); Cucumber features (`tests/bdd.rs`) with one Gherkin scenario per parity scenario and a manifest check; full-suite Linux gate (`parity/Dockerfile`) | stacked on P5 |
+| P7 | Not started | — |
 
-Parity with Python is **not** proven yet; that is phase P6.
+Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6); the CLI comes in P7.
 
 ## Commands
 
@@ -36,6 +37,26 @@ is skipped on purpose through `MSWEA_RS_NO_REFERENCE=1`:
 ```bash
 docker run --rm -e MSWEA_RS_NO_REFERENCE=1 -e CARGO_TARGET_DIR=/tmp/target -v "$PWD":/src -w /src rust:1.99.1 \
   sh -c 'rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked'
+```
+
+The parity (`tests/parity.rs`) and BDD (`tests/bdd.rs`) targets print that they were skipped on purpose there.
+
+**Parity and BDD (P6).** Both targets run every scenario of `parity/scenarios/` through the Python reference and
+the Rust library and compare the normalized results. They need `uv` and the reference's `uv.lock`, which the
+reference's own `.gitignore` excludes, so it exists only in a checkout where it was generated. In a git worktree,
+point the harness at such a checkout:
+
+```bash
+MSWEA_RS_REFERENCE_DIR=/path/to/mini-rust-swe-agent/mini-swe-agent cargo test --locked --test parity --test bdd
+```
+
+**Linux gate (full suite).** `parity/Dockerfile` adds `uv` 0.13.9 and Python 3.15.2 to `rust:1.99.1`. The
+reference is mounted read-only and copied inside the container (without its host virtualenv):
+
+```bash
+docker build -t mswea-rs-full parity
+docker run --rm -v "$PWD/..":/work -v /path/to/reference/with/uv.lock:/work/mini-swe-agent:ro \
+  -w /work/mini-swe-agent-rs mswea-rs-full
 ```
 
 **YAML goldens.** `tests/goldens/yaml/*.json` are PyYAML `safe_load` dumps of `config/*.yaml` and
@@ -68,6 +89,15 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | Rust-only Linux gate (`rust:1.99.1` image): fmt, clippy, build, test | Pass |
 | `cargo deny check advisories` | No advisories |
 | Reference provenance (plan §1.0) | Text path identical to upstream tag `v2.4.6` (commit `a83fcae`) |
+
+## Evidence (P6, 2026-11-24)
+
+| Check | Result |
+|---|---|
+| `cargo test --locked` on macOS with the reference (all targets, including `parity` and `bdd`) | Pass: 27 of 27 scenarios equal; BDD 27 scenarios, 135 steps |
+| Full-suite Linux gate (`parity/Dockerfile`) | Pass (exit 0) |
+| Rust-only Linux gate | Pass; `parity` and `bdd` skipped on purpose |
+| `cargo deny check advisories` | No advisories, after one recorded exception in `deny.toml`: `humantime` (unmaintained, dev-only through `cucumber`, D9) |
 
 ## Design notes
 
@@ -121,4 +151,20 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   Python's `finally` save, its exception-to-exit-message handler and the trajectory writer are spelled out with
   explicit error paths (save replacing a fatal error, an invalid cost inside the format-error handler, the
   atomic write).
+- **Parity harness (P6).** `tests/support/` holds the Rust runner, the test-only recording wrappers (history
+  passed to each query, actions passed to `execute`) and the comparator; `parity/run_python.py` is the Python
+  runner. The Python side uses a thin `DeterministicModel` subclass that turns the JSON `raise` specs into
+  exceptions, and replaces the module-level `GLOBAL_MODEL_STATS` per scenario; it reads the reference package's
+  own `default.yaml`, and the harness checks that the imported `minisweagent` lives in the reference checkout. Both
+  sides get one explicit environment (`PATH`, `HOME`, `LANG=C.UTF-8`, `TMPDIR`, `MSWEA_SILENT_STARTUP`,
+  `MSWEA_CONFIGURED`, `MSWEA_GLOBAL_CONFIG_DIR`, plus the scenario's variables), fresh `HOME`, `TMPDIR` and config
+  directories for each scenario, and a fresh workspace at the same absolute path. A scenario with
+  `"output_path": true` saves to `<base>/<id>/traj.json` (same path on both sides) and compares the file. Workspace
+  snapshots include directories and symlink targets. Normalized paths: message and query `extra.timestamp` (when
+  numeric), the three `*_type` paths, `info.mini_version`, and for a fatal exit the exit message's `content`,
+  `exception_str` and `traceback` (when they are strings), with the exit status mapped by D6 (`IndexError` →
+  `OutputsExhausted`, plus each scenario's own map). Everything else is compared exactly; every layer of the
+  scenario kind must be present; an integer equals a float that is exactly that integer, and integers are never
+  compared through `f64`. A scenario also fails on unexpected leftover or missing scripted outputs, on a fatal or
+  saved outcome other than expected, and when the BDD manifest does not show each scenario compared exactly once.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

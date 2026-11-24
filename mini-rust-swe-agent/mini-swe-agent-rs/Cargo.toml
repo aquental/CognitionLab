@@ -37,3 +37,10 @@ unimplemented = "deny"
 dbg_macro = "deny"
 
 [dev-dependencies]
+cucumber = "=0.23.0"
+futures = { version = "=0.3.34", default-features = false, features = ["executor"] }
+
+# Cucumber needs its own `main` (plan §3.15 item 5).
+[[test]]
+name = "bdd"
+harness = false
