@@ -12,7 +12,7 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
 | P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | stacked on P1 |
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
-| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 28 parser and 8 observation goldens from Python match | stacked on P3 |
+| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
 | P5–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
@@ -103,4 +103,10 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   plan's 250-line budget (§2.6), at about 430 lines of code: Python gets the pipe, the deadline, the process-group
   kill and the OS error texts from `subprocess`; the port writes them out (the `poll` loop, `killpg`, and CPython's
   error formatting).
+- **Text actions (P4).** `action_regex` is compiled by the `regex` crate after a small rewrite: `\s` and `\S`
+  get Python's whitespace set (with `\x1c`-`\x1f`) and `\Z` becomes `\z`. Patterns whose meaning cannot be kept
+  are refused when the model is built: `$` outside a class (Python's also matches before a final newline), `\S`
+  inside a class, lookaround and backreferences, more than one group, and any pattern that can match the empty
+  string (the engines restart differently after an empty match). `\w`, `\d` and `\b` keep the `regex` crate's
+  Unicode classes (risk R6). The shipped pattern is unaffected.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

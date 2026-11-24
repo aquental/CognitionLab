@@ -183,6 +183,7 @@ dependencies = [
  "minijinja",
  "nix",
  "regex",
+ "regex-syntax",
  "serde",
  "serde-saphyr",
  "serde_json",

@@ -4,6 +4,9 @@
 use std::fs;
 use std::path::PathBuf;
 
+use std::sync::Mutex;
+
+use mini_swe_agent_rs::clock::{Clock, ManualClock};
 use mini_swe_agent_rs::error::{AgentError, InterruptKind, StepError};
 use mini_swe_agent_rs::message::{ExecOutput, Message};
 use mini_swe_agent_rs::model::actions_text::{ActionRegex, ActionRegexError, TextActions};
@@ -20,6 +23,25 @@ fn golden(name: &str) -> Vec<Value> {
 }
 
 const OBSERVATION: &str = "{{ output.output }}";
+
+/// A clock that reads `start`, `start + 1`, … (the golden's patched `time.time`).
+struct StepClock(Mutex<f64>);
+
+impl Clock for StepClock {
+    #[allow(clippy::unwrap_used)]
+    fn now(&self) -> f64 {
+        let mut now = self.0.lock().unwrap();
+        let value = *now;
+        *now += 1.0;
+        value
+    }
+}
+
+/// JSON text with key order: `Value`'s `==` ignores the order of object keys.
+#[allow(clippy::unwrap_used)]
+fn ordered(value: &Value) -> String {
+    serde_json::to_string(value).unwrap()
+}
 
 #[test]
 fn parse_matches_python() {
@@ -45,7 +67,7 @@ fn parse_matches_python() {
             }
             Err(StepError::Fatal(e)) => panic!("{name}: {e}"),
         };
-        assert_eq!(actual, case["result"], "{name}");
+        assert_eq!(ordered(&actual), ordered(&case["result"]), "{name}");
     }
 }
 
@@ -56,16 +78,15 @@ fn observations_match_python() {
         let actions =
             TextActions::new(r"x(.*)", "{{ error }}", case["template"].as_str().unwrap()).unwrap();
         let outputs: Vec<ExecOutput> = serde_json::from_value(case["outputs"].clone()).unwrap();
+        // Python samples `time.time()` once per output, after rendering it.
+        let start = case["messages"][0]["extra"]["timestamp"].as_f64().unwrap();
+        let clock = StepClock(Mutex::new(start));
         let messages = actions
-            .observations(
-                &outputs,
-                &case["template_vars"],
-                case["timestamp"].as_f64().unwrap(),
-            )
+            .observations(&outputs, &case["template_vars"], &clock)
             .unwrap();
         assert_eq!(
-            serde_json::to_value(&messages).unwrap(),
-            case["messages"],
+            ordered(&serde_json::to_value(&messages).unwrap()),
+            ordered(&case["messages"]),
             "{name}"
         );
     }
@@ -109,7 +130,9 @@ fn output_key_collision_is_lazy() {
     let actions = TextActions::new(r"x(.*)", "{{ error }}", OBSERVATION).unwrap();
     let vars = json!({"output": "shadow"});
     assert_eq!(
-        actions.observations(&[], &vars, 1.0).unwrap(),
+        actions
+            .observations(&[], &vars, &ManualClock::new(1.0))
+            .unwrap(),
         Vec::<Message>::new()
     );
     let output = ExecOutput {
@@ -119,7 +142,63 @@ fn output_key_collision_is_lazy() {
         extra: None,
     };
     assert!(matches!(
-        actions.observations(&[output], &vars, 1.0),
+        actions.observations(&[output], &vars, &ManualClock::new(1.0)),
         Err(AgentError::Template(TemplateError::DuplicateKey(key))) if key == "output"
+    ));
+}
+
+#[test]
+fn format_error_kwargs_cannot_replace_actions_or_error() {
+    // Python's `render(actions=..., error=..., **kwargs)` raises TypeError on a repeated keyword.
+    let actions = TextActions::new(r"x(.*)", "{{ error }}", OBSERVATION).unwrap();
+    for key in ["actions", "error"] {
+        let kwargs: Map<String, Value> =
+            [(key.to_owned(), json!("override"))].into_iter().collect();
+        assert!(
+            matches!(
+                actions.parse("no action", &kwargs),
+                Err(StepError::Fatal(AgentError::Template(TemplateError::DuplicateKey(k)))) if k == key
+            ),
+            "{key}"
+        );
+        // One valid action never renders the template, in Python either.
+        assert_eq!(actions.parse("xls", &kwargs).unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn python_only_regex_semantics_are_rejected_at_load() {
+    for (pattern, why) in [
+        (r"(x)$", "Python's `$` also matches before a final newline"),
+        (r"(?:^|x)", "can match the empty string"),
+        (r"a([\S]+)b", "`\\S` inside a character class"),
+    ] {
+        assert!(
+            matches!(
+                ActionRegex::new(pattern),
+                Err(ActionRegexError::Unsupported { .. })
+            ),
+            "{pattern}: {why}"
+        );
+    }
+    // Escaped and in-class dollars are literal in both engines.
+    assert_eq!(
+        ActionRegex::new(r"\$(x)[$]").unwrap().findall("$x$"),
+        vec!["x"]
+    );
+}
+
+#[test]
+fn non_finite_clock_readings_are_errors() {
+    let actions = TextActions::new(r"x(.*)", "{{ error }}", OBSERVATION).unwrap();
+    let output = ExecOutput {
+        output: "o".into(),
+        returncode: 0,
+        exception_info: String::new(),
+        extra: None,
+    };
+    assert!(matches!(
+        actions.observations(&[output], &json!({}), &ManualClock::new(f64::NAN)),
+        Err(AgentError::Internal(_))
     ));
 }
