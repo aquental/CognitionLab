@@ -11,5 +11,6 @@ pub mod host_env;
 pub mod merge;
 pub mod message;
 pub mod model;
+pub mod pystr;
 pub mod template;
 pub mod yaml;

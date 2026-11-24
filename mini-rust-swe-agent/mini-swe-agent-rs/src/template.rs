@@ -29,6 +29,10 @@ pub enum TemplateError {
         #[source]
         source: Box<Error>,
     },
+    /// The context already holds a key the renderer adds (Python raises `TypeError` for a
+    /// duplicate keyword argument).
+    #[error("template context already has a `{0}` key")]
+    DuplicateKey(String),
     /// No template has this name.
     #[error("unknown template `{0}`")]
     Unknown(String),
