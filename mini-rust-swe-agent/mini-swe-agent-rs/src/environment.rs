@@ -19,10 +19,7 @@ pub trait Environment {
     fn config(&self) -> &Self::Config;
 
     /// The type name written as `info.config.environment_type`.
-    fn type_name(&self) -> &'static str
-    where
-        Self: Sized,
-    {
+    fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
@@ -34,10 +31,7 @@ pub trait Environment {
     fn template_vars(&self) -> Result<Value, AgentError>;
 
     /// The environment's part of the trajectory.
-    fn serialize(&self) -> Result<Value, AgentError>
-    where
-        Self: Sized,
-    {
+    fn serialize(&self) -> Result<Value, AgentError> {
         Ok(
             json!({"info": {"config": {"environment": serde_json::to_value(self.config())?, "environment_type": self.type_name()}}}),
         )

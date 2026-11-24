@@ -1,13 +1,5 @@
 //! Default methods of the `Model` and `Environment` traits (plan §3.3).
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::path::Path;
 
 use mini_swe_agent_rs::environment::Environment;
@@ -87,8 +79,14 @@ fn format_message_returns_its_arguments() {
         model_name: "m".into(),
     });
     assert_eq!(
-        serde_json::to_value(model.format_message(Role::System, "hi".into())).unwrap(),
+        serde_json::to_value(model.format_message(Role::System, "hi".into(), None)).unwrap(),
         json!({"role": "system", "content": "hi"})
+    );
+    let extra = json!({"exit_status": "RuntimeError", "submission": "", "exception_str": "boom"});
+    let message = model.format_message(Role::Exit, "boom".into(), extra.as_object().cloned());
+    assert_eq!(
+        serde_json::to_value(message).unwrap(),
+        json!({"role": "exit", "content": "boom", "extra": extra})
     );
 }
 

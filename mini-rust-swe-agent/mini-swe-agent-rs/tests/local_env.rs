@@ -1,14 +1,6 @@
 //! LocalEnvironment (plan §3.7, phase P3): the port of `tests/environments/test_local.py` plus the
 //! process, submission and shell-state cases the plan adds (§3.15 item 1, traps 4-8, 24, 30).
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
@@ -44,6 +36,8 @@ fn cmd(command: &str) -> Action {
     }
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::panic)]
 fn run(env: &LocalEnvironment, command: &str) -> ExecOutput {
     env.execute(&cmd(command), None)
         .unwrap_or_else(|e| panic!("{command}: {e}"))
@@ -233,6 +227,8 @@ fn pid_alive(pid: i32) -> bool {
     true
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::panic)]
 fn read_pid(path: &Path) -> i32 {
     for _ in 0..50 {
         if let Ok(text) = std::fs::read_to_string(path)
@@ -508,6 +504,8 @@ fn output(text: &str, returncode: i32) -> ExecOutput {
     }
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn submission(text: &str, returncode: i32) -> Option<String> {
     match check_finished(&output(text, returncode)) {
         Ok(()) => None,

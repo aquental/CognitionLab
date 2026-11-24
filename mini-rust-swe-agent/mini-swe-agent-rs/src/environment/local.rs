@@ -27,10 +27,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::environment::Environment;
-use crate::error::{AgentError, Interrupt, InterruptKind, StepError};
+use crate::error::{AgentError, Interrupt, StepError};
 use crate::host_env::HostEnv;
 use crate::merge::recursive_merge;
-use crate::message::{Action, ExecOutput, Message};
+use crate::message::{Action, ExecOutput};
 use crate::pystr;
 
 /// The submission marker (`local.py:48`).
@@ -106,8 +106,8 @@ impl LocalEnvironment {
         let mut vars: BTreeMap<OsString, OsString> = self
             .host
             .child_vars()
-            .filter(|(name, _)| name.as_os_str() != "BASH_ENV")
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .filter(|(name, _)| *name != "BASH_ENV")
+            .map(|(name, value)| (name.to_os_string(), value.to_os_string()))
             .collect();
         for (name, value) in &self.config.env {
             vars.insert(OsString::from(name), OsString::from(value));
@@ -152,12 +152,7 @@ pub fn check_finished(output: &ExecOutput) -> Result<(), Interrupt> {
     if pystr::strip(first) != SUBMIT_MARKER {
         return Ok(());
     }
-    let message = Message::exit("Submitted", rest, rest);
-    Err(Interrupt::new(
-        InterruptKind::Submitted,
-        message,
-        Vec::new(),
-    ))
+    Err(Interrupt::submitted(rest.to_owned()))
 }
 
 /// `platform.uname()` fields. `processor` comes from `uname -p`, with `unknown` read as `""`.
