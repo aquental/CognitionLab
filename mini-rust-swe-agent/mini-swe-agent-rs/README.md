@@ -10,7 +10,8 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 |---|---|---|
 | P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
-| P2–P7 | Not started | — |
+| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 44 Jinja2 goldens match byte for byte | stacked on P1 |
+| P3–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
 
@@ -40,6 +41,13 @@ docker run --rm -e MSWEA_RS_NO_REFERENCE=1 -e CARGO_TARGET_DIR=/tmp/target -v "$
 uv run --frozen --project ../mini-swe-agent python parity/yaml_dump.py
 ```
 
+**Template goldens.** `tests/goldens/templates/cases.json` holds Jinja2 renderings of the shipped templates, the
+Python class defaults and value-formatting probes. Regenerate only on purpose:
+
+```bash
+MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --project ../mini-swe-agent python parity/template_goldens.py
+```
+
 ## Evidence (P0, 2026-11-24)
 
 | Check | Result |
@@ -67,4 +75,7 @@ uv run --frozen --project ../mini-swe-agent python parity/yaml_dump.py
 - **Interrupts** hold at least one message by construction; the first one is boxed so `Result<_, StepError>`
   stays small.
 - **`HostEnv`** keeps every entry for child processes, and only the UTF-8 entries for templates.
+- **Templates (P2).** minijinja with `UndefinedBehavior::Strict`, no auto-escaping, and a formatter that prints
+  `None`, `True`/`False` and floats the way Python's `str()` does (`1e+20`, `1e-05`, `-0.0`). Dicts and lists
+  still render in minijinja's format; no shipped template prints one.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).
