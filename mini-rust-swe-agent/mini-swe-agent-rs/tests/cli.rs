@@ -181,7 +181,10 @@ fn usage_and_config_errors() {
     let output = sandbox.rust(&["-m", "gpt-x", "-t", "t"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("P8"), "{}", stderr(&output));
+    // The model is built first, as in Python, so it needs its outputs.
     let output = sandbox.rust(&[
+        "-c",
+        "model.outputs=[]",
         "--model-class",
         "deterministic",
         "-m",
@@ -220,4 +223,147 @@ fn python_and_rust_clis_write_equal_trajectories() {
         })
         .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ---- Review fixes (P7) -------------------------------------------------------------------------
+
+#[test]
+fn help_and_version_exit_zero() {
+    let sandbox = Sandbox::new();
+    for flag in ["--help", "--version"] {
+        let output = sandbox.rust(&[flag]);
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+        assert!(!output.stdout.is_empty(), "{flag}");
+    }
+}
+
+#[test]
+fn saved_message_only_after_a_successful_run() {
+    let sandbox = Sandbox::new();
+    let mut args = base_args(&sandbox, &[SUBMIT], "ok.json");
+    args.extend(["-t".into(), "t".into()]);
+    assert!(stderr(&sandbox.run(Path::new(BIN), &args, None)).contains("Saved trajectory"));
+
+    // A destination under a regular file cannot be written.
+    fs::write(sandbox.root.join("out/file"), "x").unwrap();
+    let mut args = base_args(&sandbox, &[SUBMIT], "file/t.json");
+    args.extend(["-t".into(), "t".into()]);
+    let output = sandbox.run(Path::new(BIN), &args, None);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !stderr(&output).contains("Saved trajectory"),
+        "{}",
+        stderr(&output)
+    );
+
+    // A template that fails before the loop never saves.
+    let mut args = base_args(&sandbox, &[SUBMIT], "never.json");
+    args.extend([
+        "-c".into(),
+        "agent.system_template={{ missing }}".into(),
+        "-t".into(),
+        "t".into(),
+    ]);
+    let output = sandbox.run(Path::new(BIN), &args, None);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !stderr(&output).contains("Saved trajectory"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn dotenv_last_assignment_wins() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.root.join("config/.env"), "X_DUP=one\nX_DUP=two\n").unwrap();
+    let mut args = base_args(&sandbox, &["printf '%s' \"$X_DUP\"", SUBMIT], "dup.json");
+    args.extend(["-t".into(), "t".into()]);
+    let output = sandbox.run(Path::new(BIN), &args, None);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        sandbox.trajectory("dup.json")["messages"][3]["extra"]["raw_output"],
+        "two"
+    );
+}
+
+#[test]
+fn empty_output_is_unset_and_the_default_beats_yaml() {
+    let sandbox = Sandbox::new();
+    let mut args: Vec<String> = base_args(&sandbox, &[SUBMIT], "unused.json")
+        .into_iter()
+        .take(8)
+        .collect();
+    args.extend(["-o".into(), String::new(), "-t".into(), "t".into()]);
+    let output = sandbox.run(Path::new(BIN), &args, None);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("Saved trajectory"));
+    assert!(!sandbox.root.join("config/last_mini_run.traj.json").exists());
+
+    // Without -o, the default output path is a flag value and wins over the config's.
+    let other = sandbox.root.join("out/from-yaml.json");
+    let mut args: Vec<String> = base_args(&sandbox, &[SUBMIT], "unused.json")
+        .into_iter()
+        .take(8)
+        .collect();
+    args.extend([
+        "-c".into(),
+        format!("agent.output_path={}", other.display()),
+        "-t".into(),
+        "t".into(),
+    ]);
+    assert_eq!(
+        sandbox.run(Path::new(BIN), &args, None).status.code(),
+        Some(0)
+    );
+    assert!(
+        sandbox
+            .root
+            .join("config/last_mini_run.traj.json")
+            .is_file()
+    );
+    assert!(!other.exists());
+}
+
+#[test]
+fn invalid_values_fail_before_the_run() {
+    let sandbox = Sandbox::new();
+    // A present, non-string run.task is a config error, and stdin is not read.
+    let mut args = base_args(&sandbox, &[SUBMIT], "t.json");
+    args.extend(["-c".into(), "run.task=0".into()]);
+    let output = sandbox.run(Path::new(BIN), &args, Some("from stdin"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !stderr(&output).contains("What do you want to do"),
+        "{}",
+        stderr(&output)
+    );
+    // A key path deeper than the limit.
+    let deep = format!("{}=1", vec!["a"; 100_000].join("."));
+    let output = sandbox.rust(&["-c", &deep, "-t", "t"]);
+    assert_eq!(output.status.code(), Some(1));
+    // Non-finite cost limits are usage errors.
+    for limit in ["nan", "inf"] {
+        assert_eq!(
+            sandbox.rust(&["-l", limit, "-t", "t"]).status.code(),
+            Some(2),
+            "{limit}"
+        );
+    }
+}
+
+#[test]
+fn banner_is_decided_before_the_env_file() {
+    // Python prints the banner before `load_dotenv`, so `.env` cannot silence it.
+    let mut sandbox = Sandbox::new();
+    sandbox.env.remove("MSWEA_SILENT_STARTUP");
+    fs::write(sandbox.root.join("config/.env"), "MSWEA_SILENT_STARTUP=1\n").unwrap();
+    let mut args = base_args(&sandbox, &[SUBMIT], "b.json");
+    args.extend(["-t".into(), "t".into()]);
+    let output = sandbox.run(Path::new(BIN), &args, None);
+    assert!(
+        stderr(&output).contains("This is mini-swe-agent-rs version"),
+        "{}",
+        stderr(&output)
+    );
 }

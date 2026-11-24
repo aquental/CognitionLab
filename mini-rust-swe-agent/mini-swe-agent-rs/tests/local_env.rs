@@ -1,7 +1,6 @@
 //! LocalEnvironment (plan §3.7, phase P3): the port of `tests/environments/test_local.py` plus the
 //! process, submission and shell-state cases the plan adds (§3.15 item 1, traps 4-8, 24, 30).
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
@@ -9,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use mini_swe_agent_rs::environment::Environment;
 use mini_swe_agent_rs::environment::local::{
-    LocalEnvironment, LocalEnvironmentConfig, check_finished,
+    EnvVars, LocalEnvironment, LocalEnvironmentConfig, check_finished,
 };
 use mini_swe_agent_rs::error::{InterruptKind, StepError};
 use mini_swe_agent_rs::host_env::HostEnv;
@@ -51,7 +50,7 @@ fn timeout_secs(seconds: u64) -> LocalEnvironmentConfig {
 }
 
 fn with_env(pairs: &[(&str, &str)]) -> LocalEnvironmentConfig {
-    let env: BTreeMap<String, String> = pairs
+    let env: EnvVars = pairs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();

@@ -42,6 +42,83 @@ const SHELL: &str = "/bin/bash";
 /// How long to keep reading after a kill (a grandchild may hold the pipe; plan §2.2).
 const GRACE: Duration = Duration::from_secs(1);
 
+/// `dict[str, str]` of variables, in insertion order (pydantic dumps keys in YAML order). A
+/// repeated name replaces the value and keeps its first position, as a `dict` does.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EnvVars(Vec<(String, String)>);
+
+impl EnvVars {
+    /// Sets `name`, keeping the position of an existing entry.
+    pub fn insert(&mut self, name: String, value: String) {
+        match self.0.iter_mut().find(|(n, _)| *n == name) {
+            Some(entry) => entry.1 = value,
+            None => self.0.push((name, value)),
+        }
+    }
+
+    /// The value of `name`.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// True when there are no variables.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The variables in order.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.0.iter().map(|(n, v)| (n, v))
+    }
+}
+
+impl FromIterator<(String, String)> for EnvVars {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+        let mut vars = Self::default();
+        for (name, value) in iter {
+            vars.insert(name, value);
+        }
+        vars
+    }
+}
+
+impl Serialize for EnvVars {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, value) in &self.0 {
+            map.serialize_entry(name, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvVars {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = EnvVars;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a mapping of strings to strings")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<EnvVars, A::Error> {
+                let mut vars = EnvVars::default();
+                while let Some((name, value)) = map.next_entry::<String, String>()? {
+                    vars.insert(name, value);
+                }
+                Ok(vars)
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
 /// Config of the local environment (`LocalEnvironmentConfig`, `local.py:13-16`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,7 +126,7 @@ pub struct LocalEnvironmentConfig {
     /// Working directory; `""` means the process's current directory.
     pub cwd: String,
     /// Variables added to (and overriding) the host environment.
-    pub env: BTreeMap<String, String>,
+    pub env: EnvVars,
     /// Command timeout in seconds.
     pub timeout: u64,
 }
@@ -58,7 +135,7 @@ impl Default for LocalEnvironmentConfig {
     fn default() -> Self {
         Self {
             cwd: String::new(),
-            env: BTreeMap::new(),
+            env: EnvVars::default(),
             timeout: 30,
         }
     }
@@ -112,7 +189,7 @@ impl LocalEnvironment {
             .filter(|(name, _)| *name != "BASH_ENV")
             .map(|(name, value)| (name.to_os_string(), value.to_os_string()))
             .collect();
-        for (name, value) in &self.config.env {
+        for (name, value) in self.config.env.iter() {
             vars.insert(OsString::from(name), OsString::from(value));
         }
         vars.into_iter().collect()

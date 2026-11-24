@@ -111,7 +111,8 @@ cargo run --locked -- --model-class deterministic -m deterministic -c mini_textb
 
 Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a fatal or
 config error (the trajectory is saved first when the run had started), 2 for usage errors and for the
-interactive-only flags `-y/--yolo` and `--exit-immediately` (D7).
+interactive-only flags `-y/--yolo` and `--exit-immediately` (D7). `--help` and `--version` exit 0. "Saved trajectory"
+is printed only after a successful run, as Python prints it after `run` returns.
 
 **Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
 shipped YAML files (`parity/config_dumps.py`).
@@ -193,4 +194,11 @@ shipped YAML files (`parity/config_dumps.py`).
   `default` (Python's CLI default is the interactive agent); `--environment-class` accepts only `local`; with no
   `-t` and no `run.task`, the task is read from stdin to EOF instead of a prompt; the setup wizard never runs; a
   `key=value` value that is not JSON for `serde_json` (`NaN`, `Infinity`) stays a string. Messages go to stderr.
+  A present `run.task` must be a string (`""` included): Python renders any value, this port refuses other types
+  instead of reading stdin. A `key=value` path deeper than 128 segments is refused (the merge recurses through
+  it). `-l` must be finite. The banner is decided before `.env` is read, as in Python (the plan listed it last).
+  Sections and classes follow the Python factories: `agent`/`environment` must be mappings and a present class
+  must be a non-empty string; a `null` `model` section is `{}` and a falsy `model_class` is the default; a truthy
+  non-string `model_name` is an error, a falsy one falls back to `MSWEA_MODEL_NAME`. The file lookup drops `.`
+  components as `pathlib` does and keeps `..`. `-o ""` is "not given". `environment.env` keeps its key order.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

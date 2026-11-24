@@ -121,6 +121,8 @@ pub struct Case {
     pub name: &'static str,
     pub commands: &'static [&'static str],
     pub extra: &'static [&'static str],
+    /// The task comes from `run.task` in `extra`, so no `-t` is passed.
+    pub task_in_config: bool,
     pub exit_code: i32,
     pub exit_status: &'static str,
 }
@@ -130,6 +132,7 @@ pub const CASES: &[Case] = &[
         name: "submit",
         commands: &["echo hello > hello.txt && cat hello.txt", SUBMIT],
         extra: &[],
+        task_in_config: false,
         exit_code: 0,
         exit_status: "Submitted",
     },
@@ -137,6 +140,7 @@ pub const CASES: &[Case] = &[
         name: "cost_limit_flag",
         commands: &["echo 1", "echo 2", "echo 3"],
         extra: &["-l", "2"],
+        task_in_config: false,
         exit_code: 0,
         exit_status: "LimitsExceeded",
     },
@@ -144,6 +148,7 @@ pub const CASES: &[Case] = &[
         name: "task_from_config",
         commands: &["pwd", SUBMIT],
         extra: &["-c", "run.task=Read the task from the config"],
+        task_in_config: true,
         exit_code: 0,
         exit_status: "Submitted",
     },
@@ -151,6 +156,7 @@ pub const CASES: &[Case] = &[
         name: "outputs_exhausted",
         commands: &["echo only"],
         extra: &[],
+        task_in_config: false,
         exit_code: 1,
         exit_status: "OutputsExhausted",
     },
@@ -162,16 +168,24 @@ pub fn compare_case(mini: &Path, case: &Case) -> Result<(), String> {
     let sandbox = Sandbox::new();
     let mut args = vec!["--agent-class".to_owned(), "default".to_owned()];
     args.extend(base_args(&sandbox, case.commands, "traj.json"));
-    if !case
-        .extra
-        .contains(&"run.task=Read the task from the config")
-    {
+    if !case.task_in_config {
         args.extend(["-t".into(), format!("CLI parity case {}", case.name)]);
     }
     args.extend(case.extra.iter().map(|a| (*a).to_owned()));
 
+    let saved = |side: &str, output: &Output| {
+        if sandbox.root.join("out/traj.json").is_file() {
+            Ok(sandbox.trajectory("traj.json"))
+        } else {
+            Err(format!(
+                "{side} wrote no trajectory (exit {:?}): {}",
+                output.status.code(),
+                stderr(output)
+            ))
+        }
+    };
     let python = sandbox.run(mini, &args, None);
-    let python_trajectory = sandbox.trajectory("traj.json");
+    let python_trajectory = saved("python", &python)?;
     let python_files = super::snapshot_dir(&sandbox.root.join("work"));
     fs::remove_dir_all(sandbox.root.join("work")).unwrap();
     fs::remove_file(sandbox.root.join("out/traj.json")).unwrap();
@@ -179,7 +193,7 @@ pub fn compare_case(mini: &Path, case: &Case) -> Result<(), String> {
 
     let rust_args: Vec<String> = args.iter().skip(2).cloned().collect();
     let rust = sandbox.run(Path::new(BIN), &rust_args, None);
-    let rust_trajectory = sandbox.trajectory("traj.json");
+    let rust_trajectory = saved("rust", &rust)?;
     let rust_files = super::snapshot_dir(&sandbox.root.join("work"));
 
     let mut problems = Vec::new();

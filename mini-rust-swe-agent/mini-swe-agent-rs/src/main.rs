@@ -1,17 +1,21 @@
 //! `mini-swe-agent-rs`: the command-line entry point (port of `run/mini.py`, plan §3.12).
 //!
 //! It does what Python does at import time, explicitly and in this order: snapshot the process
-//! environment, resolve and create the global config dir, overlay its `.env` without overriding
-//! existing variables, and print the banner unless `MSWEA_SILENT_STARTUP` is set. Exit codes:
+//! environment, resolve and create the global config dir, print the banner unless
+//! `MSWEA_SILENT_STARTUP` is set, and overlay the dir's `.env` without overriding existing
+//! variables (Python's order; the plan listed the banner last). Exit codes:
 //! 0 when the run ends with an exit message (any status), 1 for a fatal or config error (after
 //! the trajectory was saved, when there is one), 2 for usage errors.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use clap::Parser;
+use clap::builder::TypedValueParser as _;
 use mini_swe_agent_rs::agent::{Agent, DefaultAgent};
 use mini_swe_agent_rs::clock::{Clock, SystemClock};
 use mini_swe_agent_rs::config::{self, ModelChoice, Overrides};
@@ -44,17 +48,27 @@ struct Cli {
     #[arg(short = 'y', long = "yolo", hide = true)]
     yolo: bool,
     /// Cost limit. Set to 0 to disable.
-    #[arg(short = 'l', long = "cost-limit")]
+    #[arg(short = 'l', long = "cost-limit", value_parser = finite_f64)]
     cost_limit: Option<f64>,
     /// Config files, file names or key=value pairs; repeatable. Replaces the default config.
     #[arg(short = 'c', long = "config")]
     config: Vec<String>,
     /// Output trajectory file (default: <global config dir>/last_mini_run.traj.json).
-    #[arg(short = 'o', long = "output")]
+    /// An empty value means "not given", as Python's `output or UNSET`.
+    #[arg(short = 'o', long = "output", value_parser = clap::builder::OsStringValueParser::new().map(PathBuf::from))]
     output: Option<PathBuf>,
     /// Interactive exit prompts are not ported (D7).
     #[arg(long = "exit-immediately", hide = true)]
     exit_immediately: bool,
+}
+
+/// A cost limit must be a finite number (`nan` and `inf` would become JSON `null`).
+fn finite_f64(text: &str) -> Result<f64, String> {
+    match text.trim().parse::<f64>() {
+        Ok(value) if value.is_finite() => Ok(value),
+        Ok(_) => Err("must be a finite number".to_owned()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn say(text: &str) {
@@ -78,8 +92,9 @@ fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
+            // `--help` and `--version` arrive here too, with exit code 0.
             let _ = error.print();
-            return ExitCode::from(2);
+            return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2));
         }
     };
     if cli.yolo || cli.exit_immediately {
@@ -90,25 +105,20 @@ fn main() -> ExitCode {
     }
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            say(&format!("error: {message}"));
+        Err(error) => {
+            say(&format!("error: {error:#}"));
             ExitCode::from(1)
         }
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+fn run(cli: Cli) -> anyhow::Result<()> {
     let mut host = HostEnv::from_vars(std::env::vars_os());
     let config_dir = global_config_dir(&host);
-    std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}: {e}", config_dir.display()))?;
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("creating {}", config_dir.display()))?;
     let env_file = config_dir.join(".env");
-    if env_file.is_file() {
-        let pairs = dotenvy::from_path_iter(&env_file)
-            .map_err(|e| format!("{}: {e}", env_file.display()))?
-            .collect::<Result<Vec<(String, String)>, _>>()
-            .map_err(|e| format!("{}: {e}", env_file.display()))?;
-        host.overlay_missing(pairs);
-    }
+    // Python prints the banner before `load_dotenv`, so `.env` cannot silence it.
     if host.get("MSWEA_SILENT_STARTUP").is_none_or(str::is_empty) {
         say(&format!(
             "This is mini-swe-agent-rs version {}.\nLoading global config from '{}'",
@@ -116,8 +126,16 @@ fn run(cli: Cli) -> Result<(), String> {
             env_file.display()
         ));
     }
+    if env_file.is_file() {
+        // `load_dotenv` reads the whole file first (the last assignment of a name wins), then
+        // skips the names the process already has.
+        let pairs: BTreeMap<String, String> = dotenvy::from_path_iter(&env_file)
+            .and_then(|iter| iter.collect())
+            .with_context(|| format!("reading {}", env_file.display()))?;
+        host.overlay_missing(pairs);
+    }
     let host = Arc::new(host);
-    let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+    let cwd = std::env::current_dir().context("current directory")?;
 
     let overrides = Overrides {
         task: cli.task,
@@ -132,20 +150,14 @@ fn run(cli: Cli) -> Result<(), String> {
         environment_class: cli.environment_class,
     };
     let specs = (!cli.config.is_empty()).then_some(cli.config.as_slice());
-    let merged =
-        config::merged_config(specs, &overrides, &host, &cwd).map_err(|e| e.to_string())?;
-    let section = |name: &str| {
-        merged
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}))
-    };
-
-    let agent_config = config::agent_config(&section("agent")).map_err(|e| e.to_string())?;
-    let env_config =
-        config::environment_config(&section("environment")).map_err(|e| e.to_string())?;
-    let model_choice = config::model_choice(&section("model"), &host).map_err(|e| e.to_string())?;
-    let task = match config::task(&merged) {
+    let mut merged = config::merged_config(specs, &overrides, &host, &cwd)?;
+    let task = config::task(&merged)?;
+    // Each section is taken once; an absent one is `{}` (`config.get(name, {})`).
+    let mut section = |name: &str| merged.remove(name).unwrap_or_else(|| serde_json::json!({}));
+    let model_choice = config::model_choice(&section("model"), &host)?;
+    let env_config = config::environment_config(&section("environment"))?;
+    let agent_config = config::agent_config(&section("agent"))?;
+    let task = match task {
         Some(task) => task,
         None => {
             // Python prompts for a multi-line task; this port reads stdin to EOF (plan §2.4).
@@ -153,12 +165,12 @@ fn run(cli: Cli) -> Result<(), String> {
             let mut task = String::new();
             std::io::stdin()
                 .read_to_string(&mut task)
-                .map_err(|e| format!("stdin: {e}"))?;
+                .context("reading the task from stdin")?;
             task
         }
     };
 
-    let stats = Arc::new(GlobalModelStats::from_host_env(&host).map_err(|e| e.to_string())?);
+    let stats = Arc::new(GlobalModelStats::from_host_env(&host)?);
     if (stats.cost_limit() > 0.0 || stats.call_limit() > 0)
         && host.get("MSWEA_SILENT_STARTUP").is_none_or(str::is_empty)
     {
@@ -173,17 +185,15 @@ fn run(cli: Cli) -> Result<(), String> {
     let output_path = agent_config.output_path.clone();
     let result = match model_choice {
         ModelChoice::Deterministic(model_config) => {
-            let model = DeterministicModel::new(model_config, stats, clock.clone())
-                .map_err(|e| e.to_string())?;
-            let mut agent =
-                DefaultAgent::new(agent_config, model, env, clock).map_err(|e| e.to_string())?;
-            agent.run(&task, Map::new())
+            let model = DeterministicModel::new(model_config, stats, clock.clone())?;
+            let mut agent = DefaultAgent::new(agent_config, model, env, clock)?;
+            agent.run(&task, Map::new())?
         }
     };
+    // Python prints this only after `run` returned.
     if let Some(path) = output_path {
         say(&format!("Saved trajectory to '{}'", path.display()));
     }
-    result
-        .map(|info| say(&format!("Exit status: {}", info.exit_status)))
-        .map_err(|e| e.to_string())
+    say(&format!("Exit status: {}", result.exit_status));
+    Ok(())
 }

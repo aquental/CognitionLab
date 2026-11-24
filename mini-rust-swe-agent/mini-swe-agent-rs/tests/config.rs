@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mini_swe_agent_rs::config::{
-    self, ConfigError, ConfigSource, ModelChoice, Overrides, TextbasedModelConfig,
+    self, ConfigError, ConfigSource, CostTracking, ModelChoice, Overrides, TextbasedModelConfig,
 };
 use mini_swe_agent_rs::host_env::HostEnv;
 use serde_json::{Value, json};
@@ -261,10 +261,10 @@ fn mini_config_path_overrides_the_default() {
 fn task_comes_from_the_merged_config() {
     let merged = json!({"run": {"task": "x"}});
     assert_eq!(
-        config::task(merged.as_object().unwrap()),
+        config::task(merged.as_object().unwrap()).unwrap(),
         Some("x".to_owned())
     );
-    assert_eq!(config::task(json!({}).as_object().unwrap()), None);
+    assert_eq!(config::task(json!({}).as_object().unwrap()).unwrap(), None);
 }
 
 // ---- Class registries --------------------------------------------------------------------------
@@ -369,24 +369,26 @@ fn typed_dumps_match_pydantic() {
         let raw =
             mini_swe_agent_rs::yaml::load_str(&config::read_source(&source).unwrap()).unwrap();
         let expected = golden(name);
+        // JSON text, so key order counts too (`Value`'s `==` ignores it).
+        let text = |value: &Value| serde_json::to_string(value).unwrap();
         let agent = config::agent_config(&raw["agent"]).unwrap();
         assert_eq!(
-            serde_json::to_value(agent).unwrap(),
-            expected["agent"],
+            text(&serde_json::to_value(agent).unwrap()),
+            text(&expected["agent"]),
             "{name} agent"
         );
         let env = config::environment_config(&raw["environment"]).unwrap();
         assert_eq!(
-            serde_json::to_value(env).unwrap(),
-            expected["environment"],
+            text(&serde_json::to_value(env).unwrap()),
+            text(&expected["environment"]),
             "{name} environment"
         );
         let mut model = raw["model"].clone();
         model["model_name"] = json!("test-model");
         let model = TextbasedModelConfig::from_section(&model, &host(&[])).unwrap();
         assert_eq!(
-            serde_json::to_value(model).unwrap(),
-            expected["model"],
+            text(&serde_json::to_value(model).unwrap()),
+            text(&expected["model"]),
             "{name} model"
         );
     }
@@ -400,17 +402,167 @@ fn textbased_env_backed_defaults() {
     ]);
     let model = TextbasedModelConfig::from_section(&json!({"model_name": "m"}), &env).unwrap();
     assert_eq!(model.litellm_model_registry.as_deref(), Some("/r.json"));
-    assert_eq!(model.cost_tracking, "ignore_errors");
+    assert_eq!(model.cost_tracking, CostTracking::IgnoreErrors);
     let explicit =
         json!({"model_name": "m", "cost_tracking": "default", "litellm_model_registry": null});
     let model = TextbasedModelConfig::from_section(&explicit, &env).unwrap();
     assert_eq!(
-        model.cost_tracking, "default",
+        model.cost_tracking,
+        CostTracking::Default,
         "a value in the config wins over the environment"
     );
     assert_eq!(model.litellm_model_registry, None);
     assert!(
         TextbasedModelConfig::from_section(&json!({}), &host(&[])).is_err(),
         "model_name is required"
+    );
+}
+
+// ---- Review fixes (P7) -------------------------------------------------------------------------
+
+#[test]
+fn sections_and_class_selectors_follow_the_python_factories() {
+    // `get_environment`/`get_agent` pop the class with a default: a present null, "" or
+    // non-string fails; a non-object section fails.
+    for section in [
+        json!(null),
+        json!([]),
+        json!({"environment_class": false}),
+        json!({"environment_class": ""}),
+        json!({"environment_class": null}),
+    ] {
+        assert!(config::environment_config(&section).is_err(), "{section}");
+    }
+    for section in [
+        json!(null),
+        json!("x"),
+        json!({"agent_class": 3}),
+        json!({"agent_class": null}),
+    ] {
+        assert!(config::agent_config(&section).is_err(), "{section}");
+    }
+    let env = host(&[("MSWEA_MODEL_NAME", "from-env")]);
+    // `get_model(config=None)` treats a null section as `{}`; a falsy class is the default.
+    for section in [
+        json!(null),
+        json!({"model_class": ""}),
+        json!({"model_class": false}),
+        json!({"model_class": null}),
+    ] {
+        assert!(
+            matches!(
+                config::model_choice(&section, &env),
+                Err(ConfigError::NotYetAvailable(_))
+            ),
+            "{section}"
+        );
+    }
+    assert!(matches!(
+        config::model_choice(&json!({"model_class": 3}), &env),
+        Err(ConfigError::UnknownClass { .. })
+    ));
+    assert!(config::model_choice(&json!([]), &env).is_err());
+    assert!(matches!(
+        config::model_choice(&json!({"model_class": "openai_textbased"}), &env),
+        Err(ConfigError::NotYetAvailable(_))
+    ));
+    // A truthy configured name wins over the environment; a non-string one is an error.
+    assert!(
+        config::model_choice(
+            &json!({"model_class": "deterministic", "model_name": 3}),
+            &env
+        )
+        .is_err()
+    );
+    let Ok(ModelChoice::Deterministic(model)) = config::model_choice(
+        &json!({"model_class": "deterministic", "model_name": "", "outputs": []}),
+        &env,
+    ) else {
+        panic!("an empty name falls back to MSWEA_MODEL_NAME")
+    };
+    assert_eq!(model.model_name, "from-env");
+}
+
+#[test]
+fn run_task_present_absent_and_invalid() {
+    let map = |value: Value| value.as_object().unwrap().clone();
+    assert_eq!(
+        config::task(&map(json!({"run": {"task": "x"}})))
+            .unwrap()
+            .as_deref(),
+        Some("x")
+    );
+    assert_eq!(
+        config::task(&map(json!({"run": {"task": ""}})))
+            .unwrap()
+            .as_deref(),
+        Some("")
+    );
+    assert_eq!(config::task(&map(json!({}))).unwrap(), None);
+    assert_eq!(config::task(&map(json!({"run": {}}))).unwrap(), None);
+    for config in [
+        json!({"run": {"task": null}}),
+        json!({"run": {"task": 0}}),
+        json!({"run": null}),
+    ] {
+        assert!(config::task(&map(config.clone())).is_err(), "{config}");
+    }
+}
+
+#[test]
+fn deep_key_value_specs_are_refused() {
+    let spec = |depth: usize| format!("{}=1", vec!["a"; depth].join("."));
+    assert!(config::key_value_spec(&spec(64)).is_ok());
+    assert!(matches!(
+        config::key_value_spec(&spec(100_000)),
+        Err(ConfigError::TooDeep { .. })
+    ));
+}
+
+#[test]
+fn lookup_normalizes_the_spec_like_path() {
+    let cwd = tempfile::tempdir().unwrap();
+    let none = host(&[]);
+    for spec in ["./default", "./default.yaml", "default/"] {
+        assert_eq!(
+            config::config_path(spec, &none, cwd.path()).unwrap(),
+            ConfigSource::Builtin("default.yaml".to_owned()),
+            "{spec}"
+        );
+    }
+    assert!(config::config_path("extra/default", &none, cwd.path()).is_err());
+    // `pathlib` keeps `..`; the built-in dir has no `foo/`, so Python's `exists()` is false too.
+    assert!(config::config_path("foo/../default", &none, cwd.path()).is_err());
+    assert!(
+        config::config_path("", &none, cwd.path()).is_err(),
+        "Path('').with_suffix fails"
+    );
+    let empty_override = host(&[("MSWEA_MINI_CONFIG_PATH", "")]);
+    assert!(
+        config::merged_config(None, &Overrides::default(), &empty_override, cwd.path()).is_err()
+    );
+    let dotted = host(&[("MSWEA_MINI_CONFIG_PATH", "./default")]);
+    assert!(config::merged_config(None, &Overrides::default(), &dotted, cwd.path()).is_ok());
+}
+
+#[test]
+fn textbased_literals_are_checked() {
+    let model = |extra: Value, env: &HostEnv| {
+        let mut section = json!({"model_name": "m"});
+        for (k, v) in extra.as_object().unwrap() {
+            section[k] = v.clone();
+        }
+        TextbasedModelConfig::from_section(&section, env)
+    };
+    let none = host(&[]);
+    assert!(model(json!({"cost_tracking": "typo"}), &none).is_err());
+    assert!(model(json!({"set_cache_control": "x"}), &none).is_err());
+    assert!(model(json!({}), &host(&[("MSWEA_COST_TRACKING", "")])).is_err());
+    assert!(
+        model(
+            json!({"cost_tracking": "ignore_errors", "set_cache_control": "default_end"}),
+            &none
+        )
+        .is_ok()
     );
 }

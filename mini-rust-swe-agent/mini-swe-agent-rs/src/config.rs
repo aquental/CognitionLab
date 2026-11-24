@@ -31,6 +31,10 @@ pub const BUILTIN_CONFIGS: &[(&str, &str)] = &[
     ),
 ];
 
+/// The deepest `key.path=value` spec accepted: each segment is one level of nesting, and the
+/// merge recurses through them.
+pub const MAX_KEY_DEPTH: usize = 128;
+
 /// The default config when no `-c` is given (Python's is the tool-calling `mini.yaml`; plan §2.4).
 pub const DEFAULT_CONFIG: &str = "mini_textbased.yaml";
 
@@ -102,6 +106,27 @@ pub enum ConfigError {
         /// What this build accepts.
         available: &'static str,
     },
+    /// A `key=value` spec nests deeper than [`MAX_KEY_DEPTH`].
+    #[error("config key {key:?}… has {depth} segments; at most {MAX_KEY_DEPTH} are supported")]
+    TooDeep {
+        /// The first segments of the key.
+        key: String,
+        /// The number of segments.
+        depth: usize,
+    },
+    /// A file spec with no file name (`Path("").with_suffix(".yaml")` raises in Python).
+    #[error("Invalid config spec {0:?}: it names no file")]
+    EmptySpec(String),
+    /// A config value has the wrong JSON type.
+    #[error("invalid `{key}`: expected {expected}, found {found}")]
+    InvalidValue {
+        /// The key path, such as `run.task`.
+        key: &'static str,
+        /// What is accepted.
+        expected: &'static str,
+        /// The value found.
+        found: String,
+    },
     /// A model class planned for a later phase.
     #[error(
         "model class `{0}` is available from phase P8 (the text-based model); use --model-class deterministic"
@@ -115,6 +140,12 @@ pub fn key_value_spec(spec: &str) -> Result<Value, ConfigError> {
     let value =
         serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_owned()));
     let keys: Vec<&str> = key.split('.').collect();
+    if keys.len() > MAX_KEY_DEPTH {
+        return Err(ConfigError::TooDeep {
+            key: keys.iter().take(3).copied().collect::<Vec<_>>().join("."),
+            depth: keys.len(),
+        });
+    }
     if keys.iter().any(|k| k.is_empty()) {
         return Err(ConfigError::EmptyKey {
             spec: spec.to_owned(),
@@ -127,21 +158,29 @@ pub fn key_value_spec(spec: &str) -> Result<Value, ConfigError> {
     }))
 }
 
-/// `Path.with_suffix(".yaml")` when the suffix is not already `.yaml`.
-fn with_yaml_suffix(spec: &str) -> PathBuf {
-    let path = PathBuf::from(spec);
-    if path.extension().is_some_and(|ext| ext == "yaml") {
+/// `Path(spec).with_suffix(".yaml")` when the suffix is not already `.yaml`. `Path` drops `.`
+/// components and repeated or trailing slashes; `..` stays, as in `pathlib`. A spec with no file
+/// name (`""`, `.`, `..`) is an error, as `with_suffix` raises.
+fn with_yaml_suffix(spec: &str) -> Result<PathBuf, ConfigError> {
+    let path: PathBuf = Path::new(spec)
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+    if path.file_name().is_none() {
+        return Err(ConfigError::EmptySpec(spec.to_owned()));
+    }
+    Ok(if path.extension().is_some_and(|ext| ext == "yaml") {
         path
     } else {
         path.with_extension("yaml")
-    }
+    })
 }
 
 /// `get_config_path` (`config/__init__.py:12-28`): the path as given (relative to `cwd`), then
 /// `$MSWEA_CONFIG_DIR` (default `.`), then the built-ins. The `extra/` and `benchmarks/`
 /// candidates keep their place in the order but have no embedded content in v1.
 pub fn config_path(spec: &str, host: &HostEnv, cwd: &Path) -> Result<ConfigSource, ConfigError> {
-    let spec = with_yaml_suffix(spec);
+    let spec = with_yaml_suffix(spec)?;
     let config_dir = PathBuf::from(host.get("MSWEA_CONFIG_DIR").unwrap_or("."));
     let on_disk = [spec.clone(), config_dir.join(&spec)];
     let mut tried = Vec::new();
@@ -247,7 +286,8 @@ impl Overrides {
         if let Some(limit) = self.cost_limit {
             put(&mut layer, "agent", "cost_limit", Value::from(limit));
         }
-        if let Some(output) = &self.output {
+        // `output or UNSET`: an empty path is not given.
+        if let Some(output) = self.output.as_ref().filter(|p| !p.as_os_str().is_empty()) {
             put(
                 &mut layer,
                 "agent",
@@ -297,23 +337,75 @@ pub fn merged_config(
     Ok(recursive_merge(&layers)?)
 }
 
-/// `run.task` of the merged config, if any.
-pub fn task(config: &Map<String, Value>) -> Option<String> {
-    config
-        .get("run")
-        .and_then(|run| run.get("task"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+/// `run.task` of the merged config: `None` when the key is absent (the CLI then reads stdin).
+/// Python renders any present value; this port accepts a string (`""` included) and refuses
+/// other types instead of prompting (plan §2.4).
+pub fn task(config: &Map<String, Value>) -> Result<Option<String>, ConfigError> {
+    let run = match config.get("run") {
+        None => return Ok(None),
+        Some(Value::Object(run)) => run,
+        Some(other) => return Err(invalid("run", "a mapping", other)),
+    };
+    match run.get("task") {
+        None => Ok(None),
+        Some(Value::String(task)) => Ok(Some(task.clone())),
+        Some(other) => Err(invalid("run.task", "a string", other)),
+    }
 }
 
-/// A section as a mutable object with its class key removed.
-fn take_class(section: &Value, key: &str) -> (Map<String, Value>, Option<String>) {
-    let mut map = section.as_object().cloned().unwrap_or_default();
-    let class = map
-        .remove(key)
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .filter(|v| !v.is_empty());
-    (map, class)
+fn invalid(key: &'static str, expected: &'static str, found: &Value) -> ConfigError {
+    let mut found = found.to_string();
+    found.truncate(80);
+    ConfigError::InvalidValue {
+        key,
+        expected,
+        found,
+    }
+}
+
+/// Python's truthiness for a JSON value.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+/// A section as an object with its class key removed (the factories `pop` it). The class is
+/// `None` when the key is absent; a present value is returned as is for the caller's rule.
+fn take_class(
+    section: &Value,
+    name: &'static str,
+    key: &str,
+) -> Result<(Map<String, Value>, Option<Value>), ConfigError> {
+    let Value::Object(map) = section else {
+        return Err(invalid(name, "a mapping", section));
+    };
+    let mut map = map.clone();
+    let class = map.remove(key);
+    Ok((map, class))
+}
+
+/// `config.pop(key, default)` then a registry lookup: absent means the default; a present value
+/// must be a non-empty string (Python fails on `None`, `""` and non-strings).
+fn named_class(
+    class: Option<Value>,
+    kind: &'static str,
+    available: &'static str,
+) -> Result<Option<String>, ConfigError> {
+    match class {
+        None => Ok(None),
+        Some(Value::String(name)) if !name.is_empty() => Ok(Some(name)),
+        Some(other) => Err(ConfigError::UnknownClass {
+            kind,
+            name: other.to_string(),
+            available,
+        }),
+    }
 }
 
 fn typed<T: serde::de::DeserializeOwned>(
@@ -327,8 +419,8 @@ fn typed<T: serde::de::DeserializeOwned>(
 /// `get_agent` (`agents/__init__.py:26-29`): only `default` exists in this port. Python's CLI
 /// default is `interactive` (out of scope, D7), so an absent class means `default`.
 pub fn agent_config(section: &Value) -> Result<AgentConfig, ConfigError> {
-    let (map, class) = take_class(section, "agent_class");
-    match class.as_deref() {
+    let (map, class) = take_class(section, "agent", "agent_class")?;
+    match named_class(class, "agent", "default")?.as_deref() {
         None | Some("default" | "minisweagent.agents.default.DefaultAgent") => typed("agent", map),
         Some(other) => Err(ConfigError::UnknownClass {
             kind: "agent",
@@ -340,8 +432,8 @@ pub fn agent_config(section: &Value) -> Result<AgentConfig, ConfigError> {
 
 /// `get_environment` (`environments/__init__.py:31-34`): only `local` exists in this port.
 pub fn environment_config(section: &Value) -> Result<LocalEnvironmentConfig, ConfigError> {
-    let (map, class) = take_class(section, "environment_class");
-    match class.as_deref() {
+    let (map, class) = take_class(section, "environment", "environment_class")?;
+    match named_class(class, "environment", "local")?.as_deref() {
         None | Some("local" | "minisweagent.environments.local.LocalEnvironment") => {
             typed("environment", map)
         }
@@ -360,21 +452,39 @@ pub enum ModelChoice {
     Deterministic(DeterministicModelConfig),
 }
 
-/// `get_model` (`models/__init__.py:43-60`): the model name is resolved from the section, then
-/// `MSWEA_MODEL_NAME`; the class key is removed. The text-based model arrives in P8.
+const MODEL_CLASSES: &str =
+    "deterministic; from P8: textbased (aliases litellm_textbased, openai_textbased)";
+
+/// `get_model` (`models/__init__.py:43-60`): a `null` section is `{}`; the model name is a
+/// truthy configured value, else `MSWEA_MODEL_NAME`; a falsy class means the default (the
+/// text-based model, P8), a truthy non-string class is unknown.
 pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, ConfigError> {
-    let (mut map, class) = take_class(section, "model_class");
-    let name = map
-        .get("model_name")
-        .and_then(Value::as_str)
-        .filter(|n| !n.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            host.get("MSWEA_MODEL_NAME")
-                .filter(|n| !n.is_empty())
-                .map(str::to_owned)
-        })
-        .ok_or(ConfigError::NoModelName)?;
+    let empty = Value::Object(Map::new());
+    let section = if section.is_null() { &empty } else { section };
+    let (mut map, class) = take_class(section, "model", "model_class")?;
+    let class = match class {
+        Some(value) if !truthy(&value) => None,
+        Some(Value::String(name)) => Some(name),
+        Some(other) => {
+            return Err(ConfigError::UnknownClass {
+                kind: "model",
+                name: other.to_string(),
+                available: MODEL_CLASSES,
+            });
+        }
+        None => None,
+    };
+    let name = match map.get("model_name") {
+        Some(Value::String(name)) if !name.is_empty() => name.clone(),
+        Some(value) if truthy(value) => {
+            return Err(invalid("model.model_name", "a string", value));
+        }
+        _ => host
+            .get("MSWEA_MODEL_NAME")
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .ok_or(ConfigError::NoModelName)?,
+    };
     map.insert("model_name".to_owned(), Value::String(name));
     match class.as_deref() {
         Some("deterministic" | "minisweagent.models.test_models.DeterministicModel") => {
@@ -384,6 +494,7 @@ pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, Conf
         | Some(
             "textbased"
             | "litellm_textbased"
+            | "openai_textbased"
             | "minisweagent.models.litellm_textbased_model.LitellmTextbasedModel",
         ) => Err(ConfigError::NotYetAvailable(
             class.unwrap_or_else(|| "textbased".to_owned()),
@@ -391,7 +502,7 @@ pub fn model_choice(section: &Value, host: &HostEnv) -> Result<ModelChoice, Conf
         Some(other) => Err(ConfigError::UnknownClass {
             kind: "model",
             name: other.to_owned(),
-            available: "deterministic (textbased from P8)",
+            available: MODEL_CLASSES,
         }),
     }
 }
@@ -400,8 +511,23 @@ fn default_model_kwargs() -> Map<String, Value> {
     Map::new()
 }
 
-fn default_cost_tracking() -> String {
-    "default".to_owned()
+/// `cost_tracking`: `Literal["default", "ignore_errors"]`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostTracking {
+    /// Missing costs are errors.
+    #[default]
+    Default,
+    /// Missing costs are ignored.
+    IgnoreErrors,
+}
+
+/// `set_cache_control`: `Literal["default_end"] | None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheControl {
+    /// Cache control on the last message.
+    DefaultEnd,
 }
 
 fn default_format_error_template() -> String {
@@ -431,10 +557,10 @@ pub struct TextbasedModelConfig {
     pub litellm_model_registry: Option<String>,
     /// Cache-control mode (kept, ignored on the text path).
     #[serde(default)]
-    pub set_cache_control: Option<String>,
+    pub set_cache_control: Option<CacheControl>,
     /// `default` or `ignore_errors`; defaults to `$MSWEA_COST_TRACKING`, else `default`.
-    #[serde(default = "default_cost_tracking")]
-    pub cost_tracking: String,
+    #[serde(default)]
+    pub cost_tracking: CostTracking,
     /// Template for a reply without exactly one action.
     #[serde(default = "default_format_error_template")]
     pub format_error_template: String,
@@ -453,7 +579,10 @@ impl TextbasedModelConfig {
     /// Deserializes the section. The two environment-backed defaults are read from `host` when
     /// the key is absent, as pydantic reads `os.getenv` for a missing field.
     pub fn from_section(section: &Value, host: &HostEnv) -> Result<Self, ConfigError> {
-        let mut map = section.as_object().cloned().unwrap_or_default();
+        let Value::Object(map) = section else {
+            return Err(invalid("model", "a mapping", section));
+        };
+        let mut map = map.clone();
         if !map.contains_key("litellm_model_registry")
             && let Some(path) = host.get("LITELLM_MODEL_REGISTRY_PATH")
         {
