@@ -1,0 +1,12 @@
+literal: |
+  line one
+    indented line
+  line three
+strip: |-
+  no trailing newline
+keep: |+
+  two trailing newlines
+
+folded: >
+  folded
+  text

@@ -1,0 +1,30 @@
+[package]
+name = "mini-swe-agent-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+license = "MIT"
+description = "Rust port of the mini-swe-agent harness (text-based actions, bash only)"
+
+[lib]
+name = "mini_swe_agent_rs"
+path = "src/lib.rs"
+
+[dependencies]
+# D5: YAML 1.2 loader. Deserialization only; options are set in src/yaml.rs.
+serde-saphyr = { version = "=2.2.0", default-features = false, features = ["deserialize"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+thiserror = "=2.0.21"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"

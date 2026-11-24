@@ -1,0 +1,14 @@
+# Floats with a trailing dot, as in the shipped configs (default.yaml:105).
+cost_limit: 3.
+zero: 0.
+int: 30
+neg: -1
+float: 2.5
+quoted_off: 'off'
+quoted_yes: "yes"
+true_value: true
+false_value: false
+null_value: null
+tilde: ~
+empty_value:
+string: plain text
