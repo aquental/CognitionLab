@@ -25,11 +25,18 @@ use serde_json::Value;
 /// Scenario ids run by the features, for the manifest check.
 static EXECUTED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
+/// CLI gate cases run by `cli.feature`, for the same check.
+static EXECUTED_CLI: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
 #[derive(Debug, Default, World)]
 struct ParityWorld {
     scenario: Option<Value>,
     python: Option<Value>,
     rust: Option<Value>,
+    cli_case: Option<&'static support::cli::Case>,
+    cli_result: Option<Result<(), String>>,
+    sandbox: Option<support::cli::Sandbox>,
+    trajectory: Option<Value>,
 }
 
 impl ParityWorld {
@@ -123,6 +130,124 @@ fn results_equal(world: &mut ParityWorld) {
     }
 }
 
+// ---- cli.feature (P7) ----------------------------------------------------------------------
+
+#[given(expr = "the CLI case {string}")]
+fn given_cli_case(world: &mut ParityWorld, name: String) {
+    let case = support::cli::CASES
+        .iter()
+        .find(|c| c.name == name)
+        .expect("unknown CLI case");
+    world.cli_case = Some(case);
+    EXECUTED_CLI.lock().unwrap().insert(name);
+}
+
+#[when("I run the Python and Rust CLIs")]
+fn run_both_clis(world: &mut ParityWorld) {
+    let harness = support::Harness::new().expect("reference checked in main");
+    let mini = harness.python_bin_dir().join("mini");
+    world.cli_result = Some(support::cli::compare_case(
+        &mini,
+        world.cli_case.expect("no case"),
+    ));
+}
+
+#[then(expr = "both CLIs exit with code {int} and write equal trajectories")]
+fn clis_agree(world: &mut ParityWorld, code: i32) {
+    assert_eq!(world.cli_case.expect("no case").exit_code, code);
+    if let Some(Err(problem)) = &world.cli_result {
+        panic!("{problem}");
+    }
+}
+
+#[given("a Rust CLI sandbox")]
+fn given_sandbox(world: &mut ParityWorld) {
+    world.sandbox = Some(support::cli::Sandbox::new());
+}
+
+#[given(expr = "{string} in MSWEA_CONFIG_DIR sets the system template to {string}")]
+fn given_config_file(world: &mut ParityWorld, name: String, system: String) {
+    let sandbox = world.sandbox.get_or_insert_with(support::cli::Sandbox::new);
+    let dir = sandbox.root.join("configs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let text =
+        format!("agent:\n  system_template: {system}\n  instance_template: '{{{{task}}}}'\n");
+    std::fs::write(dir.join(name), text).unwrap();
+    sandbox
+        .env
+        .insert("MSWEA_CONFIG_DIR".into(), dir.to_str().unwrap().into());
+}
+
+fn run_rust_cli(world: &mut ParityWorld, config: &str, flag: &str, config_task: &str, stdin: &str) {
+    let sandbox = world.sandbox.as_ref().expect("no sandbox");
+    let mut args: Vec<String> = [
+        "--model-class",
+        "deterministic",
+        "-m",
+        "deterministic",
+        "-c",
+        config,
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    args.extend([
+        "-c".to_owned(),
+        support::cli::outputs(&[support::cli::SUBMIT]),
+        "-o".to_owned(),
+        sandbox.out("bdd.json"),
+    ]);
+    if !config_task.is_empty() {
+        args.extend(["-c".to_owned(), format!("run.task={config_task}")]);
+    }
+    if !flag.is_empty() {
+        args.extend(["-t".to_owned(), flag.to_owned()]);
+    }
+    let output = sandbox.run(std::path::Path::new(support::cli::BIN), &args, Some(stdin));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        support::cli::stderr(&output)
+    );
+    world.trajectory = Some(sandbox.trajectory("bdd.json"));
+}
+
+#[when(expr = "the Rust CLI runs with task flag {string}, config task {string} and stdin {string}")]
+fn run_with_task_sources(
+    world: &mut ParityWorld,
+    flag: String,
+    config_task: String,
+    stdin: String,
+) {
+    run_rust_cli(world, "mini_textbased", &flag, &config_task, &stdin);
+}
+
+#[when(expr = "the Rust CLI runs with config {string} and task {string}")]
+fn run_with_config(world: &mut ParityWorld, config: String, task: String) {
+    run_rust_cli(world, &config, &task, "", "");
+}
+
+fn message(world: &ParityWorld, index: usize) -> String {
+    let trajectory = world.trajectory.as_ref().expect("no CLI run");
+    trajectory["messages"][index]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[then(expr = "the task message contains {string}")]
+fn task_message(world: &mut ParityWorld, text: String) {
+    let content = message(world, 1);
+    assert!(content.contains(&text), "{content:?}");
+}
+
+#[then(expr = "the system message starts with {string}")]
+fn system_message(world: &mut ParityWorld, text: String) {
+    let content = message(world, 0);
+    assert!(content.starts_with(&text), "{content:?}");
+}
+
 fn main() {
     if support::reference_dir().is_none() {
         eprintln!("bdd: skipped on purpose (MSWEA_RS_NO_REFERENCE=1)");
@@ -145,6 +270,15 @@ fn main() {
         let missing: Vec<_> = manifest.difference(&executed).collect();
         let unknown: Vec<_> = executed.difference(&manifest).collect();
         eprintln!("bdd: scenario manifest mismatch; missing {missing:?}, unknown {unknown:?}");
+        failed = true;
+    }
+    let cli_manifest: BTreeSet<String> = support::cli::CASES
+        .iter()
+        .map(|c| c.name.to_owned())
+        .collect();
+    let cli_executed = EXECUTED_CLI.lock().unwrap().clone();
+    if cli_executed != cli_manifest {
+        eprintln!("bdd: CLI case mismatch; expected {cli_manifest:?}, ran {cli_executed:?}");
         failed = true;
     }
     if failed {

@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod clock;
+pub mod config;
 pub mod environment;
 pub mod error;
 pub mod host_env;
