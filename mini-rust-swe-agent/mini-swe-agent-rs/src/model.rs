@@ -1,7 +1,7 @@
 //! The `Model` protocol (`__init__.py:43-55`, plan §3.3).
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::error::{AgentError, StepError};
 use crate::message::{ExecOutput, Message, Role};
@@ -15,10 +15,7 @@ pub trait Model {
     fn config(&self) -> &Self::Config;
 
     /// The type name written as `info.config.model_type`.
-    fn type_name(&self) -> &'static str
-    where
-        Self: Sized,
-    {
+    fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
@@ -27,9 +24,19 @@ pub trait Model {
     fn query(&mut self, messages: &[Message]) -> Result<Message, StepError>;
 
     /// Builds a message; Python's `format_message(**kwargs)` returns its arguments unchanged
-    /// when multimodal content is off.
-    fn format_message(&self, role: Role, content: String) -> Message {
-        Message::new(role, content)
+    /// when multimodal content is off. `extra` is passed in (not set afterwards) so an
+    /// implementation sees the whole message, as `handle_uncaught_exception` passes it.
+    fn format_message(
+        &self,
+        role: Role,
+        content: String,
+        extra: Option<Map<String, Value>>,
+    ) -> Message {
+        let message = Message::new(role, content);
+        match extra {
+            Some(extra) => message.with_extra(extra),
+            None => message,
+        }
     }
 
     /// Observation messages for the outputs of `message`'s actions.
@@ -46,10 +53,7 @@ pub trait Model {
     }
 
     /// The model's part of the trajectory (`litellm_model.py:156-164`).
-    fn serialize(&self) -> Result<Value, AgentError>
-    where
-        Self: Sized,
-    {
+    fn serialize(&self) -> Result<Value, AgentError> {
         Ok(
             json!({"info": {"config": {"model": serde_json::to_value(self.config())?, "model_type": self.type_name()}}}),
         )

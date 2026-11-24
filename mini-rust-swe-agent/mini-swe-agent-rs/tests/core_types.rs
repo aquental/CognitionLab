@@ -1,13 +1,5 @@
 //! P1 core types: messages, actions, interrupts, clock, host environment, trait defaults.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::ffi::OsString;
 
 use mini_swe_agent_rs::clock::{Clock, ManualClock, SystemClock};
@@ -18,6 +10,8 @@ use mini_swe_agent_rs::message::{
 };
 use serde_json::{Value, json};
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn round_trip(value: Value) -> Value {
     let message: Message = serde_json::from_value(value).unwrap();
     serde_json::to_value(&message).unwrap()
@@ -71,16 +65,32 @@ fn provider_field_setter_rejects_reserved_keys() {
     );
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
+fn message_with_extra(extra: Value) -> Message {
+    serde_json::from_value(json!({"role": "assistant", "content": "", "extra": extra})).unwrap()
+}
+
 #[test]
-fn cost_defaults_to_zero() {
-    assert_eq!(Message::new(Role::Assistant, "x").cost(), 0.0);
-    let message: Message =
-        serde_json::from_value(json!({"role": "assistant", "content": "", "extra": {}})).unwrap();
-    assert_eq!(message.cost(), 0.0);
-    let message: Message =
-        serde_json::from_value(json!({"role": "assistant", "content": "", "extra": {"cost": 2.5}}))
-            .unwrap();
-    assert_eq!(message.cost(), 2.5);
+fn cost_defaults_to_zero_only_when_missing() {
+    // Python: `extra.get("cost", 0.0)`, then `+=`; a present non-number fails the addition.
+    assert_eq!(Message::new(Role::Assistant, "x").cost().unwrap(), 0.0);
+    assert_eq!(message_with_extra(json!({})).cost().unwrap(), 0.0);
+    assert_eq!(message_with_extra(json!({"cost": 0})).cost().unwrap(), 0.0);
+    assert_eq!(
+        message_with_extra(json!({"cost": 2.5})).cost().unwrap(),
+        2.5
+    );
+    assert!(message_with_extra(json!({"cost": null})).cost().is_err());
+    assert!(message_with_extra(json!({"cost": "1"})).cost().is_err());
+}
+
+#[test]
+fn null_extra_is_rejected_at_decoding() {
+    // Python would fail later on `None.get(...)`; Rust refuses the message at the boundary.
+    let result: Result<Message, _> =
+        serde_json::from_value(json!({"role": "assistant", "content": "", "extra": null}));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -126,6 +136,8 @@ fn exit_info_reads_missing_fields_as_empty() {
 
 // ---- Action decoding (key presence, plan §3.2) ----------------------------------------------
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn actions_of(extra: Value) -> Result<Vec<Action>, ActionError> {
     let message: Message =
         serde_json::from_value(json!({"role": "assistant", "content": "", "extra": extra}))
@@ -314,6 +326,25 @@ fn fatal_exit_status_names_are_stable() {
 // ---- Clock -----------------------------------------------------------------------------------
 
 #[test]
+fn manual_clock_advance_is_atomic() {
+    let clock = std::sync::Arc::new(ManualClock::new(0.0));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let clock = clock.clone();
+            std::thread::spawn(move || {
+                for _ in 0..1000 {
+                    clock.advance(1.0);
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(clock.now(), 8000.0);
+}
+
+#[test]
 fn manual_clock_is_settable() {
     let clock = ManualClock::new(100.0);
     assert_eq!(clock.now(), 100.0);
@@ -342,7 +373,10 @@ fn host_env_keeps_non_utf8_entries_for_children_only() {
     ]);
     assert_eq!(env.get("PATH"), Some("/bin"));
     assert_eq!(env.get("BAD"), None);
-    assert!(env.child_vars().any(|(k, v)| k == "BAD" && v == &bad));
+    assert!(
+        env.child_vars()
+            .any(|(k, v)| k == "BAD" && v == bad.as_os_str())
+    );
     assert_eq!(
         env.template_vars(),
         json!({"PATH": "/bin"}).as_object().unwrap().clone()
@@ -358,4 +392,101 @@ fn host_env_overlay_does_not_override() {
     ]);
     assert_eq!(env.get("A"), Some("1"));
     assert_eq!(env.get("B"), Some("3"));
+}
+
+// ---- Review fixes: raise payloads, in-order decoding, constructors ---------------------------
+
+#[test]
+fn fatal_raise_payload_is_validated() {
+    for raise in [
+        json!({"kind": "RuntimeError", "message": 42}),
+        json!({"kind": ""}),
+        json!({"kind": 7, "message": "x"}),
+        Value::Null,
+    ] {
+        let result = actions_of(json!({"actions": [{"raise": raise}]}));
+        assert!(
+            matches!(result, Err(ActionError::Invalid { index: 0, .. })),
+            "{raise}"
+        );
+    }
+    let result =
+        actions_of(json!({"actions": [{"raise": {"kind": "FormatError"}, "command": "ls"}]}));
+    assert!(
+        result.is_err(),
+        "a malformed raise never falls back to the command"
+    );
+    let ok = actions_of(json!({"actions": [{"raise": {"kind": "RuntimeError"}}]})).unwrap();
+    assert_eq!(
+        ok,
+        [Action::Raise(RaiseSpec::Fatal {
+            kind: "RuntimeError".into(),
+            message: String::new()
+        })]
+    );
+}
+
+#[test]
+fn actions_decode_in_order() {
+    // Python inspects actions one at a time, so a valid first action is seen before a
+    // malformed second one.
+    let message = message_with_extra(json!({"actions": [{"command": "a"}, 5]}));
+    let mut actions = message.action_iter();
+    assert_eq!(actions.next().unwrap().unwrap().command(), "a");
+    assert!(matches!(
+        actions.next(),
+        Some(Err(ActionError::Invalid { index: 1, .. }))
+    ));
+    assert!(actions.next().is_none());
+    let not_a_list = message_with_extra(json!({"actions": "ls"}));
+    let collected: Vec<_> = not_a_list.action_iter().collect();
+    assert!(matches!(collected.as_slice(), [Err(ActionError::NotAList)]));
+}
+
+#[test]
+fn raise_actions_round_trip_through_to_value() {
+    let raw = json!([
+        {"raise": {"kind": "FormatError", "messages": [{"role": "user", "content": "bad"}]}},
+        {"raise": {"kind": "RuntimeError", "message": "boom"}},
+        {"command": "ls"}
+    ]);
+    let actions = actions_of(json!({"actions": raw.clone()})).unwrap();
+    let back: Vec<Value> = actions.iter().map(Action::to_value).collect();
+    assert_eq!(Value::Array(back), raw);
+}
+
+#[test]
+fn interrupt_constructors_build_python_messages() {
+    let submitted = Interrupt::submitted("out\n".to_owned());
+    assert_eq!(submitted.kind(), InterruptKind::Submitted);
+    assert_eq!(
+        serde_json::to_value(submitted.head()).unwrap(),
+        json!({"role": "exit", "content": "out\n", "extra": {"exit_status": "Submitted", "submission": "out\n"}})
+    );
+    for (interrupt, name) in [
+        (Interrupt::limits_exceeded(), "LimitsExceeded"),
+        (Interrupt::time_exceeded(), "TimeExceeded"),
+    ] {
+        assert_eq!(interrupt.kind().name(), name);
+        assert_eq!(
+            serde_json::to_value(interrupt.head()).unwrap(),
+            json!({"role": "exit", "content": name, "extra": {"exit_status": name, "submission": ""}})
+        );
+    }
+}
+
+#[test]
+fn interrupt_head_mut_edits_the_first_message() {
+    let mut interrupt = Interrupt::new(
+        InterruptKind::FormatError,
+        Message::new(Role::User, "a"),
+        vec![Message::new(Role::User, "b")],
+    );
+    interrupt.head_mut().content.push('!');
+    let contents: Vec<String> = interrupt
+        .into_messages()
+        .into_iter()
+        .map(|m| m.content)
+        .collect();
+    assert_eq!(contents, ["a!", "b"]);
 }
