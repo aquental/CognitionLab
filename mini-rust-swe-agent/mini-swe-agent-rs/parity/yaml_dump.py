@@ -21,6 +21,11 @@ OUT = ROOT / "tests" / "goldens" / "yaml"
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+    stems = [path.stem for source in SOURCES for path in source.glob("*.yaml")]
+    duplicates = sorted({stem for stem in stems if stems.count(stem) > 1})
+    if duplicates:
+        print(f"duplicate golden names: {duplicates}", file=sys.stderr)
+        return 1
     for source in SOURCES:
         for path in sorted(source.glob("*.yaml")):
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
