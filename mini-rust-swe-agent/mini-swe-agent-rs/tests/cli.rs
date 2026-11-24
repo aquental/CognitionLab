@@ -339,7 +339,8 @@ fn invalid_values_fail_before_the_run() {
         stderr(&output)
     );
     // A key path deeper than the limit.
-    let deep = format!("{}=1", vec!["a"; 100_000].join("."));
+    // 1,000 segments: over the limit of 128, and under Linux's 128 KiB limit for one argument.
+    let deep = format!("{}=1", vec!["a"; 1_000].join("."));
     let output = sandbox.rust(&["-c", &deep, "-t", "t"]);
     assert_eq!(output.status.code(), Some(1));
     // Non-finite cost limits are usage errors.
