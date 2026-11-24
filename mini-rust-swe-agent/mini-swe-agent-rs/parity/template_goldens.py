@@ -1,8 +1,10 @@
 """Render template goldens with Jinja2, the engine the Python reference uses.
 
-Run from mini-swe-agent-rs/ with the reference environment:
+Run from mini-swe-agent-rs/ with the reference environment (importing minisweagent creates the
+global config dir and loads its .env, so point it at a temporary one):
 
-    uv run --frozen --project ../mini-swe-agent python parity/template_goldens.py
+    MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) \
+      uv run --frozen --project ../mini-swe-agent python parity/template_goldens.py
 
 It writes tests/goldens/templates/cases.json: a list of {name, template, context, expected}.
 Each case renders `template` with `Template(template, undefined=StrictUndefined)` (what
@@ -35,7 +37,14 @@ UNAME = {
 def outputs():
     head = "".join(f"head line {i}\n" for i in range(600))
     tail = "".join(f"tail line {i}\n" for i in range(600))
-    long_ascii = head + "x" * (12000 - len(head) - len(tail)) + tail
+    padding = 20000 - len(head) - len(tail)
+    assert padding > 0, padding
+    long_ascii = head + "x" * padding + tail
+    # Over 10,000 code points, with different multibyte text in the first and last 5,000.
+    long_multibyte = "é" * 3000 + "日本" * 1500 + "x" * 1000 + "🦀" * 3000 + "ü" * 2001
+    assert len(long_multibyte) > 10000 and long_multibyte[:5000] != long_multibyte[-5000:]
+    under_limit_multibyte = "é" * 4000 + "日本" * 1000 + "🦀" * 1000 + "z" * 1001
+    assert len(under_limit_multibyte) < 10000 < len(under_limit_multibyte.encode())
     return {
         "short": {"output": "hello world\n", "returncode": 0, "exception_info": ""},
         "empty": {"output": "", "returncode": 0, "exception_info": ""},
@@ -48,8 +57,10 @@ def outputs():
         "len_9999": {"output": "a" * 9999, "returncode": 0, "exception_info": ""},
         "len_10000": {"output": "b" * 10000, "returncode": 0, "exception_info": ""},
         "long_ascii": {"output": long_ascii, "returncode": 0, "exception_info": ""},
-        # 10,001 code points but far more bytes: length and slicing must count code points.
-        "long_multibyte": {"output": "é" * 4000 + "日本" * 1000 + "🦀" * 1000 + "z" * 1001, "returncode": 1, "exception_info": ""},
+        # 8,001 code points but over 10,000 bytes: `length` must count code points.
+        "under_limit_multibyte": {"output": under_limit_multibyte, "returncode": 1, "exception_info": ""},
+        # 12,001 code points: `[:5000]` and `[-5000:]` must slice code points.
+        "long_multibyte": {"output": long_multibyte, "returncode": 1, "exception_info": ""},
     }
 
 
@@ -60,6 +71,8 @@ def format_error_contexts():
         "stop": {"actions": [], "error": "Expected exactly 1 action, found 0.", "finish_reason": "stop"},
         "length": {"actions": [], "error": "Expected exactly 1 action, found 0.", "finish_reason": "length"},
         "tool_calls": {"actions": [], "error": "Expected exactly 1 action, found 0.", "finish_reason": "tool_calls"},
+        # `response.choices[0].finish_reason` can be None.
+        "none": {"actions": [], "error": "Expected exactly 1 action, found 0.", "finish_reason": None},
     }
 
 
@@ -93,6 +106,9 @@ def cases():
     probe_ctx = {"n": None, "t": True, "f": False, "i": 42, "big": 12345678901234567890, "neg": -7}
     probe_ctx.update({f"x{i}": v for i, v in enumerate(floats)})
     result.append(("probe:value_formatting", probe, probe_ctx))
+    # The agent's counters as `get_template_vars` passes them (test_default.py:286-307).
+    result.append(("probe:agent_stats", "Calls: {{n_model_calls}}, Cost: {{model_cost}}", {"n_model_calls": 2, "model_cost": 1.0}))
+    result.append(("probe:float_boundaries", "{{ a }}|{{ b }}|{{ c }}|{{ d }}", {"a": 0.0, "b": 1e-4, "c": 9.9999e-5, "d": -1e-5}))
     result.append(("probe:whitespace", "a\n{%- if t -%}\n  b  \n{%- endif -%}\nc\n", {"t": True}))
     return result
 

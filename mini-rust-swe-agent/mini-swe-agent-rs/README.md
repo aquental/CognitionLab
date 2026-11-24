@@ -10,7 +10,7 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 |---|---|---|
 | P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
-| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 44 Jinja2 goldens match byte for byte | stacked on P1 |
+| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | stacked on P1 |
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
 | P4–P7 | Not started | — |
 
@@ -82,7 +82,11 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 - **`HostEnv`** keeps every entry for child processes, and only the UTF-8 entries for templates.
 - **Templates (P2).** minijinja with `UndefinedBehavior::Strict`, no auto-escaping, and a formatter that prints
   `None`, `True`/`False` and floats the way Python's `str()` does (`1e+20`, `1e-05`, `-0.0`). Dicts and lists
-  still render in minijinja's format; no shipped template prints one.
+  still render in minijinja's format; no shipped template prints one. The formatter applies only to `{{ … }}`
+  output: values turned into strings inside an expression (`~`, `| string`, `| join`) use minijinja's format
+  (`true`, `none`), where Jinja2 gives `True`, `None`. No shipped template does this; it matters only for custom
+  templates. Maps keep their insertion order (`preserve_order`). Templates compile when added, so a syntax error
+  fails at load; an unknown filter fails at the first render, which is when Python builds its `Template` too.
 - **LocalEnvironment (P3).** `src/environment/local.rs`. Divergences from Python (plan §2.4): `/bin/bash`
   instead of `/bin/sh` (D11), an inherited `BASH_ENV` is dropped (bash would source it), stdin is `/dev/null`, a
   process group instead of a new session, `child.kill()` after `killpg` (Python hangs if the shell left its
