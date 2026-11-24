@@ -87,5 +87,8 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   instead of `/bin/sh` (D11), an inherited `BASH_ENV` is dropped (bash would source it), stdin is `/dev/null`, a
   process group instead of a new session, `child.kill()` after `killpg` (Python hangs if the shell left its
   group), and a 1 s bounded drain after a kill. Error texts follow CPython (`[Errno 2] No such file or directory:
-  '/x'`, `Command '…' timed out after N seconds`).
+  '/x'`, `Command '…' timed out after N seconds`), with the platform `strerror` text. The module is over the
+  plan's 250-line budget (§2.6), at about 430 lines of code: Python gets the pipe, the deadline, the process-group
+  kill and the OS error texts from `subprocess`; the port writes them out (the `poll` loop, `killpg`, and CPython's
+  error formatting).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).
