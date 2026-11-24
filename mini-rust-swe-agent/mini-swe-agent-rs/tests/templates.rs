@@ -38,6 +38,7 @@ fn renders_every_golden_byte_for_byte() {
 
 #[test]
 fn config_goldens_use_the_shipped_templates() {
+    let mut seen = std::collections::BTreeSet::new();
     for case in cases() {
         let name = case["name"].as_str().unwrap();
         let Some(rest) = name.strip_prefix("config:") else {
@@ -50,6 +51,21 @@ fn config_goldens_use_the_shipped_templates() {
                 .unwrap();
         let (section, key) = path.split_once('.').unwrap();
         assert_eq!(config[section][key], case["template"], "{name}");
+        seen.insert(format!("{file}:{path}"));
+    }
+    // Every template of both shipped configs has goldens.
+    for file in ["default", "mini_textbased"] {
+        for path in [
+            "agent.system_template",
+            "agent.instance_template",
+            "model.observation_template",
+            "model.format_error_template",
+        ] {
+            assert!(
+                seen.contains(&format!("{file}:{path}")),
+                "no golden for {file}:{path}"
+            );
+        }
     }
 }
 
@@ -109,8 +125,33 @@ fn trailing_newline_is_dropped_like_jinja2() {
 
 #[test]
 fn html_is_never_escaped() {
+    let html = json!({"s": "<a href=\"x\">&</a>"});
     assert_eq!(
-        render_once("{{ s }}", &json!({"s": "<a href=\"x\">&</a>"})).unwrap(),
+        render_once("{{ s }}", &html).unwrap(),
         "<a href=\"x\">&</a>"
     );
+    // minijinja escapes `.html` and `.xml` names by default; the port never does.
+    let mut templates = Templates::new();
+    for name in ["obs.html", "obs.xml", "obs.htm"] {
+        templates.add(name, "{{ s }}").unwrap();
+        assert_eq!(
+            templates.render(name, &html).unwrap(),
+            "<a href=\"x\">&</a>",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn context_must_be_an_object() {
+    // Python's `render(**context)` needs a mapping.
+    for context in [json!(null), json!([1]), json!("x"), json!(3)] {
+        assert!(
+            matches!(
+                render_once("static", &context),
+                Err(TemplateError::ContextNotObject { .. })
+            ),
+            "{context}"
+        );
+    }
 }

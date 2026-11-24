@@ -216,15 +216,69 @@ fn timeout() {
     );
 }
 
-fn pid_alive(pid: i32) -> bool {
-    // kill(pid, 0) succeeds for zombies too, so allow time for the orphan to be reaped.
+/// The state of a process: running, a zombie (dead but not reaped), or gone. `kill(pid, 0)`
+/// cannot tell a zombie from a running process, so read `/proc` on Linux and `ps` elsewhere.
+#[derive(Debug, PartialEq, Eq)]
+enum ProcState {
+    Running,
+    Zombie,
+    Gone,
+}
+
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
+fn proc_state(pid: i32) -> ProcState {
+    let proc_root = Path::new("/proc");
+    let state = if proc_root.join("self").exists() {
+        match std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) {
+            // The state follows the parenthesized command name.
+            Ok(stat) => stat
+                .rsplit_once(") ")
+                .map(|(_, rest)| rest.chars().next().unwrap_or('?')),
+            Err(_) => None,
+        }
+    } else {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().chars().next()
+    };
+    match state {
+        None => ProcState::Gone,
+        Some('Z') => ProcState::Zombie,
+        Some(_) => ProcState::Running,
+    }
+}
+
+/// Waits up to 3 s for `pid` to stop running; kills it if it is still there.
+fn dead_after_wait(pid: i32) -> bool {
     for _ in 0..30 {
-        if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
-            return false;
+        if proc_state(pid) != ProcState::Running {
+            return true;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    true
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+    false
+}
+
+/// A config whose `env` holds the given pid-file paths, so commands never interpolate paths.
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
+fn with_pid_files(timeout: u64, files: &[(&str, &Path)]) -> LocalEnvironmentConfig {
+    let env = files
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.to_str().unwrap().to_owned()))
+        .collect();
+    LocalEnvironmentConfig {
+        timeout,
+        env,
+        ..Default::default()
+    }
 }
 
 /// Test helper: clippy.toml exempts only `#[test]` functions.
@@ -243,23 +297,23 @@ fn read_pid(path: &Path) -> i32 {
 
 #[test]
 fn timeout_kills_child_process() {
+    // The trailing `; true` stops bash from exec'ing `sh`, so the looping process is a
+    // grandchild that only `killpg` reaches (`local.py:88-91`).
     let dir = tempfile::tempdir().unwrap();
-    let pid_file = dir.path().join("child.pid");
-    let command = format!(
-        "sh -c 'echo $$ > {}; while true; do sleep 1; done'",
-        pid_file.display()
-    );
-    let result = run(&env_with(timeout_secs(1)), &command);
+    let (shell_file, child_file) = (dir.path().join("shell.pid"), dir.path().join("child.pid"));
+    let config = with_pid_files(1, &[("SHELL_PID", &shell_file), ("CHILD_PID", &child_file)]);
+    let command = "echo $$ > \"$SHELL_PID\"; sh -c 'echo $$ > \"$CHILD_PID\"; while true; do sleep 1; done'; true";
+    let result = run(&env_with(config), command);
     assert_eq!(result.returncode, -1);
-    let pid = read_pid(&pid_file);
-    let alive = pid_alive(pid);
-    if alive {
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
-    assert!(!alive, "child {pid} survived the timeout");
+    let (shell, child) = (read_pid(&shell_file), read_pid(&child_file));
+    assert_ne!(
+        shell, child,
+        "the looping process must not be the direct child"
+    );
+    assert!(
+        dead_after_wait(child),
+        "grandchild {child} survived the timeout"
+    );
 }
 
 #[test]
@@ -388,8 +442,14 @@ fn stdin_is_at_eof() {
 #[test]
 fn background_child_holding_the_pipe_is_killed_at_the_deadline() {
     // Trap 24: `communicate()` waits for EOF, so the command ends only at the timeout.
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("bg.pid");
     let start = Instant::now();
-    let result = run(&env_with(timeout_secs(1)), "echo hi; sleep 30 &");
+    let config = with_pid_files(1, &[("PID_FILE", &pid_file)]);
+    let result = run(
+        &env_with(config),
+        "echo hi; sleep 30 & echo $! > \"$PID_FILE\"",
+    );
     assert!(
         start.elapsed() < Duration::from_secs(5),
         "{:?}",
@@ -398,6 +458,11 @@ fn background_child_holding_the_pipe_is_killed_at_the_deadline() {
     assert_eq!(result.returncode, -1);
     assert_eq!(result.output, "hi\n");
     assert_eq!(result.extra.unwrap()["exception_type"], "TimeoutExpired");
+    let pid = read_pid(&pid_file);
+    assert!(
+        dead_after_wait(pid),
+        "the pipe-holding sleep {pid} survived"
+    );
 }
 
 #[test]
@@ -405,32 +470,40 @@ fn background_child_with_redirected_output_survives() {
     let dir = tempfile::tempdir().unwrap();
     let pid_file = dir.path().join("bg.pid");
     let start = Instant::now();
-    let command = format!(
-        "sleep 30 >/dev/null 2>&1 & echo $! > {}",
-        pid_file.display()
+    let config = with_pid_files(5, &[("PID_FILE", &pid_file)]);
+    let result = run(
+        &env_with(config),
+        "sleep 30 >/dev/null 2>&1 & echo $! > \"$PID_FILE\"",
     );
-    let result = run(&env_with(timeout_secs(5)), &command);
     assert!(start.elapsed() < Duration::from_secs(3));
     assert_eq!(result.returncode, 0);
     let pid = read_pid(&pid_file);
-    let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+    std::thread::sleep(Duration::from_millis(300));
+    let state = proc_state(pid);
     let _ = nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGKILL,
     );
-    assert!(
-        alive,
-        "the redirected background child must survive, as in Python"
+    assert_eq!(
+        state,
+        ProcState::Running,
+        "the redirected background child must keep running, as in Python"
     );
 }
 
 #[test]
 fn child_that_closes_stdout_and_keeps_running_is_killed() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("sleep.pid");
     let start = Instant::now();
-    let result = run(&env_with(timeout_secs(1)), "exec >/dev/null 2>&1; sleep 30");
+    let config = with_pid_files(1, &[("PID_FILE", &pid_file)]);
+    let command = "exec >/dev/null 2>&1; sleep 30 & echo $! > \"$PID_FILE\"; wait";
+    let result = run(&env_with(config), command);
     assert!(start.elapsed() < Duration::from_secs(5));
     assert_eq!(result.returncode, -1);
     assert_eq!(result.extra.unwrap()["exception_type"], "TimeoutExpired");
+    let pid = read_pid(&pid_file);
+    assert!(dead_after_wait(pid), "sleep {pid} survived the timeout");
 }
 
 #[test]
@@ -619,5 +692,137 @@ fn serialize_dumps_the_config() {
             .as_str()
             .unwrap()
             .ends_with("LocalEnvironment")
+    );
+}
+
+// ---- Review fixes (P3) -------------------------------------------------------------------------
+
+#[test]
+fn unsearchable_cwd_names_the_cwd() {
+    use std::os::unix::fs::PermissionsExt;
+    let uid = std::process::Command::new("id").arg("-u").output().unwrap();
+    if String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        eprintln!("skipped: root can enter a directory without search permission");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let env = env_with(LocalEnvironmentConfig {
+        cwd: locked.to_str().unwrap().to_owned(),
+        ..Default::default()
+    });
+    let result = run(&env, "echo hi");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        result.extra.as_ref().unwrap()["exception_type"],
+        "PermissionError"
+    );
+    let expected = format!("[Errno 13] Permission denied: '{}'", locked.display());
+    assert_eq!(result.extra.unwrap()["exception"], expected.as_str());
+}
+
+#[test]
+fn os_error_text_is_the_platform_strerror() {
+    // A symlink loop as cwd: CPython prints `strerror(ELOOP)`, "Too many levels of symbolic links".
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("b"), dir.path().join("a")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("a"), dir.path().join("b")).unwrap();
+    let cwd = dir.path().join("a");
+    let env = env_with(LocalEnvironmentConfig {
+        cwd: cwd.to_str().unwrap().to_owned(),
+        ..Default::default()
+    });
+    let result = run(&env, "echo hi");
+    let extra = result.extra.unwrap();
+    assert_eq!(extra["exception_type"], "OSError");
+    let message = extra["exception"].as_str().unwrap();
+    assert!(
+        message.contains("] Too many levels of symbolic links: '"),
+        "{message}"
+    );
+    assert!(!message.contains("os error"), "{message}");
+}
+
+#[test]
+fn explicit_timeout_override() {
+    let env = env_with(timeout_secs(1));
+    // Python's `timeout or self.config.timeout`: zero falls back to the config.
+    let quick = env
+        .execute_with_timeout(&cmd("echo ok"), None, Some(Duration::ZERO))
+        .unwrap();
+    assert_eq!(quick.returncode, 0);
+    let result = env
+        .execute_with_timeout(&cmd("sleep 2"), None, Some(Duration::from_millis(500)))
+        .unwrap();
+    assert_eq!(
+        result.extra.unwrap()["exception"],
+        "Command 'sleep 2' timed out after 0.5 seconds"
+    );
+}
+
+#[test]
+fn submission_matrix_through_execute() {
+    // The text reaches the command through an environment variable, so no quoting is needed.
+    let cases: &[(&str, i32, Option<&str>)] = &[
+        ("{M}\n", 0, Some("")),
+        ("\n\n  {M}\nrest", 0, Some("rest")),
+        ("  {M}  \nx\n", 0, Some("x\n")),
+        ("log line\n{M}\n", 0, None),
+        ("{m}\n", 0, None),
+        ("{M} done\n", 0, None),
+        ("{M}\n", 1, None),
+        ("{M}\na\nb\n", 0, Some("a\nb\n")),
+        ("{M}", 0, Some("")),
+        ("", 0, None),
+        ("\x1f{M}\nx", 0, Some("x")),
+        ("{M}\u{2028}tail", 0, Some("tail")),
+    ];
+    for (template, code, expected) in cases {
+        let text = template
+            .replace("{M}", MARKER)
+            .replace("{m}", &MARKER.to_lowercase());
+        let config = LocalEnvironmentConfig {
+            env: [("TEXT".to_owned(), text.clone())].into_iter().collect(),
+            ..Default::default()
+        };
+        let result =
+            env_with(config).execute(&cmd(&format!("printf '%s' \"$TEXT\"; exit {code}")), None);
+        let submitted = match result {
+            Ok(_) => None,
+            Err(StepError::Interrupt(interrupt)) => {
+                Some(interrupt.head().exit_info().unwrap().submission)
+            }
+            Err(e) => panic!("{text:?}: {e}"),
+        };
+        assert_eq!(submitted.as_deref(), *expected, "{text:?} exit {code}");
+    }
+}
+
+#[test]
+fn independent_workspace_copies_do_not_share_files() {
+    let (one, two) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for dir in [&one, &two] {
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").unwrap();
+    }
+    let in_dir = |dir: &tempfile::TempDir| {
+        env_with(LocalEnvironmentConfig {
+            cwd: dir.path().to_str().unwrap().to_owned(),
+            ..Default::default()
+        })
+    };
+    run(
+        &in_dir(&one),
+        "cd . && export X=1 && printf one > written.txt",
+    );
+    assert_eq!(run(&in_dir(&one), "cat written.txt").output, "one");
+    let other = run(
+        &in_dir(&two),
+        "ls; cat written.txt 2>&1; printf '%s' \"${X-unset}\"",
+    );
+    assert_eq!(
+        other.output,
+        "seed.txt\ncat: written.txt: No such file or directory\nunset"
     );
 }

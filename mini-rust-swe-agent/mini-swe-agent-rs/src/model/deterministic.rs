@@ -157,6 +157,6 @@ impl Model for DeterministicModel {
         template_vars: &Value,
     ) -> Result<Vec<Message>, AgentError> {
         self.observations
-            .messages(outputs, template_vars, self.clock.now())
+            .messages(outputs, template_vars, self.clock.as_ref())
     }
 }
