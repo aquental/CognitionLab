@@ -27,13 +27,24 @@ struct Args {
     #[arg(short = 't', long = "task")]
     task: String,
     /// Model name (defaults to `MSWEA_MODEL_NAME`).
-    #[arg(short = 'm', long = "model", env = "MSWEA_MODEL_NAME")]
-    model: String,
+    #[arg(short = 'm', long = "model")]
+    model: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let host = Arc::new(HostEnv::from_vars(std::env::vars_os()));
+    // Python's package import loads the global `.env`; so does the example.
+    let mut host = HostEnv::from_vars(std::env::vars_os());
+    host.overlay_dotenv(&config::global_config_dir(&host).join(".env"))?;
+    let host = Arc::new(host);
+    let model_name = match args.model {
+        Some(name) => name,
+        None => host
+            .get("MSWEA_MODEL_NAME")
+            .filter(|n| !n.is_empty())
+            .context("pass -m/--model or set MSWEA_MODEL_NAME")?
+            .to_owned(),
+    };
     let defaults = config::read_source(&ConfigSource::Builtin("default.yaml".to_owned()))?;
     let defaults = mini_swe_agent_rs::yaml::load_str(&defaults)?;
     let agent_config: AgentConfig = serde_json::from_value(
@@ -43,7 +54,7 @@ fn main() -> anyhow::Result<()> {
             .context("default.yaml has no agent section")?,
     )?;
     let model_config =
-        TextbasedModelConfig::from_section(&json!({"model_name": args.model}), &host)?;
+        TextbasedModelConfig::from_section(&json!({"model_name": model_name}), &host)?;
     let backend = OpenAiCompatBackend::new(
         Settings::from_model_kwargs(&model_config.model_kwargs, &host)?.transport,
     );

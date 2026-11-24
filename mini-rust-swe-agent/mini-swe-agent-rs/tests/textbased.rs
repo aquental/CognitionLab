@@ -422,3 +422,156 @@ fn cost_tracking_is_typed() {
         CostTracking::IgnoreErrors
     );
 }
+
+#[test]
+fn invalid_completions_are_retried_and_never_billed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wrong_role = reply(action("ls"), "stop");
+    wrong_role["choices"][0]["message"]["role"] = json!("user");
+    let mut parts = reply(action("ls"), "stop");
+    parts["choices"][0]["message"]["content"] = json!([{"type": "text", "text": "ls"}]);
+    let replies = vec![
+        Ok(json!({"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}})),
+        Ok(json!({"error": {"message": "upstream failed"}})),
+        Ok(wrong_role),
+        Ok(parts),
+        Ok(reply(action("ls"), "stop")),
+    ];
+    let mut s = setup(
+        replies,
+        json!({"litellm_model_registry": registry(&dir)}),
+        &host(&[]),
+    );
+    s.model.query(&history()).unwrap();
+    assert_eq!(s.backend.requests().len(), 5);
+    assert_eq!(
+        (s.stats.n_calls(), s.stats.cost()),
+        (1, 0.02),
+        "only the valid reply is billed"
+    );
+
+    // When every attempt is invalid, the error is fatal and nothing is charged.
+    let env = host(&[("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "1")]);
+    let mut s = setup(
+        vec![Ok(json!({"choices": []}))],
+        json!({"cost_tracking": "ignore_errors"}),
+        &env,
+    );
+    let Err(StepError::Fatal(AgentError::Model(error))) = s.model.query(&history()) else {
+        panic!("expected a fatal error")
+    };
+    assert!(matches!(
+        error,
+        ModelError::Backend(BackendError::InvalidResponse(_))
+    ));
+    assert_eq!(error.exit_status(), "APIError");
+    assert_eq!(s.stats.n_calls(), 0);
+}
+
+#[test]
+fn a_missing_role_means_assistant() {
+    let mut raw = reply(action("ls"), "stop");
+    raw["choices"][0]["message"]
+        .as_object_mut()
+        .unwrap()
+        .remove("role");
+    let mut s = setup(
+        vec![Ok(raw)],
+        json!({"cost_tracking": "ignore_errors"}),
+        &host(&[]),
+    );
+    assert_eq!(s.model.query(&history()).unwrap().role, Role::Assistant);
+}
+
+#[test]
+fn registry_prices_must_be_nonnegative() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.json");
+    let prices =
+        json!({"test-model": {"input_cost_per_token": -0.001, "output_cost_per_token": 0.01}});
+    std::fs::write(&path, prices.to_string()).unwrap();
+    let mut s = setup(
+        vec![Ok(reply(action("ls"), "stop"))],
+        json!({"litellm_model_registry": path.to_str().unwrap()}),
+        &host(&[]),
+    );
+    let Err(StepError::Fatal(AgentError::Model(error))) = s.model.query(&history()) else {
+        panic!("expected a cost error")
+    };
+    assert!(matches!(error, ModelError::CostTracking(_)), "{error}");
+}
+
+#[test]
+fn a_non_finite_clock_is_an_error() {
+    let backend = Canned::new(vec![Ok(reply(action("ls"), "stop"))]);
+    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(f64::NAN));
+    let env = host(&[]);
+    let mut model = TextbasedModel::new(
+        config(json!({"cost_tracking": "ignore_errors"}), &env),
+        backend,
+        Arc::new(GlobalModelStats::new(0.0, 0)),
+        clock,
+        &env,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.query(&history()),
+        Err(StepError::Fatal(AgentError::Internal(_)))
+    ));
+}
+
+#[test]
+fn config_debug_redacts_a_literal_key() {
+    let env = host(&[]);
+    let config = config(
+        json!({"model_kwargs": {"api_key": "sk-sentinel-debug", "temperature": 0.0}}),
+        &env,
+    );
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("sk-sentinel-debug"), "{debug}");
+    assert!(
+        debug.contains("<redacted>") && debug.contains("temperature"),
+        "{debug}"
+    );
+    let choice = format!(
+        "{:?}",
+        mini_swe_agent_rs::config::ModelChoice::Textbased(config)
+    );
+    assert!(!choice.contains("sk-sentinel-debug"), "{choice}");
+}
+
+#[test]
+fn the_agent_charges_a_billed_format_error() {
+    use mini_swe_agent_rs::agent::{Agent, AgentConfig, DefaultAgent};
+    use mini_swe_agent_rs::environment::local::{LocalEnvironment, LocalEnvironmentConfig};
+    let dir = tempfile::tempdir().unwrap();
+    let source = mini_swe_agent_rs::config::ConfigSource::Builtin("default.yaml".to_owned());
+    let defaults = mini_swe_agent_rs::yaml::load_str(
+        &mini_swe_agent_rs::config::read_source(&source).unwrap(),
+    )
+    .unwrap();
+    let agent_config: AgentConfig = serde_json::from_value(defaults["agent"].clone()).unwrap();
+    let replies = vec![
+        Ok(reply(json!("no action yet"), "stop")),
+        Ok(reply(
+            action("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"),
+            "stop",
+        )),
+    ];
+    let s = setup(
+        replies,
+        json!({"litellm_model_registry": registry(&dir)}),
+        &host(&[]),
+    );
+    let env = LocalEnvironment::new(
+        LocalEnvironmentConfig::default(),
+        Arc::new(HostEnv::from_vars(std::env::vars_os())),
+    );
+    let clock: Arc<dyn Clock> = s.clock.clone();
+    let mut agent = DefaultAgent::new(agent_config, s.model, env, clock).unwrap();
+    let info = agent.run("Say hi", Map::new()).unwrap();
+    assert_eq!(info.exit_status, "Submitted");
+    assert_eq!(agent.n_calls(), 2);
+    assert!((agent.cost() - 0.04).abs() < 1e-12, "{}", agent.cost());
+    assert_eq!(s.stats.n_calls(), 2);
+}

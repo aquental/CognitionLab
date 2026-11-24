@@ -2,8 +2,8 @@
 
 Runs the reference's real `LitellmTextbasedModel` (with the reference's `mini_textbased.yaml`
 model section) on canned provider responses, with `litellm.completion` patched, and prints one
-projection per case: the outcome, the parsed actions or format-error message, the cost, and the
-global stats. The Rust side (`tests/text_parity.rs`) builds the same projection.
+projection per case: the outcome, the parsed actions or format-error message, the cost, the
+content kept in `extra.response`, the messages sent to the provider, and the global stats. The Rust side (`tests/text_parity.rs`) builds the same projection.
 
     python parity/text_model_python.py parity/text_model_cases.json <out.json>
 """
@@ -31,7 +31,7 @@ def project(case: dict, registry: Path, section: dict, messages: list) -> dict:
     kwargs["cost_tracking"] = case.get("cost_tracking", "default")
     model = LitellmTextbasedModel(**kwargs)
     response = litellm.ModelResponse(**case["response"])
-    with patch("litellm.completion", return_value=response):
+    with patch("litellm.completion", return_value=response) as completion:
         try:
             message = model.query(messages)
             result = {
@@ -41,6 +41,7 @@ def project(case: dict, registry: Path, section: dict, messages: list) -> dict:
                 "actions": message["extra"]["actions"],
                 "cost": message["extra"]["cost"],
                 "extra_keys": list(message["extra"]),
+                "response_content": message["extra"]["response"]["choices"][0]["message"]["content"],
             }
         except FormatError as e:
             head = e.messages[0]
@@ -53,9 +54,11 @@ def project(case: dict, registry: Path, section: dict, messages: list) -> dict:
                 "model_response": head["extra"]["model_response"],
                 "cost": head["extra"]["cost"],
                 "extra_keys": list(head["extra"]),
+                "response_content": head["extra"]["response"]["choices"][0]["message"]["content"],
             }
         except Exception as e:  # a fatal model error
             result = {"kind": "error", "type": type(e).__name__}
+    result["request_messages"] = completion.call_args.kwargs["messages"]
     result["stats"] = {"calls": stats.n_calls, "cost": stats.cost}
     return result
 

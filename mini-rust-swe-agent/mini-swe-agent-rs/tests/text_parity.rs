@@ -23,17 +23,34 @@ use mini_swe_agent_rs::model::textbased::TextbasedModel;
 use serde_json::{Value, json};
 use support::compare::first_difference;
 
-/// Returns one canned response.
+/// Returns one canned response and keeps the request body.
 #[derive(Debug)]
-struct Once(Mutex<Option<Value>>);
+struct Once {
+    reply: Mutex<Option<Value>>,
+    request: Arc<Mutex<Value>>,
+}
 
 impl ChatBackend for Once {
     #[allow(clippy::unwrap_used, clippy::expect_used)]
-    fn complete(&self, _request: &ChatRequest) -> Result<ChatResponse, BackendError> {
+    fn complete(&self, request: &ChatRequest) -> Result<ChatResponse, BackendError> {
+        *self.request.lock().unwrap() = request.body();
         Ok(ChatResponse::new(
-            self.0.lock().unwrap().take().expect("one call per case"),
+            self.reply
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one call per case"),
         ))
     }
+}
+
+/// `extra.response.choices[0].message.content`.
+fn response_content(extra: &serde_json::Map<String, Value>) -> Value {
+    extra
+        .get("response")
+        .and_then(|r| r.pointer("/choices/0/message/content"))
+        .cloned()
+        .unwrap_or(json!("<missing>"))
 }
 
 /// The Rust projection of one case, with the same keys as the Python runner's.
@@ -56,25 +73,30 @@ fn rust_case(case: &Value, registry: &str, messages: &[Message]) -> Value {
     };
     let stats = Arc::new(GlobalModelStats::new(0.0, 0));
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(0.0));
-    let backend = Once(Mutex::new(Some(case["response"].clone())));
+    let sent = Arc::new(Mutex::new(Value::Null));
+    let backend = Once {
+        reply: Mutex::new(Some(case["response"].clone())),
+        request: sent.clone(),
+    };
     let mut model =
         TextbasedModel::new(model_config, backend, stats.clone(), clock, &host).unwrap();
     let keys = |extra: &serde_json::Map<String, Value>| json!(extra.keys().collect::<Vec<_>>());
     let mut result = match model.query(messages) {
         Ok(message) => {
             let extra = message.extra.clone().unwrap();
-            json!({"kind": "ok", "role": message.role, "content": message.content, "actions": extra["actions"], "cost": extra["cost"], "extra_keys": keys(&extra)})
+            json!({"kind": "ok", "role": message.role, "content": message.content, "actions": extra["actions"], "cost": extra["cost"], "extra_keys": keys(&extra), "response_content": response_content(&extra)})
         }
         Err(StepError::Interrupt(interrupt)) => {
             let head = interrupt.head();
             let extra = head.extra.clone().unwrap();
-            json!({"kind": "format_error", "role": head.role, "content": head.content, "interrupt_type": extra["interrupt_type"], "n_actions": extra["n_actions"], "model_response": extra["model_response"], "cost": extra["cost"], "extra_keys": keys(&extra)})
+            json!({"kind": "format_error", "role": head.role, "content": head.content, "interrupt_type": extra["interrupt_type"], "n_actions": extra["n_actions"], "model_response": extra["model_response"], "cost": extra["cost"], "extra_keys": keys(&extra), "response_content": response_content(&extra)})
         }
         Err(StepError::Fatal(AgentError::Model(error))) => {
             json!({"kind": "error", "type": error.exit_status()})
         }
         Err(StepError::Fatal(other)) => panic!("{other}"),
     };
+    result["request_messages"] = sent.lock().unwrap()["messages"].clone();
     result["stats"] = json!({"calls": stats.n_calls(), "cost": stats.cost()});
     result
 }

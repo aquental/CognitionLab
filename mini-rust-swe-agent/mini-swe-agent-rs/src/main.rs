@@ -7,7 +7,6 @@
 //! 0 when the run ends with an exit message (any status), 1 for a fatal or config error (after
 //! the trajectory was saved, when there is one), 2 for usage errors.
 
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -79,19 +78,6 @@ fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
-/// `MSWEA_GLOBAL_CONFIG_DIR`, else the platform config dir (`platformdirs.user_config_dir`).
-fn global_config_dir(host: &HostEnv) -> PathBuf {
-    match host
-        .get("MSWEA_GLOBAL_CONFIG_DIR")
-        .filter(|dir| !dir.is_empty())
-    {
-        Some(dir) => PathBuf::from(dir),
-        None => dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("mini-swe-agent"),
-    }
-}
-
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -118,7 +104,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<()> {
     let mut host = HostEnv::from_vars(std::env::vars_os());
-    let config_dir = global_config_dir(&host);
+    let config_dir = config::global_config_dir(&host);
     std::fs::create_dir_all(&config_dir)
         .with_context(|| format!("creating {}", config_dir.display()))?;
     let env_file = config_dir.join(".env");
@@ -130,14 +116,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             env_file.display()
         ));
     }
-    if env_file.is_file() {
-        // `load_dotenv` reads the whole file first (the last assignment of a name wins), then
-        // skips the names the process already has.
-        let pairs: BTreeMap<String, String> = dotenvy::from_path_iter(&env_file)
-            .and_then(|iter| iter.collect())
-            .with_context(|| format!("reading {}", env_file.display()))?;
-        host.overlay_missing(pairs);
-    }
+    host.overlay_dotenv(&env_file)
+        .with_context(|| format!("reading {}", env_file.display()))?;
     let host = Arc::new(host);
     let cwd = std::env::current_dir().context("current directory")?;
 

@@ -105,9 +105,12 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 **Provider (D4).** The text-based model speaks the OpenAI-compatible Chat Completions protocol (`POST
 {api_base}/chat/completions`, bearer auth). That covers OpenAI, OpenRouter, a LiteLLM proxy, vLLM and Ollama.
 `model.model_kwargs` is split: `api_base`/`base_url` (default `https://api.openai.com/v1`), `api_key` (else the
-variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` configure the transport; `drop_params` is
-dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are refused; the rest (`temperature`,
-`max_tokens`, …) is sent in the body.
+variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` (seconds, default 600, as LiteLLM's)
+configure the transport; `drop_params` is dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are
+refused; the rest (`temperature`, `max_tokens`, …) is sent in the body. `api_base` must be `http(s)://host…`,
+without credentials or a fragment; its query string is kept after `/chat/completions`. Redirects are not followed
+(the history never goes to another host). The proxy comes from `ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` (minus
+`NO_PROXY`) in the same environment the run sees, including the global `.env`.
 
 ```bash
 OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased \
@@ -140,8 +143,9 @@ shipped YAML files (`parity/config_dumps.py`).
 
 | Check | Result |
 |---|---|
-| `cargo test --locked` on macOS with the reference | Pass: `textbased` 11, `fake_http` 4, `text_parity` 1 (7 raw-response cases equal), everything else as in P7 |
+| `cargo test --locked` on macOS with the reference | Pass: `textbased` 17, `openai_compat` 7, `fake_http` 12, `text_parity` 1 (7 raw-response cases equal, outbound messages included), everything else as in P7 |
 | Sabotage: the output price replaced by the input price in `cost.rs` | `text_parity` fails on 5 cases |
+| Sabotage: `extra` sent to the provider; `extra.response` dropped | `text_parity` fails on each |
 | Full-suite Linux gate, including `text_parity` against Python | Pass (exit 0) |
 | Rust-only Linux gate, including `fake_http` | Pass |
 | `cargo deny check advisories` (with `ureq` 3.5.1 and rustls) | No advisories |
@@ -246,4 +250,9 @@ shipped YAML files (`parity/config_dumps.py`).
   `response` stored in `extra` is the provider's raw JSON, where Python stores LiteLLM's normalized dump; the
   raw-response differential therefore compares outcome, content, actions, cost, `extra` keys and global stats.
   Retry warnings go to stderr as `WARNING:litellm_model:…`; neither the API key nor a request body is ever logged.
+  Provider error bodies are cut to 2,000 characters, an echoed API key is replaced by `<redacted>`, and an
+  authentication error names the key variable (Python suggests `mini-extra config set`). A 2xx reply without a
+  first choice, with a non-assistant role or with non-text content is an invalid response: it is retried and never
+  billed (LiteLLM fails while parsing such a reply, before any cost). As in Python, commands and templates see the
+  whole process environment, the API key variable included (`local.py:29`, `:59`).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

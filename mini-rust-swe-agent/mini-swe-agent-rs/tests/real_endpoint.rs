@@ -7,8 +7,9 @@
 //!   cargo test --test real_endpoint -- --ignored --nocapture
 //! ```
 //!
-//! With `MSWEA_RS_REAL_REGISTRY` the cost comes from that LiteLLM-format file; without it the run
-//! uses `cost_tracking: ignore_errors`.
+//! With `MSWEA_RS_REAL_REGISTRY` (any path; it is made absolute, as the CLI runs in a sandbox)
+//! the cost comes from that LiteLLM-format file and must be positive; without it the run uses
+//! `cost_tracking: ignore_errors`. The acceptance run of P8 uses a registry.
 
 mod support;
 
@@ -21,11 +22,13 @@ use support::cli::{BIN, Sandbox, stderr};
 fn solves_a_toy_task() {
     let model = std::env::var("MSWEA_RS_REAL_MODEL").expect("set MSWEA_RS_REAL_MODEL");
     let mut sandbox = Sandbox::new();
-    for name in ["OPENAI_API_KEY", "LITELLM_MODEL_REGISTRY_PATH"] {
-        if let Ok(value) = std::env::var(name) {
-            sandbox.env.insert(name.to_owned(), value);
-        }
+    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        sandbox.env.insert("OPENAI_API_KEY".to_owned(), key);
     }
+    let registry = std::env::var("MSWEA_RS_REAL_REGISTRY").ok().map(|path| {
+        std::fs::canonicalize(&path)
+            .unwrap_or_else(|e| panic!("MSWEA_RS_REAL_REGISTRY={path}: {e}"))
+    });
     let mut args = vec![
         "-m".to_owned(),
         model,
@@ -38,12 +41,12 @@ fn solves_a_toy_task() {
         "-t".to_owned(),
         "Create a file named hello.txt whose only content is the line: Hello from Rust".to_owned(),
     ];
-    match std::env::var("MSWEA_RS_REAL_REGISTRY") {
-        Ok(path) => args.extend([
+    match &registry {
+        Some(path) => args.extend([
             "-c".to_owned(),
-            format!("model.litellm_model_registry={path}"),
+            format!("model.litellm_model_registry={}", path.display()),
         ]),
-        Err(_) => args.extend([
+        None => args.extend([
             "-c".to_owned(),
             "model.cost_tracking=ignore_errors".to_owned(),
         ]),
@@ -56,10 +59,14 @@ fn solves_a_toy_task() {
     }
     let output = sandbox.run(Path::new(BIN), &args, None);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(
-        sandbox.trajectory("real.json")["info"]["exit_status"],
-        "Submitted"
-    );
+    let trajectory = sandbox.trajectory("real.json");
+    assert_eq!(trajectory["info"]["exit_status"], "Submitted");
+    if registry.is_some() {
+        let cost = trajectory["info"]["model_stats"]["instance_cost"]
+            .as_f64()
+            .unwrap();
+        assert!(cost > 0.0, "the registry prices the run: {cost}");
+    }
     let hello = std::fs::read_to_string(sandbox.root.join("work/hello.txt")).unwrap();
     assert_eq!(hello.trim(), "Hello from Rust");
 }

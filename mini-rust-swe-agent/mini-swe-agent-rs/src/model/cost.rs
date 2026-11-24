@@ -50,11 +50,19 @@ pub fn completion_cost(
     let entry = registry
         .entry(model)
         .ok_or_else(|| format!("model {model} is not in the registry"))?;
+    // A negative or non-finite price would silently lower the total, so it is refused.
     let price = |key: &str| {
         entry
             .get(key)
             .and_then(Value::as_f64)
             .ok_or_else(|| format!("the registry has no {key} for {model}"))
+            .and_then(|p| {
+                if p.is_finite() && p >= 0.0 {
+                    Ok(p)
+                } else {
+                    Err(format!("the registry's {key} for {model} is invalid: {p}"))
+                }
+            })
     };
     let (prompt, completion) = usage.ok_or("the response has no token usage")?;
     #[allow(clippy::cast_precision_loss)]

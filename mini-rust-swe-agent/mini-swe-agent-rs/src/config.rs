@@ -349,12 +349,27 @@ pub fn task(config: &Map<String, Value>) -> Result<Option<String>, ConfigError> 
 }
 
 fn invalid(key: &'static str, expected: &'static str, found: &Value) -> ConfigError {
-    let mut found = found.to_string();
-    found.truncate(80);
+    // At most 80 characters, cut on a character boundary.
+    let found: String = found.to_string().chars().take(80).collect();
     ConfigError::InvalidValue {
         key,
         expected,
         found,
+    }
+}
+
+/// The global config directory: `MSWEA_GLOBAL_CONFIG_DIR`, else the platform config dir
+/// (`platformdirs.user_config_dir("mini-swe-agent")`). Its `.env` is overlaid on the host
+/// environment by [`HostEnv::overlay_dotenv`].
+pub fn global_config_dir(host: &HostEnv) -> PathBuf {
+    match host
+        .get("MSWEA_GLOBAL_CONFIG_DIR")
+        .filter(|dir| !dir.is_empty())
+    {
+        Some(dir) => PathBuf::from(dir),
+        None => dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("mini-swe-agent"),
     }
 }
 
@@ -556,7 +571,7 @@ fn default_action_regex() -> String {
 /// `LitellmTextbasedModelConfig` (`litellm_model.py:25-46`, `litellm_textbased_model.py:7-14`),
 /// so its typed dump can be compared with pydantic's before the model exists (P8). Field order
 /// follows `model_dump`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextbasedModelConfig {
     /// Model name (required).
     pub model_name: String,
@@ -584,6 +599,27 @@ pub struct TextbasedModelConfig {
     /// The regex that finds the action.
     #[serde(default = "default_action_regex")]
     pub action_regex: String,
+}
+
+/// `Debug` redacts a literal `model_kwargs.api_key`, as trajectories do.
+impl std::fmt::Debug for TextbasedModelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut kwargs = self.model_kwargs.clone();
+        if let Some(key) = kwargs.get_mut("api_key").filter(|k| !k.is_null()) {
+            *key = Value::String("<redacted>".to_owned());
+        }
+        f.debug_struct("TextbasedModelConfig")
+            .field("model_name", &self.model_name)
+            .field("model_kwargs", &kwargs)
+            .field("litellm_model_registry", &self.litellm_model_registry)
+            .field("set_cache_control", &self.set_cache_control)
+            .field("cost_tracking", &self.cost_tracking)
+            .field("format_error_template", &self.format_error_template)
+            .field("observation_template", &self.observation_template)
+            .field("multimodal_regex", &self.multimodal_regex)
+            .field("action_regex", &self.action_regex)
+            .finish()
+    }
 }
 
 impl TextbasedModelConfig {

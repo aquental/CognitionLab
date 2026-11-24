@@ -588,3 +588,15 @@ fn textbased_literals_are_checked() {
         .is_ok()
     );
 }
+
+#[test]
+fn invalid_value_messages_truncate_on_a_char_boundary() {
+    let env = HostEnv::from_vars(std::iter::empty());
+    // `["a` is 3 bytes, so byte 80 falls inside a two-byte `é`.
+    let name = format!("a{}", "é".repeat(60));
+    let result = config::model_choice(&json!({"model_name": [name]}), &env);
+    assert!(
+        matches!(result, Err(ConfigError::InvalidValue { .. })),
+        "{result:?}"
+    );
+}

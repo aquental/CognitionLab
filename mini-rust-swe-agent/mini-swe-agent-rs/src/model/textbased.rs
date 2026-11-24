@@ -113,13 +113,16 @@ impl<B: ChatBackend> TextbasedModel<B> {
     }
 }
 
-/// A history message as sent to the provider: every key but `extra`.
+/// A history message as sent to the provider: `role`, `content` and the provider fields, in
+/// that order. `extra` (raw responses, command outputs) is never serialized.
 fn api_message(message: &Message) -> Result<Value, AgentError> {
-    let mut value = serde_json::to_value(message)?;
-    if let Value::Object(map) = &mut value {
-        map.remove("extra");
+    let mut map = Map::new();
+    map.insert("role".to_owned(), serde_json::to_value(message.role)?);
+    map.insert("content".to_owned(), Value::String(message.content.clone()));
+    for (key, value) in message.provider_fields() {
+        map.insert(key.clone(), value.clone());
     }
-    Ok(value)
+    Ok(Value::Object(map))
 }
 
 impl<B: ChatBackend> Model for TextbasedModel<B> {
@@ -136,8 +139,9 @@ impl<B: ChatBackend> Model for TextbasedModel<B> {
             params: self.params.clone(),
         };
         let backend = &self.backend;
+        // An invalid completion is retried inside the same budget, before any billing.
         let response = retry(self.attempts, self.clock.as_ref(), || {
-            backend.complete(&request)
+            backend.complete(&request).and_then(ChatResponse::validated)
         })
         .map_err(ModelError::Backend)?;
         let cost = self.cost(&response)?;
@@ -160,7 +164,14 @@ impl<B: ChatBackend> Model for TextbasedModel<B> {
             Err(other) => return Err(other),
         };
         let mut message = response.message().cloned().unwrap_or_default();
+        // LiteLLM's `Message` defaults the role to `assistant`.
+        message
+            .entry("role")
+            .or_insert_with(|| Value::String("assistant".to_owned()));
         message.insert("content".to_owned(), Value::String(content.to_owned()));
+        let timestamp = serde_json::Number::from_f64(self.clock.now()).ok_or_else(|| {
+            AgentError::Internal("the clock returned a non-finite time".to_owned())
+        })?;
         let mut extra = Map::new();
         extra.insert(
             "actions".to_owned(),
@@ -168,7 +179,7 @@ impl<B: ChatBackend> Model for TextbasedModel<B> {
         );
         extra.insert("response".to_owned(), response.raw().clone());
         extra.insert("cost".to_owned(), json!(cost));
-        extra.insert("timestamp".to_owned(), json!(self.clock.now()));
+        extra.insert("timestamp".to_owned(), Value::Number(timestamp));
         message.insert("extra".to_owned(), Value::Object(extra));
         serde_json::from_value(Value::Object(message)).map_err(|e| {
             AgentError::Internal(format!("the provider message is not a valid message: {e}")).into()

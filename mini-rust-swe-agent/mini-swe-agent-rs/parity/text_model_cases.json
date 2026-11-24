@@ -15,7 +15,26 @@
     },
     {
       "role": "user",
-      "content": "List the files."
+      "content": "List the files.",
+      "extra": {
+        "note": "not sent"
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: earlier turn",
+      "refusal": null,
+      "extra": {
+        "cost": 1.0,
+        "actions": []
+      }
+    },
+    {
+      "role": "user",
+      "content": "<returncode>0</returncode>",
+      "extra": {
+        "returncode": 0
+      }
     }
   ],
   "cases": [
