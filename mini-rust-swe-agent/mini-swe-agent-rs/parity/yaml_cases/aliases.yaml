@@ -1,0 +1,8 @@
+base: &base
+  timeout: 30
+  env:
+    PAGER: cat
+derived:
+  <<: *base
+  timeout: 60
+again: *base

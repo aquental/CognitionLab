@@ -1,0 +1,6 @@
+{
+  "literal": "line one\n  indented line\nline three\n",
+  "strip": "no trailing newline",
+  "keep": "two trailing newlines\n\n",
+  "folded": "folded text\n"
+}

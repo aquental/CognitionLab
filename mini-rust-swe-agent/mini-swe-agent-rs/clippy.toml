@@ -1,0 +1,6 @@
+# unwrap/expect/panic/indexing are denied in Cargo.toml [lints] and allowed only in test code.
+# These settings apply where cfg(test) is set; tests/bdd.rs (harness = false) does not get them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

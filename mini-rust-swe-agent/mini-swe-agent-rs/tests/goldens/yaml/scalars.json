@@ -1,0 +1,15 @@
+{
+  "cost_limit": 3.0,
+  "zero": 0.0,
+  "int": 30,
+  "neg": -1,
+  "float": 2.5,
+  "quoted_off": "off",
+  "quoted_yes": "yes",
+  "true_value": true,
+  "false_value": false,
+  "null_value": null,
+  "tilde": null,
+  "empty_value": null,
+  "string": "plain text"
+}

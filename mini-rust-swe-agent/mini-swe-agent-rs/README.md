@@ -1,0 +1,63 @@
+# mini-swe-agent-rs
+
+A Rust port of the [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) harness: text-based actions,
+bash only, a linear message history. The plan is [spec/migration-plan.md](spec/migration-plan.md); the Python
+reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edited.
+
+## Status
+
+| Phase | State | Pull request |
+|---|---|---|
+| P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
+| P1–P7 | Not started | — |
+
+Parity with Python is **not** proven yet; that is phase P6.
+
+## Commands
+
+Run inside this directory. The toolchain is pinned in `rust-toolchain.toml` (1.99.1).
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo deny check advisories
+```
+
+**Linux gate (Rust-only).** It mounts only this crate, so the check that `config/` is identical to the reference
+is skipped on purpose through `MSWEA_RS_NO_REFERENCE=1`:
+
+```bash
+docker run --rm -e MSWEA_RS_NO_REFERENCE=1 -e CARGO_TARGET_DIR=/tmp/target -v "$PWD":/src -w /src rust:1.99.1 \
+  sh -c 'rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked'
+```
+
+**YAML goldens.** `tests/goldens/yaml/*.json` are PyYAML `safe_load` dumps of `config/*.yaml` and
+`parity/yaml_cases/*.yaml`. Regenerate them only on purpose, from the reference environment:
+
+```bash
+uv run --frozen --project ../mini-swe-agent python parity/yaml_dump.py
+```
+
+## Evidence (P0, 2026-11-24)
+
+| Check | Result |
+|---|---|
+| Python baseline: `uv run --frozen pytest tests/agents/test_default.py tests/environments/test_local.py tests/config/test_init.py tests/utils/test_serialize.py tests/run/test_local.py` in `../mini-swe-agent`, with `MSWEA_SILENT_STARTUP=1` and a temporary `MSWEA_GLOBAL_CONFIG_DIR` | 124 passed (uv 0.13.9, Python 3.15.2, macOS 27.2.1) |
+| `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` on macOS | Pass |
+| Rust-only Linux gate (`rust:1.99.1` image) | Pass |
+| `cargo deny check advisories` | No advisories |
+| Reference provenance (plan §1.0) | Text path identical to upstream tag `v2.4.6` (commit `a83fcae`) |
+
+## Design notes
+
+- **Lints.** `unsafe_code` is forbidden; `unwrap`, `expect`, `panic!`, indexing, `todo!` and `unimplemented!` are
+  denied for every target in `Cargo.toml`. `clippy.toml` allows them in `#[test]` functions. Integration-test
+  files add one crate-level `#![allow(...)]` for their helpers, since clippy's test exemption covers only
+  `#[test]` functions.
+- **YAML (D5).** `serde-saphyr` 2.2.0 with `strict_booleans` (YAML 1.2: `yes`/`no`/`on`/`off` stay strings, a
+  documented divergence from PyYAML) and last-wins duplicate keys (as PyYAML). Its parser family adds a `\n` to a
+  block scalar that ends the file without a final newline, which the shipped `default.yaml` does; `src/yaml.rs`
+  removes it, and the `eof_*` goldens pin PyYAML's result. `yaml-rust2` and `saphyr` behave the same, so the
+  fallback would not help.
+- **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

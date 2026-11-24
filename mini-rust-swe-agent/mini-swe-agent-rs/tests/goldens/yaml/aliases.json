@@ -1,0 +1,20 @@
+{
+  "base": {
+    "timeout": 30,
+    "env": {
+      "PAGER": "cat"
+    }
+  },
+  "derived": {
+    "timeout": 60,
+    "env": {
+      "PAGER": "cat"
+    }
+  },
+  "again": {
+    "timeout": 30,
+    "env": {
+      "PAGER": "cat"
+    }
+  }
+}
