@@ -175,6 +175,16 @@ pub enum ModelError {
         /// Its message.
         message: String,
     },
+    /// The provider call failed after its retries, or with an error that is never retried.
+    #[error(transparent)]
+    Backend(#[from] crate::model::openai_compat::BackendError),
+    /// The cost could not be computed and `cost_tracking` is not `ignore_errors` (Python
+    /// raises `RuntimeError`).
+    #[error("{0}")]
+    CostTracking(String),
+    /// Invalid model settings (`model_kwargs`, the regex, a template, the registry file).
+    #[error("invalid model settings: {0}")]
+    Settings(String),
 }
 
 impl ModelError {
@@ -184,6 +194,9 @@ impl ModelError {
             ModelError::OutputsExhausted => "OutputsExhausted",
             ModelError::GlobalLimitExceeded { .. } => "GlobalLimitExceeded",
             ModelError::Injected { kind, .. } => kind,
+            ModelError::Backend(error) => error.exit_status(),
+            ModelError::CostTracking(_) => "RuntimeError",
+            ModelError::Settings(_) => "ConfigError",
         }
     }
 }

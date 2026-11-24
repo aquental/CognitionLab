@@ -7,7 +7,6 @@
 //! 0 when the run ends with an exit message (any status), 1 for a fatal or config error (after
 //! the trajectory was saved, when there is one), 2 for usage errors.
 
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,13 +15,17 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use clap::Parser;
 use clap::builder::TypedValueParser as _;
-use mini_swe_agent_rs::agent::{Agent, DefaultAgent};
+use mini_swe_agent_rs::agent::{Agent, AgentConfig, DefaultAgent};
 use mini_swe_agent_rs::clock::{Clock, SystemClock};
 use mini_swe_agent_rs::config::{self, ModelChoice, Overrides};
 use mini_swe_agent_rs::environment::local::LocalEnvironment;
 use mini_swe_agent_rs::host_env::HostEnv;
+use mini_swe_agent_rs::message::ExitInfo;
+use mini_swe_agent_rs::model::Model;
 use mini_swe_agent_rs::model::deterministic::DeterministicModel;
+use mini_swe_agent_rs::model::openai_compat::{OpenAiCompatBackend, Settings};
 use mini_swe_agent_rs::model::stats::GlobalModelStats;
+use mini_swe_agent_rs::model::textbased::TextbasedModel;
 use serde_json::Map;
 
 /// Run mini-swe-agent-rs in your local environment.
@@ -32,7 +35,7 @@ struct Cli {
     /// Model to use.
     #[arg(short = 'm', long = "model")]
     model: Option<String>,
-    /// Model class: `deterministic` (the text-based model arrives in P8).
+    /// Model class: `textbased` (the default; OpenAI-compatible endpoint) or `deterministic`.
     #[arg(long = "model-class")]
     model_class: Option<String>,
     /// Agent class: only `default`.
@@ -75,19 +78,6 @@ fn say(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
-/// `MSWEA_GLOBAL_CONFIG_DIR`, else the platform config dir (`platformdirs.user_config_dir`).
-fn global_config_dir(host: &HostEnv) -> PathBuf {
-    match host
-        .get("MSWEA_GLOBAL_CONFIG_DIR")
-        .filter(|dir| !dir.is_empty())
-    {
-        Some(dir) => PathBuf::from(dir),
-        None => dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("mini-swe-agent"),
-    }
-}
-
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -114,7 +104,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<()> {
     let mut host = HostEnv::from_vars(std::env::vars_os());
-    let config_dir = global_config_dir(&host);
+    let config_dir = config::global_config_dir(&host);
     std::fs::create_dir_all(&config_dir)
         .with_context(|| format!("creating {}", config_dir.display()))?;
     let env_file = config_dir.join(".env");
@@ -126,14 +116,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             env_file.display()
         ));
     }
-    if env_file.is_file() {
-        // `load_dotenv` reads the whole file first (the last assignment of a name wins), then
-        // skips the names the process already has.
-        let pairs: BTreeMap<String, String> = dotenvy::from_path_iter(&env_file)
-            .and_then(|iter| iter.collect())
-            .with_context(|| format!("reading {}", env_file.display()))?;
-        host.overlay_missing(pairs);
-    }
+    host.overlay_dotenv(&env_file)
+        .with_context(|| format!("reading {}", env_file.display()))?;
     let host = Arc::new(host);
     let cwd = std::env::current_dir().context("current directory")?;
 
@@ -183,11 +167,17 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let env = LocalEnvironment::new(env_config, host.clone());
     let output_path = agent_config.output_path.clone();
+    // One generic run per model type (plan §3.3: static dispatch).
     let result = match model_choice {
         ModelChoice::Deterministic(model_config) => {
             let model = DeterministicModel::new(model_config, stats, clock.clone())?;
-            let mut agent = DefaultAgent::new(agent_config, model, env, clock)?;
-            agent.run(&task, Map::new())?
+            run_agent(agent_config, model, env, clock, &task)?
+        }
+        ModelChoice::Textbased(model_config) => {
+            let settings = Settings::from_model_kwargs(&model_config.model_kwargs, &host)?;
+            let backend = OpenAiCompatBackend::new(settings.transport);
+            let model = TextbasedModel::new(model_config, backend, stats, clock.clone(), &host)?;
+            run_agent(agent_config, model, env, clock, &task)?
         }
     };
     // Python prints this only after `run` returned.
@@ -196,4 +186,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     }
     say(&format!("Exit status: {}", result.exit_status));
     Ok(())
+}
+
+fn run_agent<M: Model>(
+    config: AgentConfig,
+    model: M,
+    env: LocalEnvironment,
+    clock: Arc<dyn Clock>,
+    task: &str,
+) -> anyhow::Result<ExitInfo> {
+    let mut agent = DefaultAgent::new(config, model, env, clock)?;
+    Ok(agent.run(task, Map::new())?)
 }

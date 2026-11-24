@@ -31,6 +31,19 @@ impl HostEnv {
             .and_then(|value| value.to_str())
     }
 
+    /// Overlays a `.env` file as `load_dotenv` does: the whole file is read first (the last
+    /// assignment of a name wins), then the names already set are skipped. A missing file is
+    /// not an error.
+    pub fn overlay_dotenv(&mut self, path: &std::path::Path) -> Result<(), dotenvy::Error> {
+        if !path.is_file() {
+            return Ok(());
+        }
+        let pairs: std::collections::BTreeMap<String, String> =
+            dotenvy::from_path_iter(path).and_then(|iter| iter.collect())?;
+        self.overlay_missing(pairs);
+        Ok(())
+    }
+
     /// Adds the pairs whose names are not set yet, as `load_dotenv` does without `override`.
     pub fn overlay_missing<I: IntoIterator<Item = (String, String)>>(&mut self, pairs: I) {
         for (name, value) in pairs {

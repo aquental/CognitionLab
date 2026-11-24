@@ -1,0 +1,218 @@
+{
+  "description": "Raw-response differential (plan §3.15 item 4, P8): Python's LitellmTextbasedModel with litellm.completion patched, against Rust's TextbasedModel with a canned backend.",
+  "registry": {
+    "test-model": {
+      "input_cost_per_token": 0.001,
+      "output_cost_per_token": 0.002,
+      "litellm_provider": "openai",
+      "mode": "chat"
+    }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "List the files.",
+      "extra": {
+        "note": "not sent"
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: earlier turn",
+      "refusal": null,
+      "extra": {
+        "cost": 1.0,
+        "actions": []
+      }
+    },
+    {
+      "role": "user",
+      "content": "<returncode>0</returncode>",
+      "extra": {
+        "returncode": 0
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "valid",
+      "model_name": "test-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": "THOUGHT: go.\n\n```mswea_bash_command\nls -la\n```"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "zero_blocks",
+      "model_name": "test-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": "I will think first."
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "two_blocks",
+      "model_name": "test-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": "```mswea_bash_command\nls\n```\n```mswea_bash_command\npwd\n```"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "content_null",
+      "model_name": "test-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": null
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "finish_length",
+      "model_name": "test-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "length",
+            "message": {
+              "role": "assistant",
+              "content": "THOUGHT: the answer was cut"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "ignore_errors_missing_price",
+      "model_name": "unpriced-model",
+      "cost_tracking": "ignore_errors",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "unpriced-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": "THOUGHT: go.\n\n```mswea_bash_command\npwd\n```"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    },
+    {
+      "id": "missing_price",
+      "model_name": "unpriced-model",
+      "response": {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "unpriced-model",
+        "choices": [
+          {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+              "role": "assistant",
+              "content": "THOUGHT: go.\n\n```mswea_bash_command\npwd\n```"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5,
+          "total_tokens": 15
+        }
+      }
+    }
+  ]
+}
