@@ -1,0 +1,34 @@
+{
+  "id": "local_traj_seed",
+  "kind": "agent",
+  "description": "The two replies of the upstream local.traj.json fixture: echo, then submit",
+  "task": "Blah blah blah",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "Here be some dummy command:\n\n```mswea_bash_command\necho 'hello world'\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo 'hello world'"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "OK, now let me end this run.\n\n```mswea_bash_command\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 2
+  }
+}

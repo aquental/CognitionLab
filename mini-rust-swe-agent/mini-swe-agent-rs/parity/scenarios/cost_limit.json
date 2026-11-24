@@ -1,0 +1,57 @@
+{
+  "id": "cost_limit",
+  "kind": "agent",
+  "description": "Cost exactly at the limit stops the run before the next query",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n1\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo one"
+          }
+        ],
+        "cost": 1.0
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n2\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo two"
+          }
+        ],
+        "cost": 1.0
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n3\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo three"
+          }
+        ],
+        "cost": 1.0
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "LimitsExceeded",
+    "queries": 2
+  },
+  "config": {
+    "agent": {
+      "cost_limit": 2.0
+    },
+    "model": {
+      "cost_per_call": 1.0
+    }
+  },
+  "allow_leftover": true
+}

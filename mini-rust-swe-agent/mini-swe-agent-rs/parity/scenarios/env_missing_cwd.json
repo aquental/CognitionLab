@@ -1,0 +1,11 @@
+{
+  "id": "env_missing_cwd",
+  "kind": "environment",
+  "description": "A missing cwd is a returncode -1 output with Python's error text",
+  "commands": [
+    "echo hi"
+  ],
+  "config": {
+    "cwd": "/nonexistent/mswea-parity-dir"
+  }
+}

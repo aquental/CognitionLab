@@ -1,0 +1,11 @@
+{
+  "id": "env_timeout_background_child",
+  "kind": "environment",
+  "description": "A background child holding the pipe is killed at the deadline; partial output kept",
+  "commands": [
+    "echo hi; sleep 30 &"
+  ],
+  "config": {
+    "timeout": 1
+  }
+}

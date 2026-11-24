@@ -1,0 +1,40 @@
+{
+  "id": "step_limit",
+  "kind": "agent",
+  "description": "The step limit is checked before the next query",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n1\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo one"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n2\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo two"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "LimitsExceeded",
+    "queries": 1
+  },
+  "config": {
+    "agent": {
+      "step_limit": 1
+    }
+  },
+  "allow_leftover": true
+}

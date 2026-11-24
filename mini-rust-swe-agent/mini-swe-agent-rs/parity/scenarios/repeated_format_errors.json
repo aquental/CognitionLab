@@ -1,0 +1,90 @@
+{
+  "id": "repeated_format_errors",
+  "kind": "agent",
+  "description": "Three format errors in a row end the run with RepeatedFormatError",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e1",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e2",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e3",
+                  "extra": {
+                    "interrupt_type": "FormatError"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nnever\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo never"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "RepeatedFormatError",
+    "queries": 3
+  },
+  "allow_leftover": true
+}

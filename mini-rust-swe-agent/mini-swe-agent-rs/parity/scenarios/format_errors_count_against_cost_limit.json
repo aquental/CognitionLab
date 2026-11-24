@@ -1,0 +1,100 @@
+{
+  "id": "format_errors_count_against_cost_limit",
+  "kind": "agent",
+  "description": "max_consecutive_format_errors 0: billed format errors reach the cost limit",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e1",
+                  "extra": {
+                    "interrupt_type": "FormatError",
+                    "cost": 1.0
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e2",
+                  "extra": {
+                    "interrupt_type": "FormatError",
+                    "cost": 1.0
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "no block",
+      "extra": {
+        "actions": [
+          {
+            "raise": {
+              "kind": "FormatError",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "e3",
+                  "extra": {
+                    "interrupt_type": "FormatError",
+                    "cost": 1.0
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nnever\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo never"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "LimitsExceeded",
+    "queries": 3
+  },
+  "config": {
+    "agent": {
+      "max_consecutive_format_errors": 0,
+      "cost_limit": 2.5,
+      "step_limit": 8
+    }
+  },
+  "allow_leftover": true
+}

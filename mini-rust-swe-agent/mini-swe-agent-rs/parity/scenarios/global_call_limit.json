@@ -1,0 +1,53 @@
+{
+  "id": "global_call_limit",
+  "kind": "agent",
+  "description": "MSWEA_GLOBAL_CALL_LIMIT=2 fails on the second call (RuntimeError in Python)",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n1\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo one"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n2\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo two"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\n3\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo three"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "GlobalLimitExceeded",
+    "queries": 2,
+    "fatal": true
+  },
+  "host_env": {
+    "MSWEA_GLOBAL_CALL_LIMIT": "2"
+  },
+  "exit_status_map": {
+    "RuntimeError": "GlobalLimitExceeded"
+  },
+  "allow_leftover": true
+}

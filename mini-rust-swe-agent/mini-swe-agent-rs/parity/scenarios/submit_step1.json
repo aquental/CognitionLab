@@ -1,0 +1,23 @@
+{
+  "id": "submit_step1",
+  "kind": "agent",
+  "description": "Submit on the first step, with a multi-line submission",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nsubmit\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\necho line1\necho line2"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 1
+  }
+}

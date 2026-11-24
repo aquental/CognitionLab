@@ -1,0 +1,34 @@
+{
+  "id": "signal_exit",
+  "kind": "agent",
+  "description": "A command killed by a signal reports -9",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nk\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "kill -9 $$"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 2
+  }
+}

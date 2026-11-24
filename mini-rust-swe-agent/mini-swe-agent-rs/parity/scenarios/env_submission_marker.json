@@ -1,0 +1,9 @@
+{
+  "id": "env_submission_marker",
+  "kind": "environment",
+  "description": "The submission marker after leading blank lines; a failing command never submits",
+  "commands": [
+    "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT; exit 3",
+    "printf '\\n  COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\\nfinal answer\\n'"
+  ]
+}

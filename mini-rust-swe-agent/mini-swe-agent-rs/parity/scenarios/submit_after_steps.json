@@ -1,0 +1,59 @@
+{
+  "id": "submit_after_steps",
+  "kind": "agent",
+  "description": "Three commands that write and read files, then submit",
+  "task": "Fix the bug.",
+  "outputs": [
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nw\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "printf 'alpha\\n' > notes.txt"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\na\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "printf 'beta\\n' >> notes.txt && cat notes.txt"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\nls\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "ls"
+          }
+        ]
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "THOUGHT: run it.\n\n```mswea_bash_command\ns\n```",
+      "extra": {
+        "actions": [
+          {
+            "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\ncat notes.txt"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "exit_status": "Submitted",
+    "queries": 4
+  },
+  "files": {
+    "README.md": "# demo\n"
+  }
+}
