@@ -16,6 +16,7 @@
     clippy::indexing_slicing
 )]
 
+pub mod cli;
 pub mod compare;
 
 use std::cell::RefCell;
@@ -155,6 +156,11 @@ impl Harness {
         })
     }
 
+    /// The reference virtualenv's `bin` directory (it holds the `mini` entry point).
+    pub fn python_bin_dir(&self) -> PathBuf {
+        python(&self.reference).parent().unwrap().to_path_buf()
+    }
+
     /// Runs the given scenarios (all when empty) through the Python reference, under an outer
     /// deadline, and checks that the imported `minisweagent` is the reference's own package.
     pub fn run_python(&self, ids: &[&str]) -> Map<String, Value> {
@@ -229,7 +235,7 @@ impl Harness {
         } else {
             run_environment(scenario, &workspace, host)
         };
-        result["artifacts"] = snapshot(&workspace);
+        result["artifacts"] = snapshot_dir(&workspace);
         fs::remove_dir_all(&workspace).unwrap();
         result
     }
@@ -250,7 +256,7 @@ fn fresh_workspace(base: &Path, scenario: &Value) -> PathBuf {
 }
 
 /// Every entry under the workspace: directories (empty ones too), symlinks and file bytes.
-pub fn snapshot(workspace: &Path) -> Value {
+pub fn snapshot_dir(workspace: &Path) -> Value {
     fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, Value>) {
         let mut entries: Vec<PathBuf> = fs::read_dir(dir)
             .unwrap()

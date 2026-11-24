@@ -22,6 +22,11 @@ minijinja = { version = "=3.1.0", default-features = false, features = ["builtin
 nix = { version = "=0.31.3", default-features = false, features = ["signal", "process", "poll", "fs", "feature"] }
 regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode", "perf"] }
 tempfile = "=3.27.0"
+clap = { version = "=4.6.9", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+dotenvy = "=0.15.7"
+dirs = "=7.0.0"
+# Top-level error report of the binary only (plan §3.5).
+anyhow = "=1.0.105"
 regex-syntax = { version = "=0.8.12", default-features = false, features = ["std", "unicode"] }
 
 [lints.rust]

@@ -15,9 +15,9 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
 | P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
 | P6 Parity and BDD | Done: 27 JSON scenarios (21 agent, 6 environment) give equal normalized results through `parity/run_python.py` and the Rust library (`tests/parity.rs`); comparator mutation tests (`tests/comparator.rs`); Cucumber features (`tests/bdd.rs`) with one Gherkin scenario per parity scenario and a manifest check; full-suite Linux gate (`parity/Dockerfile`) | stacked on P5 |
-| P7 | Not started | — |
+| P7 Config and CLI | Done: `src/config.rs` (key=value and file specs, lookup and suffix rules, embedded built-ins, flags layer, class registries, `TextbasedModelConfig` with env-backed defaults) and `src/main.rs` (clap, global config dir and `.env` overlay, banner, task from `-t`/`run.task`/stdin, exit codes 0/1/2); typed dumps of both shipped YAML files equal pydantic's; Python `mini` and the Rust CLI write equal trajectories for 4 cases; `cli.feature`. **M1 reached** | stacked on P6 |
 
-Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6); the CLI comes in P7.
+Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6) and at the CLI level for the P7 gate cases (`tests/support/cli.rs`). The text-based model and its HTTP adapter are M2 (P8-P9).
 
 ## Commands
 
@@ -99,6 +99,33 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | Rust-only Linux gate | Pass; `parity` and `bdd` skipped on purpose |
 | `cargo deny check advisories` | No advisories, after one recorded exception in `deny.toml`: `humantime` (unmaintained, dev-only through `cucumber`, D9) |
 
+## Usage (M1)
+
+The text-based model arrives in P8; until then the CLI runs the deterministic model:
+
+```bash
+cargo run --locked -- --model-class deterministic -m deterministic -c mini_textbased \
+  -c 'model.outputs=[{"role":"assistant","content":"x","extra":{"actions":[{"command":"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}]}}]' \
+  -t "Say hello" -o /tmp/traj.json
+```
+
+Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a fatal or
+config error (the trajectory is saved first when the run had started), 2 for usage errors and for the
+interactive-only flags `-y/--yolo` and `--exit-immediately` (D7). `--help` and `--version` exit 0. "Saved trajectory"
+is printed only after a successful run, as Python prints it after `run` returns.
+
+**Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
+shipped YAML files (`parity/config_dumps.py`).
+
+## Evidence (P7, 2026-11-24)
+
+| Check | Result |
+|---|---|
+| `cargo test --locked` on macOS with the reference | Pass; BDD 3 features, 36 scenarios, 163 steps; the 4 CLI gate cases equal |
+| Full-suite Linux gate (`parity/Dockerfile`), including the CLI gate against Python `mini` | Pass (exit 0) |
+| Rust-only Linux gate | Pass |
+| `cargo deny check advisories` | No advisories (with the recorded `deny.toml` exception) |
+
 ## Design notes
 
 - **Lints.** `unsafe_code` is forbidden; `unwrap`, `expect`, `panic!`, indexing, `todo!`, `unimplemented!` and
@@ -167,4 +194,16 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   scenario kind must be present; an integer equals a float that is exactly that integer, and integers are never
   compared through `f64`. A scenario also fails on unexpected leftover or missing scripted outputs, on a fatal or
   saved outcome other than expected, and when the BDD manifest does not show each scenario compared exactly once.
+- **Config and CLI (P7).** Divergences (plan §2.4): the default config is the embedded `mini_textbased.yaml`
+  (Python's is the tool-calling `mini.yaml`); `--agent-class` accepts only `default` and an absent class means
+  `default` (Python's CLI default is the interactive agent); `--environment-class` accepts only `local`; with no
+  `-t` and no `run.task`, the task is read from stdin to EOF instead of a prompt; the setup wizard never runs; a
+  `key=value` value that is not JSON for `serde_json` (`NaN`, `Infinity`) stays a string. Messages go to stderr.
+  A present `run.task` must be a string (`""` included): Python renders any value, this port refuses other types
+  instead of reading stdin. A `key=value` path deeper than 128 segments is refused (the merge recurses through
+  it). `-l` must be finite. The banner is decided before `.env` is read, as in Python (the plan listed it last).
+  Sections and classes follow the Python factories: `agent`/`environment` must be mappings and a present class
+  must be a non-empty string; a `null` `model` section is `{}` and a falsy `model_class` is the default; a truthy
+  non-string `model_name` is an error, a falsy one falls back to `MSWEA_MODEL_NAME`. The file lookup drops `.`
+  components as `pathlib` does and keeps `..`. `-o ""` is "not given". `environment.env` keeps its key order.
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).
