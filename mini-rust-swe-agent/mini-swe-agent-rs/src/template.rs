@@ -32,6 +32,12 @@ pub enum TemplateError {
     /// No template has this name.
     #[error("unknown template `{0}`")]
     Unknown(String),
+    /// The context is not a JSON object (Python's `render(**context)` needs a mapping).
+    #[error("template context must be an object, found {found}")]
+    ContextNotObject {
+        /// The JSON type found.
+        found: &'static str,
+    },
 }
 
 /// A set of templates compiled once and rendered many times.
@@ -79,6 +85,17 @@ impl Templates {
 
     /// Renders a stored template with a JSON context.
     pub fn render(&self, name: &str, context: &Value) -> Result<String, TemplateError> {
+        let found = match context {
+            Value::Object(_) => None,
+            Value::Null => Some("null"),
+            Value::Bool(_) => Some("a boolean"),
+            Value::Number(_) => Some("a number"),
+            Value::String(_) => Some("a string"),
+            Value::Array(_) => Some("an array"),
+        };
+        if let Some(found) = found {
+            return Err(TemplateError::ContextNotObject { found });
+        }
         let template = self
             .env
             .get_template(name)
@@ -118,7 +135,7 @@ fn python_formatter(out: &mut Output, state: &mut State, value: &JinjaValue) -> 
 
 /// Python's `repr(float)`: the shortest round-trip digits, fixed notation for exponents in
 /// `-4..16`, scientific notation (`1e+20`, `1e-05`) otherwise.
-pub fn python_float_repr(number: f64) -> String {
+fn python_float_repr(number: f64) -> String {
     if number.is_nan() {
         return "nan".to_owned();
     }
@@ -178,6 +195,10 @@ mod tests {
             (-2.5, "-2.5"),
             (100.0, "100.0"),
             (0.30000000000000004, "0.30000000000000004"),
+            (0.0, "0.0"),
+            (1e-4, "0.0001"),
+            (9.9999e-5, "9.9999e-05"),
+            (-1e-5, "-1e-05"),
             (f64::INFINITY, "inf"),
             (f64::NAN, "nan"),
         ] {
