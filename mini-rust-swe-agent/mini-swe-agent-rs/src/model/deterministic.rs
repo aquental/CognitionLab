@@ -77,9 +77,10 @@ impl DeterministicModel {
 
     /// `_process_test_actions` (`test_models.py:75-87`): `Ok(true)` when the output was a
     /// `/sleep` or `/warning` step and the next output should be used.
-    fn process_test_actions(&self, actions: Vec<Action>) -> Result<bool, StepError> {
-        for action in actions {
-            match action {
+    /// Actions are decoded one at a time, so a `raise` wins over a later malformed entry.
+    fn process_test_actions(&self, output: &Message) -> Result<bool, StepError> {
+        for action in output.action_iter() {
+            match action? {
                 Action::Raise(RaiseSpec::Interrupt(interrupt)) => {
                     return Err(StepError::Interrupt(interrupt));
                 }
@@ -141,8 +142,7 @@ impl Model for DeterministicModel {
                 .get(index)
                 .ok_or(ModelError::OutputsExhausted)?;
             // Python iterates `extra.actions` here, so malformed actions fail inside the model.
-            let actions = output.actions()?;
-            if self.process_test_actions(actions)? {
+            if self.process_test_actions(output)? {
                 continue;
             }
             self.stats.add(self.config.cost_per_call)?;

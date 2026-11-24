@@ -2,14 +2,6 @@
 //! model cases and the two format-error fakes) and `tests/run/test_save.py`, plus the boundary,
 //! reuse, fatal-path and save cases of plan §3.15 item 1.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -28,6 +20,8 @@ use serde_json::{Map, Value, json};
 
 const SUBMIT: &str = "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'";
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 fn default_agent_config() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/default.yaml");
     let config =
@@ -35,6 +29,8 @@ fn default_agent_config() -> Value {
     config["agent"].clone()
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 fn agent_config(overrides: Value) -> AgentConfig {
     let mut config = default_agent_config();
     for (key, value) in overrides.as_object().unwrap() {
@@ -53,6 +49,8 @@ fn stats() -> Arc<GlobalModelStats> {
     Arc::new(GlobalModelStats::new(0.0, 0))
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn model(
     outputs: Vec<Value>,
     stats: &Arc<GlobalModelStats>,
@@ -77,6 +75,8 @@ fn system_clock() -> Arc<dyn Clock> {
     Arc::new(SystemClock)
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn agent(
     outputs: Vec<Value>,
     overrides: Value,
@@ -457,12 +457,16 @@ struct FlakyModel {
     index: usize,
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn format_error(extra: Value) -> StepError {
     let message = Message::new(Role::User, "No tool calls found in the response.")
         .with_extra(extra.as_object().unwrap().clone());
     StepError::Interrupt(Interrupt::new(InterruptKind::FormatError, message, vec![]))
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 impl Model for FlakyModel {
     type Config = FakeConfig;
     fn config(&self) -> &FakeConfig {
@@ -968,4 +972,113 @@ fn unknown_agent_keys_are_ignored() {
         serde_json::from_value::<AgentConfig>(json!({"system_template": "s"})).is_err(),
         "instance_template is required"
     );
+}
+
+// ---- P1 review fixes: in-order actions and invalid costs ----------------------------------
+
+#[test]
+fn scripted_raise_wins_over_a_later_malformed_action() {
+    // Python's _process_test_actions raises at the first `raise` before it sees entry 1.
+    let outputs = vec![
+        json!({"role": "assistant", "content": "x", "extra": {"actions": [
+            {"raise": {"kind": "FormatError", "messages": [{"role": "user", "content": "scripted"}]}},
+            5
+        ]}}),
+        output("done", &[&submit("ok")]),
+    ];
+    let mut agent = agent(outputs, json!({}));
+    assert_eq!(
+        agent.run("order", Map::new()).unwrap().exit_status,
+        "Submitted"
+    );
+    assert!(agent.messages().iter().any(|m| m.content == "scripted"));
+}
+
+#[test]
+fn submitted_wins_over_a_later_malformed_action() {
+    // DefaultAgent runs actions in order; Submitted aborts before entry 1 is decoded.
+    let reply = json!({"role": "assistant", "content": "x", "extra": {"actions": [{"command": submit("s")}, 5]}});
+    let model = FlakyModel {
+        config: FakeConfig {
+            model_name: "flaky".into(),
+        },
+        outputs: vec![Some(reply)],
+        index: 0,
+    };
+    let mut agent =
+        DefaultAgent::new(agent_config(json!({})), model, local(30), system_clock()).unwrap();
+    let info = agent.run("order", Map::new()).unwrap();
+    assert_eq!(
+        (info.exit_status.as_str(), info.submission.as_str()),
+        ("Submitted", "s\n")
+    );
+}
+
+#[test]
+fn invalid_cost_is_fatal_before_the_message_is_appended() {
+    // Python: `self.cost += "x"` raises TypeError before add_messages.
+    let mut agent = agent(
+        vec![json!({"role": "assistant", "content": "x", "extra": {"actions": [], "cost": "x"}})],
+        json!({}),
+    );
+    let error = agent.run("cost", Map::new()).unwrap_err();
+    assert!(matches!(error, AgentError::Cost(_)), "{error:?}");
+    let roles: Vec<Role> = agent.messages().iter().map(|m| m.role).collect();
+    assert_eq!(roles, [Role::System, Role::User, Role::Exit]);
+    assert_eq!(
+        agent.messages()[2].extra_value("exit_status").unwrap(),
+        "InvalidCost"
+    );
+}
+
+/// Raises FormatError whose `extra.cost` is not a number.
+struct BadCostFormatErrorModel {
+    config: FakeConfig,
+}
+
+impl Model for BadCostFormatErrorModel {
+    type Config = FakeConfig;
+    fn config(&self) -> &FakeConfig {
+        &self.config
+    }
+    fn query(&mut self, _messages: &[Message]) -> Result<Message, StepError> {
+        Err(format_error(
+            json!({"interrupt_type": "FormatError", "cost": null}),
+        ))
+    }
+    fn format_observation_messages(
+        &self,
+        _: &Message,
+        _: &[ExecOutput],
+        _: &Value,
+    ) -> Result<Vec<Message>, AgentError> {
+        Ok(vec![])
+    }
+}
+
+#[test]
+fn invalid_format_error_cost_propagates_without_an_exit_message() {
+    // Python raises TypeError inside `except FormatError`, which the sibling `except Exception`
+    // does not catch: no exit message, but `finally` still saves.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("traj.json");
+    let model = BadCostFormatErrorModel {
+        config: FakeConfig {
+            model_name: "bad".into(),
+        },
+    };
+    let mut agent = DefaultAgent::new(
+        agent_config(json!({"output_path": path})),
+        model,
+        local(30),
+        system_clock(),
+    )
+    .unwrap();
+    assert!(matches!(
+        agent.run("cost", Map::new()),
+        Err(AgentError::Cost(_))
+    ));
+    let roles: Vec<Role> = agent.messages().iter().map(|m| m.role).collect();
+    assert_eq!(roles, [Role::System, Role::User]);
+    assert!(path.exists());
 }

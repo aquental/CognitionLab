@@ -188,15 +188,15 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
             && u64::try_from(self.config.step_limit).is_ok_and(|limit| limit <= self.n_calls);
         let over_cost = 0.0 < self.config.cost_limit && self.config.cost_limit <= self.cost;
         if over_steps || over_cost {
-            return Err(limit_interrupt(InterruptKind::LimitsExceeded));
+            return Err(Interrupt::limits_exceeded().into());
         }
         let limit = self.config.wall_time_limit_seconds;
         if 0 < limit && limit <= self.elapsed_seconds() {
-            return Err(limit_interrupt(InterruptKind::TimeExceeded));
+            return Err(Interrupt::time_exceeded().into());
         }
         self.n_calls = self.n_calls.saturating_add(1);
         let message = self.model.query(&self.messages)?;
-        self.cost += message.cost();
+        self.cost += message.cost()?;
         self.messages.push(message);
         Ok(())
     }
@@ -209,10 +209,11 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
                 AgentError::Internal("execute_actions without a message".to_owned()).into(),
             );
         };
-        let actions = message.actions()?;
-        let mut outputs = Vec::with_capacity(actions.len());
-        for action in &actions {
-            outputs.push(self.env.execute(action, None)?);
+        // One action at a time, as Python iterates them: a Submitted interrupt ends the step
+        // before a later entry is even decoded.
+        let mut outputs = Vec::new();
+        for action in message.action_iter() {
+            outputs.push(self.env.execute(&action?, None)?);
         }
         let template_vars = self.template_vars()?;
         let observations =
@@ -229,17 +230,15 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         extra.insert("submission".to_owned(), json!(""));
         extra.insert("exception_str".to_owned(), json!(text));
         extra.insert("traceback".to_owned(), json!(source_chain(error)));
-        let message = self
-            .model
-            .format_message(Role::Exit, text)
-            .with_extra(extra);
+        let message = self.model.format_message(Role::Exit, text, Some(extra));
         self.messages.push(message);
     }
 
     /// A `FormatError`: charge its cost, count it, append its messages, and exit with
-    /// `RepeatedFormatError` once the limit is reached (`default.py:101-116`).
-    fn handle_format_error(&mut self, interrupt: Interrupt) {
-        self.cost += interrupt.head().cost();
+    /// `RepeatedFormatError` once the limit is reached (`default.py:101-116`). An invalid cost
+    /// fails before anything is appended, as Python's `+=` raises inside the `except` block.
+    fn handle_format_error(&mut self, interrupt: Interrupt) -> Result<(), AgentError> {
+        self.cost += interrupt.head().cost()?;
         self.n_consecutive_format_errors = self.n_consecutive_format_errors.saturating_add(1);
         let limit = self.config.max_consecutive_format_errors;
         self.messages.extend(interrupt.into_messages());
@@ -250,6 +249,7 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
                 "",
             ));
         }
+        Ok(())
     }
 
     /// `serialize(*extra_dicts)` (`default.py:159-180`).
@@ -293,10 +293,10 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
         // Both messages are built before either is appended.
         let system = self
             .model
-            .format_message(Role::System, self.render(SYSTEM)?);
+            .format_message(Role::System, self.render(SYSTEM)?, None);
         let instance = self
             .model
-            .format_message(Role::User, self.render(INSTANCE)?);
+            .format_message(Role::User, self.render(INSTANCE)?, None);
         self.messages.extend([system, instance]);
         loop {
             match self.step() {
@@ -304,7 +304,11 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
                 Err(StepError::Interrupt(interrupt))
                     if interrupt.kind() == InterruptKind::FormatError =>
                 {
-                    self.handle_format_error(interrupt);
+                    if let Err(error) = self.handle_format_error(interrupt) {
+                        // Raised inside `except FormatError`: no exit message, but `finally` saves.
+                        self.save_configured()?;
+                        return Err(error);
+                    }
                 }
                 Err(StepError::Interrupt(interrupt)) => {
                     self.messages.extend(interrupt.into_messages())
@@ -337,14 +341,6 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
         }
         Ok(data)
     }
-}
-
-fn limit_interrupt(kind: InterruptKind) -> StepError {
-    StepError::Interrupt(Interrupt::new(
-        kind,
-        Message::exit(kind.name(), kind.name(), ""),
-        Vec::new(),
-    ))
 }
 
 /// The error and its `source()` chain, one per line (Python writes a traceback; plan §2.4).
