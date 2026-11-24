@@ -112,18 +112,53 @@ impl DeterministicModel {
     }
 }
 
-/// `float(text)` then `time.sleep`: a negative, non-finite or unparsable value is an error.
+/// `float(text)` then `time.sleep`, with Python's exception kinds: `ValueError` for text
+/// `float()` refuses, NaN and negative lengths; `OverflowError` for lengths too large to sleep.
 fn parse_sleep(text: &str) -> Result<Duration, ModelError> {
-    let invalid = |message: String| ModelError::Injected {
-        kind: "ValueError".to_owned(),
+    let error = |kind: &str, message: String| ModelError::Injected {
+        kind: kind.to_owned(),
         message,
     };
-    let seconds: f64 = text
-        .trim()
-        .parse()
-        .map_err(|_| invalid(format!("could not convert string to float: '{text}'")))?;
-    Duration::try_from_secs_f64(seconds)
-        .map_err(|_| invalid(format!("invalid sleep length: {seconds}")))
+    let seconds = python_float(text).ok_or_else(|| {
+        error(
+            "ValueError",
+            format!("could not convert string to float: '{text}'"),
+        )
+    })?;
+    if seconds.is_nan() {
+        return Err(error(
+            "ValueError",
+            "Invalid value NaN (not a number)".to_owned(),
+        ));
+    }
+    if seconds < 0.0 {
+        return Err(error(
+            "ValueError",
+            "sleep length must be non-negative".to_owned(),
+        ));
+    }
+    Duration::try_from_secs_f64(seconds).map_err(|_| {
+        error(
+            "OverflowError",
+            "timestamp too large to convert to C _PyTime_t".to_owned(),
+        )
+    })
+}
+
+/// Python's `float(str)`: surrounding whitespace is ignored and `_` may separate digits.
+fn python_float(text: &str) -> Option<f64> {
+    let text = crate::pystr::strip(text);
+    let chars: Vec<char> = text.chars().collect();
+    let separators_ok = chars.iter().enumerate().all(|(i, c)| {
+        *c != '_'
+            || (i > 0
+                && chars.get(i - 1).is_some_and(char::is_ascii_digit)
+                && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+    });
+    if !separators_ok {
+        return None;
+    }
+    text.replace('_', "").parse().ok()
 }
 
 fn log_warning(text: &str) {
@@ -163,6 +198,6 @@ impl Model for DeterministicModel {
         template_vars: &Value,
     ) -> Result<Vec<Message>, AgentError> {
         self.observations
-            .messages(outputs, template_vars, self.clock.now())
+            .messages(outputs, template_vars, self.clock.as_ref())
     }
 }

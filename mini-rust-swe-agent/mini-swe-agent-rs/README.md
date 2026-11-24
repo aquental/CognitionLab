@@ -10,9 +10,9 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 |---|---|---|
 | P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
-| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 44 Jinja2 goldens match byte for byte | stacked on P1 |
+| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | stacked on P1 |
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
-| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 28 parser and 8 observation goldens from Python match | stacked on P3 |
+| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
 | P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
 | P6 Parity and BDD | Done: 25 JSON scenarios (19 agent, 6 environment) give equal normalized results through `parity/run_python.py` and the Rust library (`tests/parity.rs`); comparator mutation tests (`tests/comparator.rs`); Cucumber features (`tests/bdd.rs`) with one Gherkin scenario per parity scenario and a manifest check; full-suite Linux gate (`parity/Dockerfile`) | stacked on P5 |
 | P7 Config and CLI | Done: `src/config.rs` (key=value and file specs, lookup and suffix rules, embedded built-ins, flags layer, class registries, `TextbasedModelConfig` with env-backed defaults) and `src/main.rs` (clap, global config dir and `.env` overlay, banner, task from `-t`/`run.task`/stdin, exit codes 0/1/2); typed dumps of both shipped YAML files equal pydantic's; Python `mini` and the Rust CLI write equal trajectories for 4 cases; `cli.feature`. **M1 reached** | stacked on P6 |
@@ -147,18 +147,36 @@ shipped YAML files (`parity/config_dumps.py`).
 - **`HostEnv`** keeps every entry for child processes, and only the UTF-8 entries for templates.
 - **Templates (P2).** minijinja with `UndefinedBehavior::Strict`, no auto-escaping, and a formatter that prints
   `None`, `True`/`False` and floats the way Python's `str()` does (`1e+20`, `1e-05`, `-0.0`). Dicts and lists
-  still render in minijinja's format; no shipped template prints one.
+  still render in minijinja's format; no shipped template prints one. The formatter applies only to `{{ … }}`
+  output: values turned into strings inside an expression (`~`, `| string`, `| join`) use minijinja's format
+  (`true`, `none`), where Jinja2 gives `True`, `None`. No shipped template does this; it matters only for custom
+  templates. Maps keep their insertion order (`preserve_order`). Templates compile when added, so a syntax error
+  fails at load; an unknown filter fails at the first render, which is when Python builds its `Template` too.
 - **LocalEnvironment (P3).** `src/environment/local.rs`. Divergences from Python (plan §2.4): `/bin/bash`
   instead of `/bin/sh` (D11), an inherited `BASH_ENV` is dropped (bash would source it), stdin is `/dev/null`, a
   process group instead of a new session, `child.kill()` after `killpg` (Python hangs if the shell left its
   group), and a 1 s bounded drain after a kill. Error texts follow CPython (`[Errno 2] No such file or directory:
-  '/x'`, `Command '…' timed out after N seconds`).
+  '/x'`, `Command '…' timed out after N seconds`), with the platform `strerror` text. The module is over the
+  plan's 250-line budget (§2.6), at about 430 lines of code: Python gets the pipe, the deadline, the process-group
+  kill and the OS error texts from `subprocess`; the port writes them out (the `poll` loop, `killpg`, and CPython's
+  error formatting).
+- **Text actions (P4).** `action_regex` is compiled by the `regex` crate after a small rewrite: `\s` and `\S`
+  get Python's whitespace set (with `\x1c`-`\x1f`) and `\Z` becomes `\z`. Patterns whose meaning cannot be kept
+  are refused when the model is built: `$` outside a class (Python's also matches before a final newline), `\S`
+  inside a class, lookaround and backreferences, more than one group, and any pattern that can match the empty
+  string (the engines restart differently after an empty match). `\w`, `\d` and `\b` keep the `regex` crate's
+  Unicode classes (risk R6). The shipped pattern is unaffected.
 - **Agent loop (P5).** `src/agent/default.rs`. `query` appends and charges the assistant message before
   `step` decodes its actions, as Python does. The deterministic model iterates `extra.actions` before charging, so
   malformed actions fail inside the model. Divergences (plan §2.4): `mini_version` is the crate version,
   `traceback` is the error's `source()` chain, the exit status of a fatal error is a stable name (D6, such as
   `OutputsExhausted` for Python's `IndexError`), the agent's templates compile at construction, and the
-  trajectory is written as raw UTF-8 through a temporary file and a rename.
+  trajectory is written as raw UTF-8 through a temporary file and a rename. Without an `output_path`, nothing is
+  serialized after a step (Python builds the dict and drops it). `run` returns the exit message's whole `extra`
+  (`ExitInfo::extra`). `src/agent/default.rs` is over the plan's 250-line budget (§2.6), at about 350 lines of code:
+  Python's `finally` save, its exception-to-exit-message handler and the trajectory writer are spelled out with
+  explicit error paths (save replacing a fatal error, an invalid cost inside the format-error handler, the
+  atomic write).
 - **Parity harness (P6).** `tests/support/` holds the Rust runner, the test-only recording wrappers (history
   passed to each query, actions passed to `execute`) and the comparator; `parity/run_python.py` is the Python
   runner. The Python side uses a thin `DeterministicModel` subclass that turns the JSON `raise` specs into

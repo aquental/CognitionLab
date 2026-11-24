@@ -371,7 +371,8 @@ fn run_agent(scenario: &Value, workspace: &Path, host: Arc<HostEnv>) -> Value {
     )
     .unwrap();
     let (returned, error) = match agent.run(scenario["task"].as_str().unwrap(), Map::new()) {
-        Ok(info) => (serde_json::to_value(info).unwrap(), Value::Null),
+        // Python's `run` returns the exit message's `extra` dict.
+        Ok(info) => (Value::Object(info.extra), Value::Null),
         Err(e) => (Value::Null, json!(e.exit_status())),
     };
     let save_extra: Vec<Value> = scenario["save_extra"]

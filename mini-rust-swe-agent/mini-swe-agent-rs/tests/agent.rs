@@ -1082,3 +1082,179 @@ fn invalid_format_error_cost_propagates_without_an_exit_message() {
     assert_eq!(roles, [Role::System, Role::User]);
     assert!(path.exists());
 }
+
+// ---- Review fixes (P5) -------------------------------------------------------------------------
+
+#[test]
+fn run_returns_the_whole_exit_extra() {
+    // Python returns `self.messages[-1].get("extra", {})`, with any extra keys.
+    let exit = json!({"role": "exit", "content": "done", "extra": {"exit_status": "Submitted", "submission": "done", "artifact": "patch.diff"}});
+    let raise = json!({"role": "assistant", "content": "x", "extra": {"actions": [{"raise": {"kind": "Submitted", "messages": [exit]}}]}});
+    let mut agent = agent(vec![raise], json!({}));
+    let info = agent.run("t", Map::new()).unwrap();
+    assert_eq!(info.exit_status, "Submitted");
+    assert_eq!(info.extra["artifact"], "patch.diff");
+    let last = agent.messages().last().unwrap();
+    assert_eq!(Value::Object(info.extra), json!(last.extra));
+}
+
+#[test]
+fn trajectory_is_saved_after_every_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("traj.json");
+    let cat = format!("cat '{}'", path.display());
+    let mut agent = agent(
+        vec![
+            output("one", &["echo first"]),
+            output("two", &[&cat]),
+            output("done", &[&submit("x")]),
+        ],
+        json!({"output_path": path}),
+    );
+    agent.run("t", Map::new()).unwrap();
+    // Step 2 reads the file that step 1 saved.
+    let observed = observation_text(&agent.messages()[5]);
+    assert!(observed.contains("echo first"), "{observed}");
+}
+
+/// Replaces the output directory with a file, then fails: the save in `finally` must fail too.
+struct BreakingEnv {
+    inner: LocalEnvironment,
+    dir: PathBuf,
+}
+
+impl Environment for BreakingEnv {
+    type Config = LocalEnvironmentConfig;
+    fn config(&self) -> &LocalEnvironmentConfig {
+        self.inner.config()
+    }
+    #[allow(clippy::unwrap_used)]
+    fn execute(&self, _action: &Action, _cwd: Option<&Path>) -> Result<ExecOutput, StepError> {
+        std::fs::remove_dir_all(&self.dir).unwrap();
+        std::fs::write(&self.dir, "not a directory").unwrap();
+        Err(AgentError::Internal("boom".to_owned()).into())
+    }
+    fn template_vars(&self) -> Result<Value, AgentError> {
+        self.inner.template_vars()
+    }
+}
+
+#[test]
+fn save_failure_replaces_a_fatal_error() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("out");
+    std::fs::create_dir(&dir).unwrap();
+    let clock = system_clock();
+    let env = BreakingEnv {
+        inner: local(30),
+        dir: dir.clone(),
+    };
+    let mut agent = DefaultAgent::new(
+        agent_config(json!({"output_path": dir.join("traj.json")})),
+        model(vec![output("one", &["echo hi"])], &stats(), &clock),
+        env,
+        clock,
+    )
+    .unwrap();
+    let error = agent.run("t", Map::new()).unwrap_err();
+    assert!(matches!(error, AgentError::Io { .. }), "{error:?}");
+    assert_eq!(agent.messages().last().unwrap().role, Role::Exit);
+}
+
+#[test]
+fn scripted_fatal_raise_is_the_exit_status() {
+    let raise = json!({"role": "assistant", "content": "x", "extra": {"actions": [{"raise": {"kind": "RuntimeError", "message": "boom"}}]}});
+    let mut agent = agent(vec![raise], json!({}));
+    let error = agent.run("t", Map::new()).unwrap_err();
+    assert!(
+        matches!(&error, AgentError::Model(ModelError::Injected { kind, .. }) if kind == "RuntimeError")
+    );
+    assert_eq!(
+        agent
+            .messages()
+            .last()
+            .unwrap()
+            .extra_value("exit_status")
+            .unwrap(),
+        "RuntimeError"
+    );
+}
+
+/// Runs `/sleep <text>` then a submission on a manual clock; the error kind, or `None`.
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used, clippy::panic)]
+fn sleep_result(text: &str) -> (Option<String>, f64) {
+    let manual = Arc::new(ManualClock::new(0.0));
+    let clock: Arc<dyn Clock> = manual.clone();
+    let sleep = json!({"role": "assistant", "content": "s", "extra": {"actions": [{"command": format!("/sleep {text}")}]}});
+    let mut agent = DefaultAgent::new(
+        agent_config(json!({})),
+        model(
+            vec![sleep, output("done", &[&submit("x")])],
+            &stats(),
+            &clock,
+        ),
+        local(30),
+        clock,
+    )
+    .unwrap();
+    let kind = match agent.run("t", Map::new()) {
+        Ok(_) => None,
+        Err(AgentError::Model(ModelError::Injected { kind, .. })) => Some(kind),
+        Err(e) => panic!("{text}: {e}"),
+    };
+    (kind, manual.now())
+}
+
+#[test]
+fn scripted_sleep_follows_python_float_and_time_sleep() {
+    for (text, seconds) in [
+        ("0.0_1", 0.01),
+        ("1_0", 10.0),
+        (" 2 ", 2.0),
+        ("1e1", 10.0),
+        ("0", 0.0),
+    ] {
+        let (kind, now) = sleep_result(text);
+        assert_eq!(kind, None, "{text}");
+        assert!((now - seconds).abs() < 1e-9, "{text}: {now}");
+    }
+    for (text, kind) in [
+        ("abc", "ValueError"),
+        ("1__0", "ValueError"),
+        ("_1", "ValueError"),
+        ("0x10", "ValueError"),
+        ("-1", "ValueError"),
+        ("nan", "ValueError"),
+        ("inf", "OverflowError"),
+        ("1e309", "OverflowError"),
+    ] {
+        assert_eq!(sleep_result(text).0.as_deref(), Some(kind), "{text}");
+    }
+}
+
+#[test]
+fn cost_equal_to_the_limit_stops_the_run() {
+    let mut agent = agent(
+        vec![output("one", &["echo 1"]), output("two", &["echo 2"])],
+        json!({"cost_limit": 1.0}),
+    );
+    assert_eq!(
+        agent.run("t", Map::new()).unwrap().exit_status,
+        "LimitsExceeded"
+    );
+    assert_eq!(agent.n_calls(), 1);
+}
+
+#[test]
+fn an_empty_output_path_is_an_error() {
+    // Python's `Path("")` is `.`, and writing it fails with IsADirectoryError.
+    let mut agent = agent(
+        vec![output("done", &[&submit("x")])],
+        json!({"output_path": ""}),
+    );
+    assert!(matches!(
+        agent.run("t", Map::new()),
+        Err(AgentError::Io { .. })
+    ));
+}
