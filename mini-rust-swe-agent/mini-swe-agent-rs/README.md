@@ -121,7 +121,9 @@ shipped YAML files (`parity/config_dumps.py`).
 | Check | Result |
 |---|---|
 | `cargo test --locked` on macOS with the reference | Pass; BDD 3 features, 34 scenarios, 151 steps; the 4 CLI gate cases equal |
+| Full-suite Linux gate (`parity/Dockerfile`), including the CLI gate against Python `mini` | Pass (exit 0) |
 | Rust-only Linux gate | Pass |
+| `cargo deny check advisories` | No advisories (with the recorded `deny.toml` exception) |
 
 ## Design notes
 
