@@ -31,6 +31,7 @@ use crate::error::{AgentError, Interrupt, InterruptKind, StepError};
 use crate::host_env::HostEnv;
 use crate::merge::recursive_merge;
 use crate::message::{Action, ExecOutput, Message};
+use crate::pystr;
 
 /// The submission marker (`local.py:48`).
 pub const SUBMIT_MARKER: &str = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT";
@@ -143,12 +144,12 @@ pub fn check_finished(output: &ExecOutput) -> Result<(), Interrupt> {
     if output.returncode != 0 {
         return Ok(());
     }
-    let text = output.output.trim_start_matches(is_python_space);
-    let (first, rest) = split_first_line(text);
+    let text = pystr::lstrip(&output.output);
+    let (first, rest) = pystr::split_first_line(text);
     if first.is_empty() && rest.is_empty() {
         return Ok(());
     }
-    if first.trim_matches(is_python_space) != SUBMIT_MARKER {
+    if pystr::strip(first) != SUBMIT_MARKER {
         return Ok(());
     }
     let message = Message::exit("Submitted", rest, rest);
@@ -157,29 +158,6 @@ pub fn check_finished(output: &ExecOutput) -> Result<(), Interrupt> {
         message,
         Vec::new(),
     ))
-}
-
-/// Python's `str.isspace` for one character: Unicode whitespace plus `\x1c`..`\x1f`.
-fn is_python_space(c: char) -> bool {
-    c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
-}
-
-/// The first line of `text` (with its line break) and the rest, by Python's `splitlines`.
-fn split_first_line(text: &str) -> (&str, &str) {
-    let mut chars = text.char_indices().peekable();
-    while let Some((index, c)) = chars.next() {
-        let end = match c {
-            '\r' => match chars.peek() {
-                Some((_, '\n')) => index + 2,
-                _ => index + 1,
-            },
-            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}'
-            | '\u{2029}' => index + c.len_utf8(),
-            _ => continue,
-        };
-        return text.split_at_checked(end).unwrap_or((text, ""));
-    }
-    (text, "")
 }
 
 /// `platform.uname()` fields. `processor` comes from `uname -p`, with `unknown` read as `""`.
@@ -487,20 +465,7 @@ fn log_warning(message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, python_repr, split_first_line};
-
-    #[test]
-    fn splitlines_separators() {
-        assert_eq!(split_first_line("a\r\nb"), ("a\r\n", "b"));
-        assert_eq!(split_first_line("a\rb"), ("a\r", "b"));
-        assert_eq!(split_first_line("a\u{2028}b"), ("a\u{2028}", "b"));
-        assert_eq!(split_first_line("a"), ("a", ""));
-        assert_eq!(
-            split_first_line("a\x1fb"),
-            ("a\x1fb", ""),
-            "\\x1f is whitespace but not a line break"
-        );
-    }
+    use super::{decode, python_repr};
 
     #[test]
     fn decode_translates_newlines_and_replaces_bad_bytes() {

@@ -1,5 +1,7 @@
 //! The `Model` protocol (`__init__.py:43-55`, plan §3.3).
 
+pub mod actions_text;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 

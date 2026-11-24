@@ -12,7 +12,8 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
 | P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 44 Jinja2 goldens match byte for byte | stacked on P1 |
 | P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
-| P4–P7 | Not started | — |
+| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 28 parser and 8 observation goldens from Python match | stacked on P3 |
+| P5–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
 
@@ -47,6 +48,13 @@ Python class defaults and value-formatting probes. Regenerate only on purpose:
 
 ```bash
 MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --project ../mini-swe-agent python parity/template_goldens.py
+```
+
+**Action goldens.** `tests/goldens/actions/*.json` come from the reference `parse_regex_actions` and
+`format_observation_messages` with `time.time` fixed:
+
+```bash
+MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --project ../mini-swe-agent python parity/action_goldens.py
 ```
 
 ## Evidence (P0, 2026-11-24)

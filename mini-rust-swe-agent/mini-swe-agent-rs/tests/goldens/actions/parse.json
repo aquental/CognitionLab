@@ -1,0 +1,496 @@
+[
+ {
+  "name": "one_block",
+  "content": "THOUGHT: list files.\n\n```mswea_bash_command\nls -la\n```\n",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "zero_blocks",
+  "content": "I will just think about it.",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 0 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "I will just think about it."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "two_blocks",
+  "content": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 2 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "adjacent_fences",
+  "content": "```mswea_bash_command\na\n```\n```mswea_bash_command\nb\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 2 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\na\n```\n```mswea_bash_command\nb\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "empty_block",
+  "content": "```mswea_bash_command\n\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": ""
+    }
+   ]
+  }
+ },
+ {
+  "name": "blank_command_line",
+  "content": "```mswea_bash_command\n   \n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": ""
+    }
+   ]
+  }
+ },
+ {
+  "name": "multi_line_block",
+  "content": "```mswea_bash_command\ncd src &&\n  make test\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "cd src &&\n  make test"
+    }
+   ]
+  }
+ },
+ {
+  "name": "heredoc_with_fence",
+  "content": "```mswea_bash_command\ncat <<'EOF' > a.md\n```\nEOF\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "cat <<'EOF' > a.md"
+    }
+   ]
+  }
+ },
+ {
+  "name": "plain_bash_fence",
+  "content": "```bash\nls\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 0 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "```bash\nls\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "crlf_block",
+  "content": "```mswea_bash_command\r\nls -la\r\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "surrounding_whitespace",
+  "content": "```mswea_bash_command   \n\t  echo hi  \t\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "echo hi"
+    }
+   ]
+  }
+ },
+ {
+  "name": "unicode",
+  "content": "Olá ✓\n```mswea_bash_command\necho 'ünïcode 🦀'\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "echo 'ünïcode 🦀'"
+    }
+   ]
+  }
+ },
+ {
+  "name": "empty_content",
+  "content": "",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 0 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": ""
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "fence_without_newline",
+  "content": "```mswea_bash_command ls```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Please always provide EXACTLY ONE action in triple backticks, found 0 actions.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "```mswea_bash_command ls```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:zero_blocks:None",
+  "content": "I will just think about it.",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Format error:\n\n<error>\nExpected exactly 1 action, found 0.\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found 0 actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "I will just think about it."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:two_blocks:None",
+  "content": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {},
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Format error:\n\n<error>\nExpected exactly 1 action, found 2.\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found 2 actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:one_block:None",
+  "content": "THOUGHT: list files.\n\n```mswea_bash_command\nls -la\n```\n",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:zero_blocks:stop",
+  "content": "I will just think about it.",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "stop"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Format error:\n\n<error>\nExpected exactly 1 action, found 0.\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found 0 actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "I will just think about it."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:two_blocks:stop",
+  "content": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "stop"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Format error:\n\n<error>\nExpected exactly 1 action, found 2.\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found 2 actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:one_block:stop",
+  "content": "THOUGHT: list files.\n\n```mswea_bash_command\nls -la\n```\n",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "stop"
+  },
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:zero_blocks:length",
+  "content": "I will just think about it.",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "length"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Your previous response reached the output token limit (finish_reason=length) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "I will just think about it."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:two_blocks:length",
+  "content": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "length"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Your previous response reached the output token limit (finish_reason=length) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:one_block:length",
+  "content": "THOUGHT: list files.\n\n```mswea_bash_command\nls -la\n```\n",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "length"
+  },
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:zero_blocks:tool_calls",
+  "content": "I will just think about it.",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "tool_calls"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Your previous response reached the output token limit (finish_reason=tool_calls) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 0,
+      "model_response": "I will just think about it."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:two_blocks:tool_calls",
+  "content": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "tool_calls"
+  },
+  "result": {
+   "format_error": [
+    {
+     "role": "user",
+     "content": "Your previous response reached the output token limit (finish_reason=tool_calls) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.",
+     "extra": {
+      "interrupt_type": "FormatError",
+      "n_actions": 2,
+      "model_response": "```mswea_bash_command\nls\n```\nand\n```mswea_bash_command\npwd\n```"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "shipped:one_block:tool_calls",
+  "content": "THOUGHT: list files.\n\n```mswea_bash_command\nls -la\n```\n",
+  "action_regex": "```mswea_bash_command\\s*\\n(.*?)\\n```",
+  "format_error_template": "{% if finish_reason is defined and finish_reason in [\"length\", \"tool_calls\"] -%}\nYour previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a complete action, so it was cut off. Respond more concisely and provide exactly one action in the required format. If you need to think more, do so briefly.\n{%- else -%}\nFormat error:\n\n<error>\n{{error}}\n</error>\n\nHere is general guidance on how to format your response:\n\nPlease always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.\n\nPlease format your action in triple backticks as shown in <response_example>.\n\n<response_example>\nHere are some thoughts about why you want to perform the action.\n\n```mswea_bash_command\n<action>\n```\n</response_example>\n\nIf you have completed your assignment, please consult the first message about how to\nsubmit your solution (you will not be able to continue working on this task after that).\n{%- endif %}",
+  "template_kwargs": {
+   "finish_reason": "tool_calls"
+  },
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ },
+ {
+  "name": "custom:optional_group_unmatched",
+  "content": "ACT:;",
+  "action_regex": "ACT:(\\w+)?;",
+  "format_error_template": "{{ error }}",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": ""
+    }
+   ]
+  }
+ },
+ {
+  "name": "custom:no_group",
+  "content": "run ls -la now",
+  "action_regex": "ls -la",
+  "format_error_template": "{{ error }}",
+  "template_kwargs": {},
+  "result": {
+   "actions": [
+    {
+     "command": "ls -la"
+    }
+   ]
+  }
+ }
+]

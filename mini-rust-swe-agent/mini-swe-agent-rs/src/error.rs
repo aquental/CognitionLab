@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use crate::merge::MergeError;
 use crate::message::{ActionError, Message};
+use crate::template::TemplateError;
 
 /// The kinds of `InterruptAgentFlow` (`exceptions.py`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -165,6 +166,9 @@ pub enum AgentError {
     /// The model failed.
     #[error(transparent)]
     Model(#[from] ModelError),
+    /// A template failed to compile or render.
+    #[error(transparent)]
+    Template(#[from] TemplateError),
     /// A config merge failed.
     #[error(transparent)]
     Merge(#[from] MergeError),
@@ -193,6 +197,7 @@ impl AgentError {
     pub fn exit_status(&self) -> &str {
         match self {
             AgentError::Model(error) => error.exit_status(),
+            AgentError::Template(_) => "TemplateError",
             AgentError::Merge(_) => "MergeError",
             AgentError::Action(_) => "ActionError",
             AgentError::Io { .. } => "IoError",
@@ -222,6 +227,12 @@ impl From<Interrupt> for StepError {
 // `?` performs one `From` conversion, so the common inner errors convert directly.
 impl From<ModelError> for StepError {
     fn from(error: ModelError) -> Self {
+        StepError::Fatal(error.into())
+    }
+}
+
+impl From<TemplateError> for StepError {
+    fn from(error: TemplateError) -> Self {
         StepError::Fatal(error.into())
     }
 }
