@@ -22,8 +22,8 @@ use cucumber::writer::Stats as _;
 use cucumber::{World, given, then, when};
 use serde_json::Value;
 
-/// Scenario ids run by the features, for the manifest check.
-static EXECUTED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Scenario ids whose comparison passed, once per run, for the manifest check.
+static EXECUTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Default, World)]
 struct ParityWorld {
@@ -48,7 +48,6 @@ impl ParityWorld {
 #[given(expr = "the scenario {string}")]
 fn given_scenario(world: &mut ParityWorld, id: String) {
     world.scenario = Some(support::scenario(&id));
-    EXECUTED.lock().unwrap().insert(id);
 }
 
 #[when("I run it in the Python and Rust harnesses")]
@@ -121,6 +120,24 @@ fn results_equal(world: &mut ParityWorld) {
     if let Err(problem) = support::check(&scenario, python, rust) {
         panic!("{}:\n{problem}", scenario["id"]);
     }
+    // Recorded only after the comparison passed.
+    EXECUTED
+        .lock()
+        .unwrap()
+        .push(scenario["id"].as_str().unwrap().to_owned());
+}
+
+#[then(expr = "{word} trajectory file was saved")]
+fn trajectory_saved(world: &mut ParityWorld, which: String) {
+    let expected = which == "a";
+    for (side, result) in world.results() {
+        assert_eq!(
+            result["saved"].is_object(),
+            expected,
+            "{side}: {}",
+            result["saved"]
+        );
+    }
 }
 
 fn main() {
@@ -131,7 +148,8 @@ fn main() {
     let features = support::crate_dir().join("tests/features");
     let writer = futures::executor::block_on(
         ParityWorld::cucumber()
-            .max_concurrent_scenarios(4)
+            // Steps block, so scenarios run one at a time anyway; say so.
+            .max_concurrent_scenarios(1)
             .fail_on_skipped()
             .run(features),
     );
@@ -141,10 +159,15 @@ fn main() {
         .collect();
     let executed = EXECUTED.lock().unwrap().clone();
     let mut failed = writer.execution_has_failed() || writer.skipped_steps() > 0;
-    if executed != manifest {
-        let missing: Vec<_> = manifest.difference(&executed).collect();
-        let unknown: Vec<_> = executed.difference(&manifest).collect();
-        eprintln!("bdd: scenario manifest mismatch; missing {missing:?}, unknown {unknown:?}");
+    for id in &manifest {
+        let count = executed.iter().filter(|e| *e == id).count();
+        if count != 1 {
+            eprintln!("bdd: scenario {id} compared {count} times");
+            failed = true;
+        }
+    }
+    for id in executed.iter().filter(|e| !manifest.contains(*e)) {
+        eprintln!("bdd: unknown scenario {id}");
         failed = true;
     }
     if failed {

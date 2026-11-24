@@ -44,7 +44,7 @@ fn equal_after_normalizing(python: Value, rust: Value) -> bool {
     let (mut python, mut rust) = (python, rust);
     normalize_result(&mut python, Side::Python, &Map::new());
     normalize_result(&mut rust, Side::Rust, &Map::new());
-    compare_layers(&python, &rust).is_ok()
+    compare_layers("agent", &python, &rust).is_ok()
 }
 
 fn mutated(edit: impl FnOnce(&mut Value)) -> Value {
@@ -162,6 +162,8 @@ fn authorized_changes_pass() {
                     json!("mini_swe_agent_rs::agent::default::DefaultAgent");
                 v["trajectory"]["info"]["config"]["model_type"] =
                     json!("mini_swe_agent_rs::model::deterministic::DeterministicModel");
+                v["trajectory"]["info"]["config"]["environment_type"] =
+                    json!("mini_swe_agent_rs::environment::local::LocalEnvironment");
                 v["trajectory"]["info"]["mini_version"] = json!("0.1.0");
             }),
         ),
@@ -194,7 +196,8 @@ fn fatal_exits_map_python_names_and_drop_texts() {
             "trajectory": {"info": {"exit_status": status}, "messages": [
                 {"role": "exit", "content": text, "extra": {"exit_status": status, "submission": "", "exception_str": text, "traceback": "tb"}}
             ]},
-            "state": {"returned": null, "error": status}
+            "state": {"returned": null, "error": status},
+            "queries": [], "actions": [], "artifacts": {}
         })
     };
     assert!(equal_after_normalizing(
@@ -219,7 +222,7 @@ fn fatal_exits_map_python_names_and_drop_texts() {
     rust["trajectory"]["messages"][3]["content"] = json!("other");
     normalize_result(&mut python, Side::Python, &Map::new());
     normalize_result(&mut rust, Side::Rust, &Map::new());
-    assert!(compare_layers(&python, &rust).is_err());
+    assert!(compare_layers("agent", &python, &rust).is_err());
 }
 
 #[test]
@@ -228,5 +231,59 @@ fn integers_are_never_compared_through_f64() {
     assert!(first_difference(&json!(big), &json!(big - 1)).is_some());
     assert!(first_difference(&json!(big), &json!(9_007_199_254_740_992.0)).is_some());
     assert!(first_difference(&json!(-3), &json!(-3.0)).is_none());
+    // Above 2^53, an integer and a float that is exactly that integer are equal.
+    let exact = 18_014_398_509_481_984_u64; // 2^54
+    assert!(first_difference(&json!(exact), &json!(18_014_398_509_481_984.0)).is_none());
+    assert!(
+        first_difference(&json!(-(1_i64 << 60)), &json!(-1_152_921_504_606_846_976.0)).is_none()
+    );
+    assert!(first_difference(&json!(1), &json!(1.5)).is_some());
     assert!(first_difference(&json!(1), &json!(true)).is_some());
+}
+
+#[test]
+fn required_layers_cannot_be_missing_on_both_sides() {
+    for key in ["trajectory", "queries", "actions", "state", "artifacts"] {
+        let mut python = sample();
+        let mut rust = sample();
+        python.as_object_mut().unwrap().remove(key);
+        rust.as_object_mut().unwrap().remove(key);
+        assert!(compare_layers("agent", &python, &rust).is_err(), "{key}");
+    }
+    let empty = json!({});
+    assert!(compare_layers("environment", &empty, &empty).is_err());
+    assert!(
+        compare_layers(
+            "environment",
+            &json!({"results": [], "artifacts": {}}),
+            &json!({"results": [], "artifacts": {}})
+        )
+        .is_ok()
+    );
+    // An unexpected top-level key is a difference too.
+    let mut extra = sample();
+    extra["surprise"] = json!(1);
+    assert!(compare_layers("agent", &extra, &extra).is_err());
+}
+
+#[test]
+fn normalization_keeps_types_and_presence() {
+    // A timestamp that is not a number is not normalized away.
+    assert!(!equal_after_normalizing(
+        sample(),
+        mutated(|v| v["trajectory"]["messages"][1]["extra"]["timestamp"] = Value::Null)
+    ));
+    // A fatal exit message without `content` differs from one with it.
+    let fatal = |content: Option<&str>| {
+        let mut exit = json!({"role": "exit", "extra": {"exit_status": "X", "submission": "", "exception_str": "e", "traceback": "t"}});
+        if let Some(text) = content {
+            exit["content"] = json!(text);
+        }
+        let mut value = sample();
+        value["trajectory"]["messages"] = json!([exit]);
+        value["state"]["error"] = json!("X");
+        value
+    };
+    assert!(equal_after_normalizing(fatal(Some("a")), fatal(Some("b"))));
+    assert!(!equal_after_normalizing(fatal(Some("a")), fatal(None)));
 }

@@ -16,7 +16,7 @@ Feature: The text-based agent loop matches the Python reference
     And both end with exit status "LimitsExceeded"
     And the normalized results are equal
 
-  Scenario: A failing command and a missing command are observed, not fatal
+  Scenario: A command failing on a missing file and a nonzero exit are observed, not fatal
     Given the scenario "failing_command"
     When I run it in the Python and Rust harnesses
     Then each harness made exactly 3 model queries
@@ -133,4 +133,20 @@ Feature: The text-based agent loop matches the Python reference
     When I run it in the Python and Rust harnesses
     Then each harness made exactly 1 model query
     And both end with exit status "TimeExceeded"
+    And the normalized results are equal
+
+  Scenario: An undefined template variable fails before the loop and saves nothing
+    Given the scenario "invalid_template"
+    When I run it in the Python and Rust harnesses
+    Then each harness made exactly 0 model queries
+    And both end with exit status "TemplateError"
+    And no trajectory file was saved
+    And the normalized results are equal
+
+  Scenario: A fatal error inside the loop still saves the trajectory file
+    Given the scenario "save_on_failure"
+    When I run it in the Python and Rust harnesses
+    Then each harness made exactly 2 model queries
+    And both end with exit status "OutputsExhausted"
+    And a trajectory file was saved
     And the normalized results are equal
