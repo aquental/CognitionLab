@@ -2,7 +2,7 @@
 
 This project studies a reimplementation of the **mini-swe-agent harness in Rust**, using the Python implementation as an executable reference. The focus is on AI systems engineering: understand an agent's loop, define contracts, control execution side effects, measure behavior, and justify decisions with reproducible tests.
 
-**Status on 2026-10-28:** the reference analysis and the migration plan are documented. The Rust package has not been created in this delivery. Parity, provider integration, and performance gains are not proven. The working roadmap is in [spec/PLAN.md](spec/PLAN.md).
+**Status on 2026-11-23:** the reference analysis and the migration plan are documented in one file, [mini-swe-agent-rs/spec/migration-plan.md](mini-swe-agent-rs/spec/migration-plan.md), reviewed adversarially by Codex, Grok and Antigravity. The Rust package has not been created yet. Parity, provider integration, and performance gains are not proven.
 
 This study contributes the analysis, the migration design and, in later stages, the Rust implementation and its validation. The original harness, its prompts, and its tests belong to the [mini-swe-agent](mini-swe-agent/README.md) project, by Kilian Lieret, Carlos E. Jimenez, and contributors. Keep the [original license](mini-swe-agent/LICENSE.md) in any adaptation where it applies.
 
@@ -160,28 +160,28 @@ Inherited tests guide the port, but their normalizations must not be copied with
 
 **Separating determinism from AI evaluation.** With a scripted model and environment, we can require structural equivalence. With a real LLM, two calls can diverge: measure success rate, cost, and latency on fixed tasks, and do not treat different text as a bug by default.
 
-**Idiomatic modeling in Rust.** Traits bound the model/environment/agent; enums express termination and control errors; Result preserves failures; ownership avoids copying the whole history. Keep the core simple and synchronous at first, with a testable library and a thin binary. The `rust-skills` skill guided the [plan](spec/PLAN.md#5-applying-rust-skills).
+**Idiomatic modeling in Rust.** Traits bound the model/environment/agent; enums express termination and control errors; Result preserves failures; ownership avoids copying the whole history. Keep the core simple and synchronous at first, with a testable library and a thin binary. The `rust-skills` skill guided the [plan](mini-swe-agent-rs/spec/migration-plan.md#316-rust-guidelines-applied).
 
-**Compatibility without hiding problems.** The code calls the environment bash, but uses `/bin/sh` by default on POSIX; switching to bash explicitly needs a recorded decision. Python saves in the finally block of each step, charges for invalid responses, and checks limits before the next query. These details are part of the contract.
+**Compatibility without hiding problems.** The Python code calls the environment bash, but runs `/bin/sh` on POSIX. The Rust port runs `/bin/bash` by an explicit, recorded decision (D11), and the parity scenarios avoid commands whose output differs between the two shells. Python saves in the finally block of each step, charges for invalid responses, and checks limits before the next query. These details are part of the contract.
 
 **Operation and diagnostics.** A trajectory must allow the run to be reconstructed; structured logs must show stage, duration, and cost without leaking credentials. Cleanup of processes and containers must be tested under failures and interruptions.
 
 ## How to start the implementation
 
-Read [the detailed plan](spec/PLAN.md) first. It covers setting up the Python environment, freezing the reference, contracts, the implementation order, and the planned comparison commands. The [code study](spec/STUDY.md) details the loop, the textual parser, shell state, the submission protocol, templates, global statistics, and the list of gates P01–P18 that parity must meet; it also records that the textual YAMLs do not select the textual model on their own.
+Read [the migration plan](mini-swe-agent-rs/spec/migration-plan.md) first. It covers the Python analysis and its parity traps (the loop, the textual parser, shell state, the submission protocol, templates, global statistics), the Rust architecture, the Python oracle environment, the implementation phases P0–P9 with their "done" criteria, the parity gates P01–P18, and the risks and decisions.
 
-From `mini-rust-swe-agent/`, when code work starts:
+`mini-swe-agent-rs/` already holds the plan, so phase P0 uses `cargo init` instead of `cargo new`:
 
 ```bash
-cargo new --bin --edition 2024 --vcs none --name mini-swe rust-mini-swe-agent
-cd rust-mini-swe-agent
+cd mini-swe-agent-rs
+cargo init --bin --vcs none --edition 2024 --name mini-swe-agent-rs
 cargo build
 cargo test
 ```
 
-These commands create the skeleton; they do not implement the harness. Add `src/lib.rs`, pin the toolchain and dependencies, and follow the plan's gates. `cargo new` creates a new folder; if the folder already exists, inspect it before choosing `cargo init`, as described in the [Cargo documentation](https://doc.rust-lang.org/cargo/commands/cargo-init.html).
+These commands create the skeleton; they do not implement the harness. Add `src/lib.rs`, pin the toolchain and dependencies, and follow the plan's gates ([Cargo: cargo init](https://doc.rust-lang.org/cargo/commands/cargo-init.html)).
 
-The Python copy lives inside the `CognitionLab` Git repository, with no Git checkout of its own detected. Before claiming that a SHA freezes the upstream, verify the origin. The provisional content-hash identification and the pinning procedure are in the plan.
+The Python copy lives inside the `CognitionLab` Git repository. On 2026-11-23 it was compared with upstream tag `v2.4.6`: every file on the text path is identical (details in section 1.0 of the plan).
 
 ## How to present the results in the portfolio
 
@@ -191,7 +191,7 @@ The Python copy lives inside the `CognitionLab` Git repository, with no Git chec
 | Plan, scope, and proposed contracts | Decomposition and compatibility analysis | Documented; executable contracts pending |
 | Fixtures and differential report | Testing systems with probabilistic behavior at the edges | Planned |
 | Cucumber scenarios | Behavioral requirements tied to the implementation | Planned |
-| ADRs on shell, errors, schemas, and templates | Justified technical decisions | Planned |
+| Decisions on shell, errors, schemas, and templates | Justified technical decisions | Recorded in the plan (D1–D12); implementation pending |
 | Subprocess/container tests | Control of side effects and operational reliability | Planned |
 | Provider integration and task evaluation | Integration engineering and LLM evaluation | Planned |
 | Reproducible benchmarks | Evidence-based performance analysis | Planned |

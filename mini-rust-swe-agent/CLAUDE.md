@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A port of [mini-swe-agent](mini-swe-agent/README.md) (Python) to Rust. The task statement is `spec/prompt/migrate.md` (in Portuguese); read it before starting phase work.
 
 - `mini-swe-agent/` is the **Python reference implementation and the living spec**. Treat it as read-only. It has its own `AGENTS.md` (style rules for the Python code) that does not apply to the Rust crate.
-- `rust-mini-swe-agent/` is where the Rust crate goes (`cargo new --bin`). **It does not exist yet.** Check what exists before assuming a module, test, or command is there.
-- `spec/PLAN.md` holds the detailed plan, and the crate's `README.md` records status and design decisions. Keep both current as work lands. (`spec/PLAN.md` is referenced by the task but not yet written; `spec/migrate.md` is currently an empty directory.)
+- `mini-swe-agent-rs/` is where the Rust crate goes. **So far it holds only `spec/`**: `spec/migration-plan.md` (**the only plan**: Python analysis, architecture, phases P0-P9, parity gates P01-P18, decisions) and `spec/reviews/` (adversarial review rounds). The crate is not scaffolded yet. Check what exists before assuming a module, test, or command is there.
+- Owner decisions (see the plan's section 5.2): the directory is `mini-swe-agent-rs/` (D1); BDD with Cucumber is in scope (D9); `LocalEnvironment` runs `/bin/bash -c`, a documented divergence from Python's `/bin/sh` (D11). The YAML crate is `serde-saphyr` 2.2.x (D5), with `strict_booleans` and last-wins duplicate keys.
+- `mini-swe-agent-rs/spec/migration-plan.md` replaced the old `spec/PLAN.md` and `spec/STUDY.md` (merged and removed). `spec/` now holds only the task statement in `spec/prompt/migrate.md`. Keep the plan and `README.md` (status and design decisions) current as work lands.
 - The git root is the parent directory `CognitionLab/`. Sibling crate `../embeddings-fundamentals/` shows the user's Rust conventions (Rust 2024, toolchain pinned in `rust-toolchain.toml`, `clippy.toml` allowing unwrap/expect/panic only in tests).
 
 ## Scope rules (from the task)
@@ -20,7 +21,7 @@ A port of [mini-swe-agent](mini-swe-agent/README.md) (Python) to Rust. The task 
 
 ## Commands
 
-Rust (run inside `rust-mini-swe-agent/` once it exists; toolchain is cargo 1.99.1):
+Rust (run inside `mini-swe-agent-rs/` once it exists; toolchain is cargo 1.99.1):
 
 ```bash
 cargo build
@@ -38,7 +39,7 @@ uv run pytest tests/environments/test_local.py      # LocalEnvironment semantics
 uv run pytest tests/agents/test_default.py -k test_successful_completion
 ```
 
-`tests/test_data/local.traj.json` (a list of messages) and `update_outputs_local.py` are existing Python fixtures for a deterministic local run, and a natural source of parity fixtures.
+`tests/test_data/local.traj.json` (a list of messages) and `update_outputs_local.py` are existing Python fixtures for a deterministic local run, and a natural source of parity fixtures. `local.traj.json` was restored from upstream tag `v2.4.6`. `mini-swe-agent/.gitignore` ignores `*.traj.json`, so committing it needs `git add -f <path>`.
 
 ## Reference semantics to preserve
 
