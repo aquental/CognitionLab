@@ -5,12 +5,17 @@
 //! they use a monotonic `Instant` (plan §3.7).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A source of wall-clock time in seconds since the Unix epoch.
-pub trait Clock: Send + Sync {
+pub trait Clock: Send + Sync + std::fmt::Debug {
     /// The current time, like Python's `time.time()`.
     fn now(&self) -> f64;
+
+    /// Waits, like `time.sleep` (used by the deterministic model's `/sleep N`).
+    fn sleep(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
 }
 
 /// The real clock.
@@ -56,5 +61,10 @@ impl ManualClock {
 impl Clock for ManualClock {
     fn now(&self) -> f64 {
         f64::from_bits(self.bits.load(Ordering::SeqCst))
+    }
+
+    /// Advances the time instead of waiting.
+    fn sleep(&self, duration: Duration) {
+        self.advance(duration.as_secs_f64());
     }
 }

@@ -1,4 +1,8 @@
-//! The `Agent` protocol (`__init__.py:71-80`, plan §3.3). `DefaultAgent` arrives in phase P5.
+//! The `Agent` protocol (`__init__.py:71-80`, plan §3.3) and `DefaultAgent` (§3.4-§3.5).
+
+mod default;
+
+pub use default::{AgentConfig, DefaultAgent};
 
 use std::path::Path;
 

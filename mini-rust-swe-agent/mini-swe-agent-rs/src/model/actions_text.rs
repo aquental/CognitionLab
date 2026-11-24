@@ -87,6 +87,63 @@ pub enum TextActionsError {
 pub struct TextActions {
     regex: ActionRegex,
     templates: Templates,
+    observations: Observations,
+}
+
+/// The observation template, compiled once (`format_observation_messages`).
+#[derive(Debug)]
+pub struct Observations {
+    templates: Templates,
+}
+
+impl Observations {
+    /// Compiles the observation template.
+    pub fn new(observation_template: &str) -> Result<Self, TemplateError> {
+        let mut templates = Templates::new();
+        templates.add(OBSERVATION, observation_template)?;
+        Ok(Self { templates })
+    }
+
+    /// `format_observation_messages` (`actions_text.py:43-70`): one `user` message per output.
+    /// The template sees the agent's variables plus `output`; an `output` key already in the
+    /// variables is an error when an observation is rendered, as in Python.
+    pub fn messages(
+        &self,
+        outputs: &[ExecOutput],
+        template_vars: &Value,
+        timestamp: f64,
+    ) -> Result<Vec<Message>, AgentError> {
+        let base = match template_vars {
+            Value::Object(map) => map.clone(),
+            Value::Null => Map::new(),
+            _ => {
+                return Err(AgentError::Internal(
+                    "template variables are not an object".to_owned(),
+                ));
+            }
+        };
+        let mut messages = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            if base.contains_key("output") {
+                return Err(TemplateError::DuplicateKey("output".to_owned()).into());
+            }
+            let mut context = base.clone();
+            context.insert("output".to_owned(), serde_json::to_value(output)?);
+            let content = self
+                .templates
+                .render(OBSERVATION, &Value::Object(context))?;
+            let mut extra = Map::new();
+            extra.insert("raw_output".to_owned(), json!(output.output));
+            extra.insert("returncode".to_owned(), json!(output.returncode));
+            extra.insert("timestamp".to_owned(), json!(timestamp));
+            extra.insert("exception_info".to_owned(), json!(output.exception_info));
+            for (key, value) in output.extra.iter().flatten() {
+                extra.insert(key.clone(), value.clone());
+            }
+            messages.push(Message::new(Role::User, content).with_extra(extra));
+        }
+        Ok(messages)
+    }
 }
 
 impl TextActions {
@@ -98,10 +155,11 @@ impl TextActions {
     ) -> Result<Self, TextActionsError> {
         let mut templates = Templates::new();
         templates.add(FORMAT_ERROR, format_error_template)?;
-        templates.add(OBSERVATION, observation_template)?;
+        let observations = Observations::new(observation_template)?;
         Ok(Self {
             regex: ActionRegex::new(action_regex)?,
             templates,
+            observations,
         })
     }
 
@@ -146,44 +204,14 @@ impl TextActions {
         )))
     }
 
-    /// `format_observation_messages` (`actions_text.py:43-70`): one `user` message per output.
-    /// The template sees the agent's variables plus `output`; an `output` key already in the
-    /// variables is an error when an observation is rendered, as in Python.
+    /// Observation messages for `outputs` (see [`Observations::messages`]).
     pub fn observations(
         &self,
         outputs: &[ExecOutput],
         template_vars: &Value,
         timestamp: f64,
     ) -> Result<Vec<Message>, AgentError> {
-        let base = match template_vars {
-            Value::Object(map) => map.clone(),
-            Value::Null => Map::new(),
-            _ => {
-                return Err(AgentError::Internal(
-                    "template variables are not an object".to_owned(),
-                ));
-            }
-        };
-        let mut messages = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            if base.contains_key("output") {
-                return Err(TemplateError::DuplicateKey("output".to_owned()).into());
-            }
-            let mut context = base.clone();
-            context.insert("output".to_owned(), serde_json::to_value(output)?);
-            let content = self
-                .templates
-                .render(OBSERVATION, &Value::Object(context))?;
-            let mut extra = Map::new();
-            extra.insert("raw_output".to_owned(), json!(output.output));
-            extra.insert("returncode".to_owned(), json!(output.returncode));
-            extra.insert("timestamp".to_owned(), json!(timestamp));
-            extra.insert("exception_info".to_owned(), json!(output.exception_info));
-            for (key, value) in output.extra.iter().flatten() {
-                extra.insert(key.clone(), value.clone());
-            }
-            messages.push(Message::new(Role::User, content).with_extra(extra));
-        }
-        Ok(messages)
+        self.observations
+            .messages(outputs, template_vars, timestamp)
     }
 }
