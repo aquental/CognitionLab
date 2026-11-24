@@ -52,9 +52,13 @@ impl ManualClock {
         self.bits.store(now.to_bits(), Ordering::SeqCst);
     }
 
-    /// Moves the time by `seconds` (negative values move it back).
+    /// Moves the time by `seconds` (negative values move it back). One atomic
+    /// read-modify-write, so concurrent advances are never lost.
     pub fn advance(&self, seconds: f64) {
-        self.set(self.now() + seconds);
+        self.bits
+            .update(Ordering::SeqCst, Ordering::SeqCst, |bits| {
+                (f64::from_bits(bits) + seconds).to_bits()
+            });
     }
 }
 

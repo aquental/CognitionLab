@@ -2,14 +2,6 @@
 //! the Python class defaults and the formatting probes byte for byte like Jinja2.
 //! Goldens come from `parity/template_goldens.py`.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -21,6 +13,8 @@ fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn cases() -> Vec<Value> {
     let text = fs::read_to_string(crate_dir().join("tests/goldens/templates/cases.json")).unwrap();
     serde_json::from_str::<Vec<Value>>(&text).unwrap()

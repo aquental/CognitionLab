@@ -3,17 +3,11 @@
 //! Python's `UNSET` sentinel has no Rust counterpart: a value that is not set is simply absent
 //! from its layer (plan §3.10 item 2), so the UNSET tests become "absent key" tests.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use mini_swe_agent_rs::merge::{MergeError, recursive_merge};
 use serde_json::{Value, json};
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn merge(layers: &[Value]) -> Value {
     Value::Object(recursive_merge(layers).unwrap())
 }
@@ -186,9 +180,43 @@ fn absent_keys_leave_earlier_values() {
 
 #[test]
 fn later_wins_keeps_first_insertion_order() {
-    let merged = merge(&[json!({"a": 1, "b": 2}), json!({"a": 3, "c": 4})]);
+    // Unsorted keys at both levels, so a sorted map would fail.
+    let merged = merge(&[
+        json!({"z": 1, "m": {"y": 1, "b": 2}, "a": 2}),
+        json!({"m": {"c": 3, "y": 4}, "q": 5, "z": 6}),
+    ]);
     let keys: Vec<&String> = merged.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["a", "b", "c"]);
+    assert_eq!(keys, ["z", "m", "a", "q"]);
+    let inner: Vec<&String> = merged["m"].as_object().unwrap().keys().collect();
+    assert_eq!(inner, ["y", "b", "c"]);
+    assert_eq!(
+        merged,
+        json!({"z": 6, "m": {"y": 4, "b": 2, "c": 3}, "a": 2, "q": 5})
+    );
+}
+
+#[test]
+fn nested_absent_key_keeps_sibling() {
+    // Python: recursive_merge({"a": {"x": 1, "y": 2}}, {"a": {"y": UNSET, "z": 3}, "b": UNSET, "c": 4})
+    //   == {"a": {"x": 1, "y": 2, "z": 3}, "c": 4}
+    assert_eq!(
+        merge(&[
+            json!({"a": {"x": 1, "y": 2}}),
+            json!({"a": {"z": 3}, "c": 4})
+        ]),
+        json!({"a": {"x": 1, "y": 2, "z": 3}, "c": 4})
+    );
+}
+
+#[test]
+fn falsy_values_override() {
+    assert_eq!(
+        merge(&[
+            json!({"a": true, "b": 5, "c": "x", "d": [1], "e": {"k": 1}}),
+            json!({"a": false, "b": 0, "c": "", "d": [], "e": null})
+        ]),
+        json!({"a": false, "b": 0, "c": "", "d": [], "e": null})
+    );
 }
 
 #[test]

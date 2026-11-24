@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::merge::MergeError;
-use crate::message::{ActionError, Message};
+use crate::message::{ActionError, InvalidCost, Message};
 use crate::template::TemplateError;
 
 /// The kinds of `InterruptAgentFlow` (`exceptions.py`).
@@ -81,6 +81,34 @@ impl Interrupt {
             head: Box::new(head),
             tail,
         }
+    }
+
+    /// `Submitted` with the exit message of `local.py:50-56`.
+    pub fn submitted(submission: String) -> Self {
+        let message = Message::exit(
+            InterruptKind::Submitted.name(),
+            submission.clone(),
+            submission,
+        );
+        Self::new(InterruptKind::Submitted, message, Vec::new())
+    }
+
+    /// `LimitsExceeded` with the exit message of `default.py:132-138`.
+    pub fn limits_exceeded() -> Self {
+        Self::limit(InterruptKind::LimitsExceeded)
+    }
+
+    /// `TimeExceeded` with the exit message of `default.py:140-146`.
+    pub fn time_exceeded() -> Self {
+        Self::limit(InterruptKind::TimeExceeded)
+    }
+
+    fn limit(kind: InterruptKind) -> Self {
+        Self::new(
+            kind,
+            Message::exit(kind.name(), kind.name(), ""),
+            Vec::new(),
+        )
     }
 
     /// An interrupt from a list of messages; `None` if the list is empty.
@@ -178,6 +206,9 @@ pub enum AgentError {
     /// An assistant message holds invalid actions.
     #[error(transparent)]
     Action(#[from] ActionError),
+    /// A message's `extra.cost` is not a number.
+    #[error(transparent)]
+    Cost(#[from] InvalidCost),
     /// A file operation failed.
     #[error("{path}: {source}")]
     Io {
@@ -204,6 +235,7 @@ impl AgentError {
             AgentError::Config(_) => "ConfigError",
             AgentError::Merge(_) => "MergeError",
             AgentError::Action(_) => "ActionError",
+            AgentError::Cost(_) => "InvalidCost",
             AgentError::Io { .. } => "IoError",
             AgentError::Json(_) => "JsonError",
             AgentError::Internal(_) => "InternalError",
@@ -237,6 +269,12 @@ impl From<ModelError> for StepError {
 
 impl From<TemplateError> for StepError {
     fn from(error: TemplateError) -> Self {
+        StepError::Fatal(error.into())
+    }
+}
+
+impl From<InvalidCost> for StepError {
+    fn from(error: InvalidCost) -> Self {
         StepError::Fatal(error.into())
     }
 }

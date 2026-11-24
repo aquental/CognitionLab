@@ -1,14 +1,6 @@
 //! Text actions (plan §3.8 "Action parsing", phase P4): `parse_regex_actions` and
 //! `format_observation_messages`, compared with goldens from `parity/action_goldens.py`.
 
-// Test crate: helpers outside `#[test]` functions may panic on broken fixtures.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,6 +10,8 @@ use mini_swe_agent_rs::model::actions_text::{ActionRegex, ActionRegexError, Text
 use mini_swe_agent_rs::template::TemplateError;
 use serde_json::{Map, Value, json};
 
+/// Test helper: clippy.toml exempts only `#[test]` functions.
+#[allow(clippy::unwrap_used)]
 fn golden(name: &str) -> Vec<Value> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/goldens/actions")
