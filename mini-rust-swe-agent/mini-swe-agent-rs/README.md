@@ -115,5 +115,10 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
   malformed actions fail inside the model. Divergences (plan §2.4): `mini_version` is the crate version,
   `traceback` is the error's `source()` chain, the exit status of a fatal error is a stable name (D6, such as
   `OutputsExhausted` for Python's `IndexError`), the agent's templates compile at construction, and the
-  trajectory is written as raw UTF-8 through a temporary file and a rename.
+  trajectory is written as raw UTF-8 through a temporary file and a rename. Without an `output_path`, nothing is
+  serialized after a step (Python builds the dict and drops it). `run` returns the exit message's whole `extra`
+  (`ExitInfo::extra`). `src/agent/default.rs` is over the plan's 250-line budget (§2.6), at about 350 lines of code:
+  Python's `finally` save, its exception-to-exit-message handler and the trajectory writer are spelled out with
+  explicit error paths (save replacing a fatal error, an invalid cost inside the format-error handler, the
+  atomic write).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

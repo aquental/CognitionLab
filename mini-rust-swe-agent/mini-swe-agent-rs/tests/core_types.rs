@@ -104,7 +104,11 @@ fn exit_message_constructor() {
         message.exit_info(),
         Some(ExitInfo {
             exit_status: "Submitted".into(),
-            submission: "done\n".into()
+            submission: "done\n".into(),
+            extra: json!({"exit_status": "Submitted", "submission": "done\n"})
+                .as_object()
+                .unwrap()
+                .clone(),
         })
     );
 }
@@ -128,7 +132,8 @@ fn exit_info_reads_missing_fields_as_empty() {
         message.exit_info(),
         Some(ExitInfo {
             exit_status: "X".into(),
-            submission: String::new()
+            submission: String::new(),
+            extra: json!({"exit_status": "X"}).as_object().unwrap().clone(),
         })
     );
     assert_eq!(Message::new(Role::User, "x").exit_info(), None);

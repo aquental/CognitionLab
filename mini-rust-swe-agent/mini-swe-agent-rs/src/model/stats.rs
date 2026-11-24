@@ -27,7 +27,7 @@ impl GlobalModelStats {
     /// Limits from `MSWEA_GLOBAL_COST_LIMIT` and `MSWEA_GLOBAL_CALL_LIMIT` (default `0`).
     /// Python fails at import on an unparsable value; this returns an error.
     pub fn from_host_env(host: &HostEnv) -> Result<Self, AgentError> {
-        let read = |name: &str| host.get(name).map(str::trim).unwrap_or("0").to_owned();
+        let read = |name: &str| host.get(name).map_or("0", str::trim);
         let cost = read("MSWEA_GLOBAL_COST_LIMIT");
         let calls = read("MSWEA_GLOBAL_CALL_LIMIT");
         let cost_limit = cost

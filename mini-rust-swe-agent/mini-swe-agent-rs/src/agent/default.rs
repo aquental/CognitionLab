@@ -176,7 +176,7 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
     }
 
     /// One step: query, then execute the actions of the new assistant message.
-    pub fn step(&mut self) -> Result<Vec<Message>, StepError> {
+    pub fn step(&mut self) -> Result<&[Message], StepError> {
         self.query()?;
         self.execute_actions()
     }
@@ -197,13 +197,13 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         self.n_calls = self.n_calls.saturating_add(1);
         let message = self.model.query(&self.messages)?;
         self.cost += message.cost()?;
-        self.messages.push(message);
+        self.add_messages([message]);
         Ok(())
     }
 
     /// Runs the actions of the last message and appends the observations
     /// (`default.py:154-157`). A `Submitted` interrupt stops the remaining actions.
-    pub fn execute_actions(&mut self) -> Result<Vec<Message>, StepError> {
+    pub fn execute_actions(&mut self) -> Result<&[Message], StepError> {
         let Some(message) = self.messages.last() else {
             return Err(
                 AgentError::Internal("execute_actions without a message".to_owned()).into(),
@@ -219,7 +219,7 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         let observations =
             self.model
                 .format_observation_messages(message, &outputs, &template_vars)?;
-        Ok(self.add_messages(observations).to_vec())
+        Ok(self.add_messages(observations))
     }
 
     /// `handle_uncaught_exception` (`default.py:74-86`).
@@ -231,7 +231,7 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         extra.insert("exception_str".to_owned(), json!(text));
         extra.insert("traceback".to_owned(), json!(source_chain(error)));
         let message = self.model.format_message(Role::Exit, text, Some(extra));
-        self.messages.push(message);
+        self.add_messages([message]);
     }
 
     /// A `FormatError`: charge its cost, count it, append its messages, and exit with
@@ -241,13 +241,13 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         self.cost += interrupt.head().cost()?;
         self.n_consecutive_format_errors = self.n_consecutive_format_errors.saturating_add(1);
         let limit = self.config.max_consecutive_format_errors;
-        self.messages.extend(interrupt.into_messages());
+        self.add_messages(interrupt.into_messages());
         if 0 < limit && limit <= self.n_consecutive_format_errors {
-            self.messages.push(Message::exit(
+            self.add_messages([Message::exit(
                 "RepeatedFormatError",
                 "RepeatedFormatError",
                 "",
-            ));
+            )]);
         }
         Ok(())
     }
@@ -277,9 +277,13 @@ impl<M: Model, E: Environment> DefaultAgent<M, E> {
         Ok(Value::Object(recursive_merge(&layers)?))
     }
 
+    /// The save after each step. Without an `output_path` nothing is serialized (plan §3.5):
+    /// Python builds the dict and drops it, so a serializer error is the only observable change.
     fn save_configured(&self) -> Result<(), AgentError> {
-        self.save(self.config.output_path.as_deref(), &[])
-            .map(|_| ())
+        match self.config.output_path.as_deref() {
+            Some(path) => self.save(Some(path), &[]).map(|_| ()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -297,7 +301,7 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
         let instance = self
             .model
             .format_message(Role::User, self.render(INSTANCE)?, None);
-        self.messages.extend([system, instance]);
+        self.add_messages([system, instance]);
         loop {
             match self.step() {
                 Ok(_) => self.n_consecutive_format_errors = 0,
@@ -311,7 +315,7 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
                     }
                 }
                 Err(StepError::Interrupt(interrupt)) => {
-                    self.messages.extend(interrupt.into_messages())
+                    self.add_messages(interrupt.into_messages());
                 }
                 Err(StepError::Fatal(error)) => {
                     self.add_fatal_exit(&error);
@@ -333,10 +337,11 @@ impl<M: Model, E: Environment> Agent for DefaultAgent<M, E> {
     }
 
     /// `save(path, *extra_dicts)`: pretty JSON with a 2-space indent, written atomically
-    /// through a temporary file in the destination directory.
+    /// through a temporary file in the destination directory. An empty path fails, as Python's
+    /// `Path("")` (the current directory) does.
     fn save(&self, path: Option<&Path>, extra: &[Value]) -> Result<Value, AgentError> {
         let data = self.serialize(extra)?;
-        if let Some(path) = path.filter(|p| !p.as_os_str().is_empty()) {
+        if let Some(path) = path {
             write_atomic(path, &data)?;
         }
         Ok(data)
@@ -362,13 +367,18 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> AgentError + '_ {
 }
 
 fn write_atomic(path: &Path, data: &Value) -> Result<(), AgentError> {
+    if path.as_os_str().is_empty() {
+        return Err(io(path)(std::io::Error::from(
+            std::io::ErrorKind::IsADirectory,
+        )));
+    }
+    let text = serde_json::to_string_pretty(data)?;
     let parent = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
     std::fs::create_dir_all(parent).map_err(io(parent))?;
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(io(parent))?;
-    let text = serde_json::to_string_pretty(data)?;
     file.write_all(text.as_bytes()).map_err(io(file.path()))?;
     file.persist(path).map_err(|e| AgentError::Io {
         path: path.to_path_buf(),
