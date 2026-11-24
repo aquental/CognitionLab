@@ -24,7 +24,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::environment::Environment;
 use crate::error::{AgentError, Interrupt, StepError};
@@ -79,7 +79,7 @@ impl LocalEnvironment {
         Self {
             config,
             host,
-            uname: uname_fields(),
+            uname: uname_fields().clone(),
         }
     }
 
@@ -95,7 +95,10 @@ impl LocalEnvironment {
             _ if !self.config.cwd.is_empty() => PathBuf::from(&self.config.cwd),
             _ => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         };
-        let timeout = timeout.unwrap_or(Duration::from_secs(self.config.timeout));
+        // Python's `timeout or self.config.timeout`: an explicit zero falls back to the config.
+        let timeout = timeout
+            .filter(|t| !t.is_zero())
+            .unwrap_or(Duration::from_secs(self.config.timeout));
         let output = run_command(action.command(), &cwd, self.child_env(), timeout);
         check_finished(&output).map_err(StepError::Interrupt)?;
         Ok(output)
@@ -155,8 +158,14 @@ pub fn check_finished(output: &ExecOutput) -> Result<(), Interrupt> {
     Err(Interrupt::submitted(rest.to_owned()))
 }
 
-/// `platform.uname()` fields. `processor` comes from `uname -p`, with `unknown` read as `""`.
-fn uname_fields() -> Map<String, Value> {
+/// `platform.uname()` fields, computed once per process like Python's cached `platform.uname()`.
+/// `processor` comes from a successful `uname -p`, with `unknown` read as `""`.
+fn uname_fields() -> &'static Map<String, Value> {
+    static UNAME: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
+    UNAME.get_or_init(compute_uname)
+}
+
+fn compute_uname() -> Map<String, Value> {
     let mut fields = Map::new();
     let info = nix::sys::utsname::uname().ok();
     let text = |value: Option<&std::ffi::OsStr>| {
@@ -189,6 +198,7 @@ fn uname_fields() -> Map<String, Value> {
         .stderr(Stdio::null())
         .output()
         .ok()
+        .filter(|out| out.status.success())
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
         .filter(|p| p != "unknown")
         .unwrap_or_default();
@@ -355,10 +365,13 @@ fn timed_out(
     kill_and_reap(child);
     // Keep what is already readable, for a bounded time; then our read end is dropped.
     let _ = drain(reader, &mut buffer, Instant::now().checked_add(GRACE));
-    let message = format!(
-        "Command '{command}' timed out after {} seconds",
-        timeout.as_secs()
-    );
+    // `TimeoutExpired` prints the timeout with `%s`: `30` for the int config, `0.5` for a float.
+    let seconds = if timeout.subsec_nanos() == 0 {
+        timeout.as_secs().to_string()
+    } else {
+        timeout.as_secs_f64().to_string()
+    };
+    let message = format!("Command '{command}' timed out after {seconds} seconds");
     error_output(buffer, ("TimeoutExpired".to_owned(), message))
 }
 
@@ -367,12 +380,10 @@ fn error_output(buffer: Vec<u8>, (exception_type, message): (String, String)) ->
         output: decode(&buffer),
         returncode: -1,
         exception_info: format!("An error occurred while executing the command: {message}"),
-        extra: Some(
-            json!({"exception_type": exception_type, "exception": message})
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-        ),
+        extra: Some(Map::from_iter([
+            ("exception_type".to_owned(), Value::String(exception_type)),
+            ("exception".to_owned(), Value::String(message)),
+        ])),
     }
 }
 
@@ -394,10 +405,11 @@ fn decode(bytes: &[u8]) -> String {
     out
 }
 
-/// The error a failed spawn reports. A missing or non-directory cwd names the cwd, as
-/// CPython's `Popen` does; anything else names the shell.
+/// The error a failed spawn reports. A cwd that cannot be entered (missing, not a directory,
+/// no search permission, a symlink loop) names the cwd, as CPython's `Popen` does after its
+/// `chdir` fails; anything else names the shell.
 fn spawn_error(error: &std::io::Error, cwd: &Path) -> (String, String) {
-    let cwd_is_bad = !cwd.is_dir();
+    let cwd_is_bad = std::fs::metadata(cwd.join(".")).is_err();
     let filename = if cwd_is_bad { cwd } else { Path::new(SHELL) };
     os_error(error, Some(filename))
 }
@@ -415,7 +427,11 @@ fn os_error(error: &std::io::Error, filename: Option<&Path>) -> (String, String)
         Errno::EISDIR => "IsADirectoryError",
         _ => "OSError",
     };
-    let mut message = format!("[Errno {code}] {}", errno.desc());
+    // The platform `strerror` text, as CPython prints it (nix's `desc()` is its own table).
+    let text = std::io::Error::from_raw_os_error(code).to_string();
+    let suffix = format!(" (os error {code})");
+    let text = text.strip_suffix(&suffix).unwrap_or(&text);
+    let mut message = format!("[Errno {code}] {text}");
     if let Some(filename) = filename {
         message.push_str(": ");
         message.push_str(&python_repr(&filename.to_string_lossy()));
