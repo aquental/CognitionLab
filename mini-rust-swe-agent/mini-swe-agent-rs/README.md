@@ -97,6 +97,7 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | `cargo test --locked` on macOS with the reference (all targets, including `parity` and `bdd`) | Pass: 25 of 25 scenarios equal; BDD 25 scenarios, 123 steps |
 | Full-suite Linux gate (`parity/Dockerfile`) | Pass (exit 0) |
 | Rust-only Linux gate | Pass; `parity` and `bdd` skipped on purpose |
+| `cargo deny check advisories` | No advisories, after one recorded exception in `deny.toml`: `humantime` (unmaintained, dev-only through `cucumber`, D9) |
 
 ## Usage (M1)
 
