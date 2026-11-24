@@ -6,19 +6,65 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 
 ## Status
 
+All ten phases of the plan are done and merged into `main`: **M1** (offline parity, P0–P7) and **M2** (a usable
+agent, P8–P9) are reached. Each phase was reviewed by Codex, Grok and Antigravity; the findings and what was done
+about each one are in `spec/reviews/pN/FINDINGS.md`.
+
 | Phase | State | Pull request |
 |---|---|---|
-| P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
-| P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
-| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | stacked on P1 |
-| P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
-| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | stacked on P3 |
-| P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel` (`raise`, `/sleep` on the injected clock, `/warning`), `GlobalModelStats`; `test_default.py` text cases, the two format-error fakes and `test_save.py` ported, plus boundary, reuse and save cases | stacked on P4 |
-| P6 Parity and BDD | Done: 27 JSON scenarios (21 agent, 6 environment) give equal normalized results through `parity/run_python.py` and the Rust library (`tests/parity.rs`); comparator mutation tests (`tests/comparator.rs`); Cucumber features (`tests/bdd.rs`) with one Gherkin scenario per parity scenario and a manifest check; full-suite Linux gate (`parity/Dockerfile`) | stacked on P5 |
-| P7 Config and CLI | Done: `src/config.rs` (key=value and file specs, lookup and suffix rules, embedded built-ins, flags layer, class registries, `TextbasedModelConfig` with env-backed defaults) and `src/main.rs` (clap, global config dir and `.env` overlay, banner, task from `-t`/`run.task`/stdin, exit codes 0/1/2); typed dumps of both shipped YAML files equal pydantic's; Python `mini` and the Rust CLI write equal trajectories for 4 cases; `cli.feature`. **M1 reached** | stacked on P6 |
-| P8 Real model | Done: `src/model/textbased.rs` (`TextbasedModel<B: ChatBackend>`), `openai_compat.rs` (OpenAI-compatible Chat Completions over `ureq`, settings split, error mapping), `retry.rs` (tenacity's schedule), `cost.rs` (LiteLLM-format registry), `examples/hello_world.rs`; canned-backend tests, the fake HTTP server test and the raw-response differential against Python's `LitellmTextbasedModel` pass; the real-endpoint run is opt-in | stacked on main |
+| P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | #21 |
+| P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits | #22 |
+| P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 50 Jinja2 goldens match byte for byte | #23 |
+| P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus new cases | #24 |
+| P4 Text actions | Done: `src/model/actions_text.rs` (`findall` group rule, `re.DOTALL`, Python `strip`, `FormatError` message, observations); 51 parser and 15 observation goldens from Python match (key order included) | #25 |
+| P5 Agent loop | Done: `DefaultAgent` (limits, format-error counter, fatal exit message, save after every step, atomic pretty-JSON save), `DeterministicModel`, `GlobalModelStats`; `test_default.py` text cases and `test_save.py` ported | #26 |
+| P6 Parity and BDD | Done: 27 JSON scenarios equal through `parity/run_python.py` and the Rust library; comparator mutation tests; Cucumber features with a manifest check; full-suite Linux gate (`parity/Dockerfile`) | #27 |
+| P7 Config and CLI | Done: `src/config.rs` and `src/main.rs`; typed dumps of both shipped YAML files equal pydantic's; Python `mini` and the Rust CLI write equal trajectories for 4 cases. **M1** | #28 |
+| P8 Real model | Done: `TextbasedModel<B: ChatBackend>` over an OpenAI-compatible endpoint (`ureq`, rustls), tenacity's retry schedule, registry costs, `examples/hello_world.rs`; fake-server tests, the raw-response differential against Python's `LitellmTextbasedModel`, and one run against OpenAI | #29 |
+| P9 Docs | Done: this README (status, usage, BDD, every divergence and decision, evidence), `tests/docs.rs` (checks those lists against the plan and the paths in the parent documents), the parent `README.md` and `CLAUDE.md` brought up to date. **M2** | #30 |
 
-Parity is proven at the library level for the scenarios in `parity/scenarios/` (P6) and at the CLI level for the P7 gate cases (`tests/support/cli.rs`). The text-based model (P8) is proven against Python's `LitellmTextbasedModel` on canned provider responses (`tests/text_parity.rs`) and against a fake HTTP server (`tests/fake_http.rs`); P9 (docs) completes M2.
+## Usage
+
+**Provider (D4).** The text-based model speaks the OpenAI-compatible Chat Completions protocol (`POST
+{api_base}/chat/completions`, bearer auth). That covers OpenAI, OpenRouter, a LiteLLM proxy, vLLM and Ollama.
+`model.model_kwargs` is split: `api_base`/`base_url` (default `https://api.openai.com/v1`), `api_key` (else the
+variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` (seconds, default 600, as LiteLLM's)
+configure the transport; `drop_params` is dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are
+refused; the rest (`temperature`, `max_tokens`, …) is sent in the body. `api_base` must be `http(s)://host…`,
+without credentials or a fragment; its query string is kept after `/chat/completions`. Redirects are not followed
+(the history never goes to another host). The proxy comes from `ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` (minus
+`NO_PROXY`) in the same environment the run sees, including the global `.env`.
+
+**API key.** Put `OPENAI_API_KEY=...` in the global `.env` (macOS: `~/Library/Application Support/mini-swe-agent/.env`;
+Linux: `~/.config/mini-swe-agent/.env`; or the directory in `MSWEA_GLOBAL_CONFIG_DIR`), the file Python's
+`mini-extra config set` writes, or export it. Variables already set in the environment win over the file.
+
+```bash
+OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased \
+  -c model.litellm_model_registry=registry.json -t "List the files"
+cargo run --example hello_world -- -m gpt-4o-mini -t "List the files"   # MSWEA_COST_TRACKING=ignore_errors
+```
+
+Costs come from a LiteLLM-format registry file (`litellm_model_registry` or `LITELLM_MODEL_REGISTRY_PATH`; no prices
+are bundled), or set `cost_tracking: ignore_errors` (`MSWEA_COST_TRACKING`) to run at cost 0.0. Retries follow
+Python's: up to `MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT` tries (default 10), waits of `clamp(2^(n-1), 4, 60)` seconds,
+and never after HTTP 401, 403, 404, or a 400 that reports a context-window overflow or an unsupported parameter.
+
+The deterministic model needs no network:
+
+```bash
+cargo run --locked -- --model-class deterministic -m deterministic -c mini_textbased \
+  -c 'model.outputs=[{"role":"assistant","content":"x","extra":{"actions":[{"command":"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}]}}]' \
+  -t "Say hello" -o /tmp/traj.json
+```
+
+Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a fatal or
+config error (the trajectory is saved first when the run had started), 2 for usage errors and for the
+interactive-only flags `-y/--yolo` and `--exit-immediately` (D7). `--help` and `--version` exit 0. "Saved trajectory"
+is printed only after a successful run, as Python prints it after `run` returns.
+
+**Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
+shipped YAML files (`parity/config_dumps.py`).
 
 ## Commands
 
@@ -81,7 +127,105 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --project ../mini-swe-agent python parity/action_goldens.py
 ```
 
-## Evidence (P0, 2026-11-24)
+## Running the BDD features
+
+The Gherkin features are in `tests/features/`:
+
+| Feature | Scenarios | What each scenario does |
+|---|---:|---|
+| `agent_loop.feature` | 21 | Runs one agent scenario of `parity/scenarios/` through the Python reference and the Rust library, then checks the query count, the exit status and that the normalized results are equal |
+| `local_environment.feature` | 6 | The same for the environment scenarios (timeouts, signals, Unicode, submission) |
+| `cli.feature` | 9 | 4 scenarios run Python `mini` and the Rust CLI on the same arguments and compare exit codes and normalized trajectories; 5 check the Rust CLI alone (where the task comes from, which config is loaded) |
+
+The runner (`tests/bdd.rs`, `harness = false`) needs the Python reference, like `tests/parity.rs`:
+
+```bash
+MSWEA_RS_REFERENCE_DIR=/path/to/mini-rust-swe-agent/mini-swe-agent cargo test --locked --test bdd
+```
+
+It runs every feature, one scenario at a time, and fails on a skipped step. After the run, every JSON scenario and
+every CLI case must have been compared exactly once (the manifest check), so filtering with cucumber's `--name` or
+`--tags` makes the run fail on purpose. With `MSWEA_RS_NO_REFERENCE=1` it prints that it was skipped, which is not a
+pass.
+
+## Divergences from Python
+
+Every deliberate divergence of the plan (§2.4), with the test that pins it. `tests/docs.rs` fails if a row of
+§2.4 is missing here.
+
+| Divergence | Python | Rust | Checked by |
+|---|---|---|---|
+| `info.config.*_type` | `minisweagent.agents.default.DefaultAgent` | `type_name()` strings such as `mini_swe_agent_rs::DefaultAgent` | Normalized by the comparator (`tests/support/compare.rs`); `tests/comparator.rs` |
+| `info.mini_version` | `2.4.6` | The crate version | Normalized by the comparator; `tests/comparator.rs` |
+| Default model class | Tool-calling `LitellmModel` | Text-based model | `model_class_and_name_resolution` (`tests/config.rs`) |
+| Fatal `exit_status`, `content`, `exception_str` | Python class name and `str(e)` (`RuntimeError`, `IndexError`) | A stable name per error variant and its `Display` (D6) | `fatal_exits_map_python_names_and_drop_texts` (`tests/comparator.rs`); scenarios `outputs_exhausted`, `injected_runtime_error` |
+| `extra.traceback` | Python traceback | The error's `source()` chain | Normalized for fatal exits; `fatal_exit_status_names_are_stable` (`tests/core_types.rs`) |
+| JSON encoding | `ensure_ascii=True` | Raw UTF-8 | Scenarios compare parsed JSON; `non_ascii_and_crlf_output`, `env_unicode_output` |
+| `extra.response` | `litellm` `ModelResponse.model_dump()` | The provider's raw JSON | Left out of the raw-response projection (`tests/text_parity.rs`); the raw JSON is asserted in `tests/textbased.rs` |
+| Child process session | `setsid` (no controlling terminal), stdin inherited | New process group (`process_group(0)`), **stdin `/dev/null`** | `stdin_is_at_eof`, `timeout_kills_child_process` (`tests/local_env.rs`) |
+| Hang after kill when a grandchild escaped the group | `communicate()` blocks | Bounded grace period, then partial output | `background_child_with_redirected_output_survives`, `child_that_closes_stdout_and_keeps_running_is_killed` (`tests/local_env.rs`) |
+| Cost | `litellm.completion_cost` (tiers, cache tokens, provider cost) | Flat per-token input and output prices from a registry file (3.8) | `cost_tracking_errors_and_ignore_errors`, `registry_prices_must_be_nonnegative` (`tests/textbased.rs`); `tests/text_parity.rs` |
+| Authentication error hint | Mentions `mini-extra config set` | Mentions the API-key environment variable | `an_unreadable_abort_body_still_aborts_with_a_key_hint` (`tests/fake_http.rs`) |
+| YAML 1.1 booleans (`yes`/`no`/`on`/`off` unquoted) and pydantic lax coercion | Booleans; `"3"` → 3 | YAML 1.2 (strings); strict serde types | `tests/yaml.rs`; `textbased_literals_are_checked` (`tests/config.rs`) |
+| Built-in configs | All YAML in `config/`, `extra/`, `benchmarks/` | Only the text-based ones embedded; lookup order unchanged | `builtin_configs_are_findable_by_name`, `lookup_order_and_suffix_rule` (`tests/config.rs`) |
+| Shell (D11) | `shell=True`: `/bin/sh -c` (bash in POSIX mode on macOS, `dash` on Debian/Ubuntu) | `/bin/bash -c` on every OS | `runs_bash` (`tests/local_env.rs`); scenarios avoid `sh`/`bash` differences |
+| Startup file `BASH_ENV` (D11) | Ignored by `/bin/sh`; passed on to children | Inherited `BASH_ENV` removed from the child environment; kept if set in `config.env` | `inherited_bash_env_is_not_sourced` (`tests/local_env.rs`) |
+| Default config with no `-c` | `mini.yaml` (tool-calling, `run/mini.py:22`) | Embedded `mini_textbased.yaml` | `explicit_specs_replace_the_default_and_flags_come_last` (`tests/config.rs`); parity cases always pass `-c` |
+| Task when neither `-t` nor `run.task` is given | `_multiline_prompt()` (prompt_toolkit), after the setup wizard if `MSWEA_CONFIGURED` is unset | Read stdin to EOF; never a wizard | `task_order_flag_then_config_then_stdin` (`tests/cli.rs`) |
+| `examples/hello_world.rs` | `hello_world.py` uses the tool-calling `LitellmModel` | `TextbasedModel` | Built and linted by `cargo clippy --all-targets` |
+| Literal `model_kwargs.api_key` in the trajectory | Dumped as given | `"<redacted>"` | `a_literal_api_key_is_redacted_in_the_trajectory` (`tests/fake_http.rs`), `settings_split_and_secrets` (`tests/textbased.rs`) |
+| Non-UTF-8 environment entries | Decoded with `surrogateescape`, visible to templates | Passed to the child unchanged; left out of template vars | `host_env_keeps_non_utf8_entries_for_children_only` (`tests/core_types.rs`) |
+| Timeout when the shell left its process group | `communicate()` hangs after `killpg` | `child.kill()` after `killpg` | `timeout_kills_a_shell_that_left_its_process_group` (`tests/local_env.rs`) |
+
+The phases also recorded smaller divergences, each in its design note below: the bounded drain and error texts of
+`LocalEnvironment` (P3), the regex patterns refused at load (P4), the agent's raw-UTF-8 atomic save and stable
+fatal names (P5), the CLI's class and `run.task` rules (P7), and the transport rules of the text-based model (P8:
+one wire protocol, no redirects, the proxy from the run's environment, invalid replies retried and not billed).
+
+## Decisions
+
+The outcome of each decision of the plan (§5.2), as implemented. `tests/docs.rs` fails if one is missing.
+
+| Decision | Question | Outcome |
+|---|---|---|
+| D1 | Crate directory name | `mini-swe-agent-rs/` (decided). The crate lives there; `../CLAUDE.md`, `../README.md` and `../spec/prompt/migrate.md` use that name (`tests/docs.rs`) |
+| D2 | Which plan is authoritative | One plan (decided): `spec/migration-plan.md`; the old `spec/PLAN.md` and `spec/STUDY.md` were merged and removed |
+| D3 | Text-based only, or also tool-calling with a single `bash` tool | Text only, as implemented: `TextbasedModel` parses one `mswea_bash_command` block; no tool-calling model exists |
+| D4 | First real provider | OpenAI-compatible Chat Completions (`src/model/openai_compat.rs`); run against OpenAI with `gpt-4o-mini` on 2026-11-24. Native Anthropic is later work |
+| D5 | YAML crate (survey of crates.io and RustSec, 2026-11-23) | `serde-saphyr` 2.2.0 (decided), `strict_booleans` and last-wins duplicate keys (`src/yaml.rs`, `tests/yaml.rs`) |
+| D6 | Fatal `exit_status` names | Stable Rust variant names (`OutputsExhausted`, `GlobalLimitExceeded`, …) with the comparator's mapping table (`IndexError` → `OutputsExhausted`); provider errors use LiteLLM's names; a cost error is `RuntimeError` |
+| D7 | CLI compatibility for interactive flags (`-y`, `--exit-immediately`) and an alias `mini` | Rejected: `-y/--yolo` and `--exit-immediately` exit 2 with a message; no `mini` alias (`usage_and_config_errors`, `tests/cli.rs`) |
+| D8 | Ctrl-C handling | Default handling: no `SIGINT` handler; the trajectory is saved after every step, so at most the current step is lost |
+| D9 | BDD with Cucumber (required by `../spec/prompt/migrate.md`) | In scope (decided): `tests/bdd.rs` with three features, one Gherkin scenario per parity scenario plus the CLI cases, and a manifest check |
+| D10 | Generic vs `dyn` composition | Generics: `DefaultAgent<M, E>` and one generic `run_agent` in `main.rs` per model type; no `dyn Model` |
+| D11 | Shell binary | `/bin/bash -c` (decided), recorded as a divergence; an inherited `BASH_ENV` is dropped |
+| D12 | Clock for limits and timestamps | Wall clock behind the injected `Clock` (`SystemClock`, `ManualClock`); limits and timestamps use it |
+
+## Evidence
+
+### Summary on `main` (P9, 2026-11-24)
+
+| Command | Result |
+|---|---|
+| `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo build --locked` | Pass |
+| `cargo test --locked` on macOS (27.2.1) with the reference (`MSWEA_RS_REFERENCE_DIR`) | Pass: 267 tests in 23 targets (plus doc tests), 1 ignored (`real_endpoint`, opt-in); BDD 3 features, 36 scenarios, 163 steps; 27 parity scenarios, 4 CLI cases and 7 raw-response cases equal to Python |
+| Full-suite Linux gate (`parity/Dockerfile`: `rust:1.99.1`, uv 0.13.9, Python 3.15.2) | Pass (exit 0) |
+| Rust-only Linux gate (`MSWEA_RS_NO_REFERENCE=1`) | Pass; the reference-dependent checks print that they were skipped on purpose |
+| `cargo deny check advisories` | No advisories (one recorded exception in `deny.toml`: `humantime`, dev-only through `cucumber`) |
+| `cargo test --test real_endpoint -- --ignored` against OpenAI | Pass (see P8) |
+
+Where the parity evidence lives:
+- Library parity: the JSON scripts in `parity/scenarios/`, run by `parity/run_python.py` and `tests/parity.rs`
+  through the comparator in `tests/support/compare.rs` (whose mutation tests are `tests/comparator.rs`).
+- BDD: `tests/bdd.rs` over `tests/features/`.
+- CLI parity: the cases in `tests/support/cli.rs`, compared by `tests/cli.rs` and `cli.feature`.
+- Text-based model: the raw-response differential `tests/text_parity.rs` over `parity/text_model_cases.json`.
+- Goldens from the reference: `tests/goldens/` (YAML, templates, actions, typed configs), with the scripts in
+  `parity/` that regenerate them.
+- Reviews: `spec/reviews/p0/` to `spec/reviews/p8/`; each `FINDINGS.md` records every finding, its disposition
+  and the test that covers the fix.
+
+### P0 (2026-11-24)
 
 | Check | Result |
 |---|---|
@@ -91,7 +235,7 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | `cargo deny check advisories` | No advisories |
 | Reference provenance (plan §1.0) | Text path identical to upstream tag `v2.4.6` (commit `a83fcae`) |
 
-## Evidence (P6, 2026-11-24)
+### P6 (2026-11-24)
 
 | Check | Result |
 |---|---|
@@ -100,46 +244,16 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 | Rust-only Linux gate | Pass; `parity` and `bdd` skipped on purpose |
 | `cargo deny check advisories` | No advisories, after one recorded exception in `deny.toml`: `humantime` (unmaintained, dev-only through `cucumber`, D9) |
 
-## Usage
+### P7 (2026-11-24)
 
-**Provider (D4).** The text-based model speaks the OpenAI-compatible Chat Completions protocol (`POST
-{api_base}/chat/completions`, bearer auth). That covers OpenAI, OpenRouter, a LiteLLM proxy, vLLM and Ollama.
-`model.model_kwargs` is split: `api_base`/`base_url` (default `https://api.openai.com/v1`), `api_key` (else the
-variable named by `api_key_env`, default `OPENAI_API_KEY`) and `timeout` (seconds, default 600, as LiteLLM's)
-configure the transport; `drop_params` is dropped; `model`, `messages`, `tools`, `tool_choice`, `stream` and `n` are
-refused; the rest (`temperature`, `max_tokens`, …) is sent in the body. `api_base` must be `http(s)://host…`,
-without credentials or a fragment; its query string is kept after `/chat/completions`. Redirects are not followed
-(the history never goes to another host). The proxy comes from `ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` (minus
-`NO_PROXY`) in the same environment the run sees, including the global `.env`.
+| Check | Result |
+|---|---|
+| `cargo test --locked` on macOS with the reference | Pass; BDD 3 features, 36 scenarios, 163 steps; the 4 CLI gate cases equal |
+| Full-suite Linux gate (`parity/Dockerfile`), including the CLI gate against Python `mini` | Pass (exit 0) |
+| Rust-only Linux gate | Pass |
+| `cargo deny check advisories` | No advisories (with the recorded `deny.toml` exception) |
 
-```bash
-OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased \
-  -c model.litellm_model_registry=registry.json -t "List the files"
-cargo run --example hello_world -- -m gpt-4o-mini -t "List the files"   # MSWEA_COST_TRACKING=ignore_errors
-```
-
-Costs come from a LiteLLM-format registry file (`litellm_model_registry` or `LITELLM_MODEL_REGISTRY_PATH`; no prices
-are bundled), or set `cost_tracking: ignore_errors` (`MSWEA_COST_TRACKING`) to run at cost 0.0. Retries follow
-Python's: up to `MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT` tries (default 10), waits of `clamp(2^(n-1), 4, 60)` seconds,
-and never after HTTP 401, 403, 404, or a 400 that reports a context-window overflow or an unsupported parameter.
-
-The deterministic model needs no network:
-
-```bash
-cargo run --locked -- --model-class deterministic -m deterministic -c mini_textbased \
-  -c 'model.outputs=[{"role":"assistant","content":"x","extra":{"actions":[{"command":"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}]}}]' \
-  -t "Say hello" -o /tmp/traj.json
-```
-
-Exit codes: 0 when the run ends with an exit message (any status, including `LimitsExceeded`), 1 for a fatal or
-config error (the trajectory is saved first when the run had started), 2 for usage errors and for the
-interactive-only flags `-y/--yolo` and `--exit-immediately` (D7). `--help` and `--version` exit 0. "Saved trajectory"
-is printed only after a successful run, as Python prints it after `run` returns.
-
-**Typed config goldens.** `tests/goldens/config/*.json` are pydantic `model_dump(mode="json")` dumps of both
-shipped YAML files (`parity/config_dumps.py`).
-
-## Evidence (P8, 2026-11-24)
+### P8 (2026-11-24)
 
 | Check | Result |
 |---|---|
@@ -149,16 +263,7 @@ shipped YAML files (`parity/config_dumps.py`).
 | Full-suite Linux gate, including `text_parity` against Python | Pass (exit 0) |
 | Rust-only Linux gate, including `fake_http` | Pass |
 | `cargo deny check advisories` (with `ureq` 3.5.1 and rustls) | No advisories |
-| Real endpoint (`tests/real_endpoint.rs`, `--ignored`) | Not run: needs the owner's API key |
-
-## Evidence (P7, 2026-11-24)
-
-| Check | Result |
-|---|---|
-| `cargo test --locked` on macOS with the reference | Pass; BDD 3 features, 36 scenarios, 163 steps; the 4 CLI gate cases equal |
-| Full-suite Linux gate (`parity/Dockerfile`), including the CLI gate against Python `mini` | Pass (exit 0) |
-| Rust-only Linux gate | Pass |
-| `cargo deny check advisories` | No advisories (with the recorded `deny.toml` exception) |
+| Real endpoint (`tests/real_endpoint.rs`, `--ignored`), OpenAI `gpt-4o-mini`, registry prices from LiteLLM's bundled table | Pass (6.4 s). A separate CLI run of the same task: `Submitted` after 3 calls, cost $0.00049; the key does not appear in the trajectory, stdout or stderr |
 
 ## Design notes
 

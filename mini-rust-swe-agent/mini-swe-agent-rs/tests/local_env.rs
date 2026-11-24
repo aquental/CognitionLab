@@ -825,3 +825,28 @@ fn independent_workspace_copies_do_not_share_files() {
         "seed.txt\ncat: written.txt: No such file or directory\nunset"
     );
 }
+
+#[test]
+fn timeout_kills_a_shell_that_left_its_process_group() {
+    // Plan §2.4: after `killpg`, Python's `communicate()` hangs when the shell moved to another
+    // process group. Here the shell's process becomes a `perl` that joins the test runner's
+    // group, so `killpg` of the child's own group misses it; the port also kills the child.
+    let dir = tempfile::tempdir().unwrap();
+    let shell_file = dir.path().join("shell.pid");
+    let config = with_pid_files(1, &[("SHELL_PID", &shell_file)]);
+    let command = "echo $$ > \"$SHELL_PID\"; exec perl -MPOSIX -e 'POSIX::setpgid(0, getpgrp(getppid())) or die qq(setpgid: $!); sleep 30'";
+    let start = Instant::now();
+    let result = run(&env_with(config), command);
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert_eq!(result.returncode, -1, "{}", result.output);
+    assert!(!result.output.contains("setpgid:"), "{}", result.output);
+    let shell = read_pid(&shell_file);
+    assert!(
+        dead_after_wait(shell),
+        "the shell {shell} survived the timeout"
+    );
+}

@@ -3,7 +3,7 @@
 - **Date:** 2026-11-23 (revision 5: revision 4, which merged the earlier `spec/PLAN.md` and `spec/STUDY.md` into the single plan, after adversarial review round 2)
 - **Reference:** `mini-rust-swe-agent/mini-swe-agent/`, package `minisweagent` version **2.4.6** (`src/minisweagent/__init__.py:11`)
 - **Target:** `mini-rust-swe-agent/mini-swe-agent-rs/` (this directory)
-- **Status:** plan and architecture study only. No Rust code exists yet, and no parity has been proven.
+- **Status:** implemented. Phases P0–P9 are done and merged (M1 and M2, 2026-11-24); the crate's `README.md` records the status, every divergence of 2.4, the outcome of every decision of 5.2 and the evidence. Each phase's review is in `reviews/pN/FINDINGS.md`.
 
 Paths of the form `default.py:96-124` are relative to `mini-swe-agent/src/minisweagent/`. Test paths (`tests/...`) are relative to `mini-swe-agent/`. When this document disagrees with the Python code, the code wins and this document must be corrected.
 
@@ -1001,3 +1001,20 @@ Single-reviewer findings that changed the design:
 - `HostEnv` injection to avoid `unsafe` `set_var` in edition 2024 (Antigravity, Codex).
 - `dirs` instead of `directories` for the `platformdirs` layout (Grok; verified path).
 - Number normalization in the comparator (Grok).
+
+### 6.1 Implementation reviews (P0–P8)
+
+After each implementation phase, Codex, Grok and Antigravity reviewed the delivered code in parallel, read-only, from a detached worktree, with the same prompt (`reviews/pN/review-prompt.md`). Every finding was checked against the Python code before it was accepted; accepted findings were fixed test-first, and refuted ones were answered with the Python line that shows the behavior is parity. Each `reviews/pN/FINDINGS.md` records the run, every finding, its disposition and the test that covers the fix. P9 changes only documentation and the checks in `tests/docs.rs`.
+
+| Phase | Codex | Grok | Antigravity | Findings |
+|---|---:|---:|---:|---:|
+| P0 Scaffold | 7 | 5 | 7 | 19 |
+| P1 Core types | 8 | 5 | 7 | 20 |
+| P2 Templates | 5 | 2 | 8 | 15 |
+| P3 LocalEnvironment | 6 | 5 | 8 | 19 |
+| P4 Text actions | 6 | 7 | 7 | 20 |
+| P5 Agent loop | 7 | 4 | 7 | 18 |
+| P6 Parity and BDD | 9 | 8 | 7 | 24 |
+| P7 Config and CLI | 11 | 11 | 11 | 33 |
+| P8 Real model | 11 | 10 | 12 | 33 |
+| **Total** | **70** | **57** | **74** | **201** |

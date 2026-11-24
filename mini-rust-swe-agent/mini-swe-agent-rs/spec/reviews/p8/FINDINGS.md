@@ -33,7 +33,6 @@ Dispositions:
 - **A** = accepted.
 - **P** = partly accepted.
 - **R** = refuted.
-- **Open** = needs the owner.
 
 ## Codex (11 findings: 3 high, 6 medium, 2 low)
 
@@ -46,7 +45,7 @@ Dispositions:
 | C5 | Medium | Any JSON value returned with HTTP 2xx is accepted as a completion | A | `ChatResponse::validated` requires: a first choice, a message object, role `assistant` or absent, and content that is text, `null` or absent. It runs inside the retry closure, so an invalid reply is retried within the same attempt budget and is never billed. This matches Python, where LiteLLM fails while parsing the reply inside the retried `_query`, before any cost. A missing role becomes `assistant` (LiteLLM's `Message` default). Tests: `completions_are_validated`, `invalid_completions_are_retried_and_never_billed`, `a_missing_role_means_assistant`, `a_server_error_is_retried_then_succeeds` |
 | C6 | Medium | Endpoint construction can send the request to the wrong route | A | `api_base` is validated once, when the settings are built. It must be `http(s)://` with a host, no credentials and no fragment, and the error never echoes the URL. `Transport::endpoint` appends `/chat/completions` to the path and keeps the query. Tests: `endpoint_is_built_and_validated_once`, `the_query_string_of_the_base_url_is_kept` (request line `POST /v1/chat/completions?tenant=x`) |
 | C7 | Medium | The raw-response differential misses the behavior it claims to prove | P | The projection now includes `request_messages` (the messages each side sent) and `response_content` (`extra.response.choices[0].message.content`). The fixture history has an assistant message with a provider field (`refusal`) and an `extra`, plus user messages with `extra`. Two sabotage checks fail it: `extra` sent to the provider, and `extra.response` dropped. Agent accounting of a billed format error is covered by `the_agent_charges_a_billed_format_error` (canned backend, real `DefaultAgent`: cost 0.04 over 2 calls), not by the differential. The raw-JSON versus `model_dump()` divergence stays documented |
-| C8 | Medium | The real-endpoint acceptance gate is outstanding | P, Open | `tests/real_endpoint.rs` now makes `MSWEA_RS_REAL_REGISTRY` absolute before passing it to the sandboxed CLI, and requires a positive `instance_cost` when a registry is given. The run itself needs the owner's API key and was not done |
+| C8 | Medium | The real-endpoint acceptance gate is outstanding | A | `tests/real_endpoint.rs` now makes `MSWEA_RS_REAL_REGISTRY` absolute before passing it to the sandboxed CLI, and requires a positive `instance_cost` when a registry is given. After the merge, the owner provided an API key and the run passed (2026-11-24): OpenAI `gpt-4o-mini`, registry prices from LiteLLM's bundled table, 6.4 s. A separate CLI run of the same task ended `Submitted` after 3 calls at $0.00049, and the key appears in neither the trajectory, stdout nor stderr |
 | C9 | Medium | Invalid model configuration can panic while building an error | A | P7 code. `invalid()` cut the JSON text with `String::truncate(80)`, which panics inside a multi-byte character. It now keeps the first 80 characters. Test: `invalid_value_messages_truncate_on_a_char_boundary` (byte 80 inside an `é`) |
 | C10 | Low | `hello_world` leaves its Clap feature requirement implicit | A | The example no longer uses `#[arg(env = …)]`. `-m` is optional and falls back to `MSWEA_MODEL_NAME` from `HostEnv` |
 | C11 | Low | Invalid registry rates can silently reduce billed cost | A | Each price must be finite and non-negative, else it is a cost error. Test: `registry_prices_must_be_nonnegative` |
@@ -85,9 +84,4 @@ Dispositions:
 
 ## Open items
 
-- **The real-endpoint run** (C8) needs the owner's API key:
-
-  ```bash
-  OPENAI_API_KEY=... MSWEA_RS_REAL_MODEL=<model> MSWEA_RS_REAL_REGISTRY=<registry.json> \
-    cargo test --test real_endpoint -- --ignored --nocapture
-  ```
+None. The real-endpoint run (C8) passed on 2026-11-24, after the merge.

@@ -2,7 +2,12 @@
 
 This project studies a reimplementation of the **mini-swe-agent harness in Rust**, using the Python implementation as an executable reference. The focus is on AI systems engineering: understand an agent's loop, define contracts, control execution side effects, measure behavior, and justify decisions with reproducible tests.
 
-**Status on 2026-11-23:** the reference analysis and the migration plan are documented in one file, [mini-swe-agent-rs/spec/migration-plan.md](mini-swe-agent-rs/spec/migration-plan.md), reviewed adversarially by Codex, Grok and Antigravity. The Rust package has not been created yet. Parity, provider integration, and performance gains are not proven.
+**Status on 2026-11-24:** the Rust port is implemented in [mini-swe-agent-rs/](mini-swe-agent-rs/README.md). All ten phases of the [migration plan](mini-swe-agent-rs/spec/migration-plan.md) are done, and each one was reviewed adversarially by Codex, Grok and Antigravity. Two milestones are reached:
+
+- **M1, offline parity.** With a scripted model, the Rust library and CLI produce trajectories equal to Python's after normalization: 27 JSON scenarios, 4 CLI cases, and the Cucumber features over them.
+- **M2, a usable agent.** A text-based model talks to any OpenAI-compatible endpoint. It matches Python's `LitellmTextbasedModel` on canned provider responses, and it solved a toy task against OpenAI.
+
+Performance gains and success rates on real tasks are not measured.
 
 This study contributes the analysis, the migration design and, in later stages, the Rust implementation and its validation. The original harness, its prompts, and its tests belong to the [mini-swe-agent](mini-swe-agent/README.md) project, by Kilian Lieret, Carlos E. Jimenez, and contributors. Keep the [original license](mini-swe-agent/LICENSE.md) in any adaptation where it applies.
 
@@ -12,7 +17,7 @@ A harness is the software that connects the model to the world: it builds the co
 
 The initial scope of this project keeps a linear history and textual shell actions, with no native tool-calling and no persistent shell session, as set by [the local task statement](spec/prompt/migrate.md). The current Python reference declares **version 2.4.6** and has more capabilities. They are listed below to show the full system, but they are not automatically deliverables of the first milestone.
 
-The migration will follow this order: contracts and a reproducible reference → traits → local environment → loop → deterministic model → trajectory → CLI → real provider → Docker and expansions. Simulated dependencies let us verify the core before wiring up the shell and the network. The plan includes BDD with Cucumber and differential Python/Rust tests.
+The migration followed this order: contracts and a reproducible reference → traits → local environment → loop → deterministic model → trajectory → CLI → real provider. Docker and the other expansions are later work (plan §4.1). Simulated dependencies verified the core before the shell and the network were wired up; BDD with Cucumber and differential Python/Rust tests check the result.
 
 ## How the harness works
 
@@ -166,34 +171,30 @@ Inherited tests guide the port, but their normalizations must not be copied with
 
 **Operation and diagnostics.** A trajectory must allow the run to be reconstructed; structured logs must show stage, duration, and cost without leaking credentials. Cleanup of processes and containers must be tested under failures and interruptions.
 
-## How to start the implementation
+## How to run the Rust port
 
-Read [the migration plan](mini-swe-agent-rs/spec/migration-plan.md) first. It covers the Python analysis and its parity traps (the loop, the textual parser, shell state, the submission protocol, templates, global statistics), the Rust architecture, the Python oracle environment, the implementation phases P0–P9 with their "done" criteria, the parity gates P01–P18, and the risks and decisions.
-
-`mini-swe-agent-rs/` already holds the plan, so phase P0 uses `cargo init` instead of `cargo new`:
+The crate's [README](mini-swe-agent-rs/README.md) has the full usage, the gates, every divergence from Python and the evidence. In short:
 
 ```bash
 cd mini-swe-agent-rs
-cargo init --bin --vcs none --edition 2024 --name mini-swe-agent-rs
-cargo build
-cargo test
+cargo build --locked
+cargo test --locked   # parity and BDD need the Python reference; see the crate README
+OPENAI_API_KEY=... cargo run --locked -- -m gpt-4o-mini -c mini_textbased -c model.cost_tracking=ignore_errors -t "List the files"
 ```
 
-These commands create the skeleton; they do not implement the harness. Add `src/lib.rs`, pin the toolchain and dependencies, and follow the plan's gates ([Cargo: cargo init](https://doc.rust-lang.org/cargo/commands/cargo-init.html)).
-
-The Python copy lives inside the `CognitionLab` Git repository. On 2026-11-23 it was compared with upstream tag `v2.4.6`: every file on the text path is identical (details in section 1.0 of the plan).
+The API key can also live in the global `.env` that Python's `mini-extra config set` writes. The Python copy lives inside the `CognitionLab` Git repository. On 2026-11-23 it was compared with upstream tag `v2.4.6`: every file on the text path is identical (details in section 1.0 of the plan).
 
 ## How to present the results in the portfolio
 
 | Evidence to produce | Skill demonstrated | Current state |
 |---|---|---|
 | Module and flow inventory | Reading agent architecture | Documented in this README |
-| Plan, scope, and proposed contracts | Decomposition and compatibility analysis | Documented; executable contracts pending |
-| Fixtures and differential report | Testing systems with probabilistic behavior at the edges | Planned |
-| Cucumber scenarios | Behavioral requirements tied to the implementation | Planned |
-| Decisions on shell, errors, schemas, and templates | Justified technical decisions | Recorded in the plan (D1–D12); implementation pending |
-| Subprocess/container tests | Control of side effects and operational reliability | Planned |
-| Provider integration and task evaluation | Integration engineering and LLM evaluation | Planned |
+| Plan, scope, and proposed contracts | Decomposition and compatibility analysis | Documented; the contracts are executable as the crate's traits and tests |
+| Fixtures and differential report | Testing systems with probabilistic behavior at the edges | Done: 27 parity scenarios, 4 CLI cases, a raw-response differential, and goldens from the reference |
+| Cucumber scenarios | Behavioral requirements tied to the implementation | Done: 3 features, 36 scenarios, with a manifest check |
+| Decisions on shell, errors, schemas, and templates | Justified technical decisions | Done: D1–D12 and their outcomes in the crate README |
+| Subprocess/container tests | Control of side effects and operational reliability | Subprocess: done (timeouts, process groups, signals, escaped children, on macOS and Linux). Containers: not ported |
+| Provider integration and task evaluation | Integration engineering and LLM evaluation | Integration: done (OpenAI-compatible; fake-server and real-endpoint tests). Task evaluation: not done |
 | Reproducible benchmarks | Evidence-based performance analysis | Planned |
 
-Update this table as each milestone is verified. For each result, publish the command run, versions, environment, number of cases, failures/skips, and limitations. No success rate or performance improvement is claimed at this stage.
+Update this table as each milestone is verified. For each result, publish the command run, versions, environment, number of cases, failures/skips, and limitations; the crate README does this for M1 and M2. No success rate or performance improvement is claimed.
