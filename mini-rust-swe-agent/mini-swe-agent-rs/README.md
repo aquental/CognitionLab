@@ -11,7 +11,8 @@ reference lives in [`../mini-swe-agent/`](../mini-swe-agent/) and is never edite
 | P0 Scaffold | Done: crate, toolchain, lints, YAML loader (D5), Python baseline | stacked PR, base `main` |
 | P1 Core types | Done: `Message`, `Action`, `ExecOutput`, `Interrupt`/`StepError`/`AgentError`, `recursive_merge`, `Clock`, `HostEnv`, and the `Model`/`Environment`/`Agent` traits (no implementations yet) | stacked on P0 |
 | P2 Templates | Done: `src/template.rs` (minijinja 3.1, strict undefined, Python value formatting); 44 Jinja2 goldens match byte for byte | stacked on P1 |
-| P3–P7 | Not started | — |
+| P3 LocalEnvironment | Done: `bash -c` per action, merged output, process-group kill, one absolute deadline (single-thread `poll` loop), Python error texts, submission check; 18 `test_local.py` functions ported plus 20 new cases | stacked on P2 |
+| P4–P7 | Not started | — |
 
 Parity with Python is **not** proven yet; that is phase P6.
 
@@ -78,4 +79,9 @@ MSWEA_SILENT_STARTUP=1 MSWEA_GLOBAL_CONFIG_DIR=$(mktemp -d) uv run --frozen --pr
 - **Templates (P2).** minijinja with `UndefinedBehavior::Strict`, no auto-escaping, and a formatter that prints
   `None`, `True`/`False` and floats the way Python's `str()` does (`1e+20`, `1e-05`, `-0.0`). Dicts and lists
   still render in minijinja's format; no shipped template prints one.
+- **LocalEnvironment (P3).** `src/environment/local.rs`. Divergences from Python (plan §2.4): `/bin/bash`
+  instead of `/bin/sh` (D11), an inherited `BASH_ENV` is dropped (bash would source it), stdin is `/dev/null`, a
+  process group instead of a new session, `child.kill()` after `killpg` (Python hangs if the shell left its
+  group), and a 1 s bounded drain after a kill. Error texts follow CPython (`[Errno 2] No such file or directory:
+  '/x'`, `Command '…' timed out after N seconds`).
 - **Module layout.** The YAML loader is `src/yaml.rs`, used by `config.rs` in P7 (the plan lists only `config.rs`).

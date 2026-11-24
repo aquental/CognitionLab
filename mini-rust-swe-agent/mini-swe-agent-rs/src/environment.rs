@@ -1,5 +1,7 @@
 //! The `Environment` protocol (`__init__.py:58-68`, plan §3.3).
 
+pub mod local;
+
 use std::path::Path;
 
 use serde::Serialize;

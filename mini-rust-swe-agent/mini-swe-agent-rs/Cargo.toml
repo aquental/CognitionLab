@@ -19,6 +19,7 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 thiserror = "2.0.21"
 # Jinja2-compatible templates (plan §3.9); strict undefined, Python value formatting in src/template.rs.
 minijinja = { version = "=3.1.0", default-features = false, features = ["builtins", "multi_template", "serde", "std_collections"] }
+nix = { version = "0.31.3", default-features = false, features = ["signal", "process", "poll", "fs", "feature"] }
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -31,3 +32,6 @@ indexing_slicing = "deny"
 todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
+
+[dev-dependencies]
+tempfile = "3.27.0"
